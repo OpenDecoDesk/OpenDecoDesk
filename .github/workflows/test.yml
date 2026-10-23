@@ -1,0 +1,21 @@
+name: Test suite
+
+on:
+  push:
+  pull_request:
+
+# The suite only reads the repo; never give this job write access.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 (pinned to a commit, like the backup workflow)
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - run: npm ci   # exact versions from package-lock.json
+      - run: npm test
+      - run: bash scripts/scan-private.sh --strict   # no keys or account ids in the tree

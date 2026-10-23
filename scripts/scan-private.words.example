@@ -1,0 +1,14 @@
+# Your own list of words that must never appear in this repository: the names, domains, towns,
+# customers and account details of the business you run this for. One extended regular expression
+# per line, matched without regard to case; lines starting with # are comments.
+#
+# Copy this file to scripts/scan-private.words and fill it in. That file is ignored by git on
+# purpose — a list of private words is itself private — so it stays on your machine and
+# `bash scripts/scan-private.sh --strict` checks the tree against it there. Without the file the
+# word check is skipped and only the check for keys and account ids runs.
+#
+# Examples of the kind of thing to list (these are made up):
+# northwind stitch
+# northwindstitch\.example
+# \bnws\b
+# 12 harbor lane

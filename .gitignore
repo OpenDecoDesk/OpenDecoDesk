@@ -1,0 +1,28 @@
+# Local secrets and environment files — never commit these.
+.env
+.env.*
+*.env
+.dev.vars
+secrets.*.js
+
+# Your own list of private words for scripts/scan-private.sh (see scan-private.words.example).
+# A list of private words is itself private — never commit it.
+scripts/scan-private.words
+
+# Wrangler local state
+.wrangler/
+
+# Local assistant state (worktrees, settings)
+.claude/
+
+# Node
+node_modules
+
+# Build artifacts
+*.zip
+*.log
+
+# macOS / editors
+.DS_Store
+.vscode/
+.idea/

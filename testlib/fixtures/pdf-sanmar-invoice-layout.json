@@ -1,0 +1,407 @@
+{
+"_note": "pdf.js text items (str, x, y from top, page) in the layout of a supplier's INVOICE PDF (a two-line Item / Number heading, quantities printed like 3.00). Positions follow a real invoice; every value \u2014 style, description, prices, invoice and order numbers \u2014 is made up, and the supplier's boilerplate is left out.",
+"items": [
+{
+"str": "Warehouse",
+"x": 20.3,
+"y": 366.1,
+"page": 1
+},
+{
+"str": "Item",
+"x": 96.3,
+"y": 360.5,
+"page": 1
+},
+{
+"str": "Number",
+"x": 89.1,
+"y": 371.7,
+"page": 1
+},
+{
+"str": "Description",
+"x": 170,
+"y": 366.1,
+"page": 1
+},
+{
+"str": "Color",
+"x": 284,
+"y": 366.1,
+"page": 1
+},
+{
+"str": "Size",
+"x": 346.9,
+"y": 366.1,
+"page": 1
+},
+{
+"str": "Quantity",
+"x": 389.8,
+"y": 366.1,
+"page": 1
+},
+{
+"str": "Unit Price",
+"x": 460.8,
+"y": 366.1,
+"page": 1
+},
+{
+"str": "Amount",
+"x": 539.4,
+"y": 366.1,
+"page": 1
+},
+{
+"str": "WH-1",
+"x": 30.6,
+"y": 402.4,
+"page": 1
+},
+{
+"str": "SC100",
+"x": 95.5,
+"y": 402.4,
+"page": 1
+},
+{
+"str": "SC Five-Panel Cap",
+"x": 143.6,
+"y": 402.4,
+"page": 1
+},
+{
+"str": "Black",
+"x": 284.8,
+"y": 402.4,
+"page": 1
+},
+{
+"str": "OSFA",
+"x": 343.3,
+"y": 402.4,
+"page": 1
+},
+{
+"str": "3.00",
+"x": 423.6,
+"y": 402.4,
+"page": 1
+},
+{
+"str": "2.75",
+"x": 501.8,
+"y": 402.4,
+"page": 1
+},
+{
+"str": "8.25",
+"x": 571.8,
+"y": 402.4,
+"page": 1
+},
+{
+"str": "WH-1",
+"x": 30.6,
+"y": 436.3,
+"page": 1
+},
+{
+"str": "SC100",
+"x": 95.5,
+"y": 436.3,
+"page": 1
+},
+{
+"str": "SC Five-Panel Cap",
+"x": 143.6,
+"y": 436.3,
+"page": 1
+},
+{
+"str": "Khaki",
+"x": 284.6,
+"y": 436.3,
+"page": 1
+},
+{
+"str": "OSFA",
+"x": 343.3,
+"y": 436.3,
+"page": 1
+},
+{
+"str": "5.00",
+"x": 423.6,
+"y": 436.3,
+"page": 1
+},
+{
+"str": "2.75",
+"x": 501.8,
+"y": 436.3,
+"page": 1
+},
+{
+"str": "13.75",
+"x": 566.2,
+"y": 436.3,
+"page": 1
+},
+{
+"str": "WH-1",
+"x": 30.6,
+"y": 470.2,
+"page": 1
+},
+{
+"str": "SC100",
+"x": 95.5,
+"y": 470.2,
+"page": 1
+},
+{
+"str": "SC Five-Panel Cap",
+"x": 143.6,
+"y": 470.2,
+"page": 1
+},
+{
+"str": "Royal",
+"x": 284.3,
+"y": 470.2,
+"page": 1
+},
+{
+"str": "OSFA",
+"x": 343.3,
+"y": 470.2,
+"page": 1
+},
+{
+"str": "10.00",
+"x": 418,
+"y": 470.2,
+"page": 1
+},
+{
+"str": "2.75",
+"x": 501.8,
+"y": 470.2,
+"page": 1
+},
+{
+"str": "27.50",
+"x": 566.2,
+"y": 470.2,
+"page": 1
+},
+{
+"str": "WH-1",
+"x": 30.6,
+"y": 504.1,
+"page": 1
+},
+{
+"str": "SC100",
+"x": 95.5,
+"y": 504.1,
+"page": 1
+},
+{
+"str": "SC Five-Panel Cap",
+"x": 143.6,
+"y": 504.1,
+"page": 1
+},
+{
+"str": "White",
+"x": 284.3,
+"y": 504.1,
+"page": 1
+},
+{
+"str": "OSFA",
+"x": 343.3,
+"y": 504.1,
+"page": 1
+},
+{
+"str": "2.00",
+"x": 423.6,
+"y": 504.1,
+"page": 1
+},
+{
+"str": "2.75",
+"x": 501.8,
+"y": 504.1,
+"page": 1
+},
+{
+"str": "5.50",
+"x": 571.8,
+"y": 504.1,
+"page": 1
+},
+{
+"str": "Total",
+"x": 346.4,
+"y": 558.3,
+"page": 1
+},
+{
+"str": "cases",
+"x": 345.2,
+"y": 569.4,
+"page": 1
+},
+{
+"str": "1.00",
+"x": 400.3,
+"y": 563.9,
+"page": 1
+},
+{
+"str": "Sales subtotal",
+"x": 450.7,
+"y": 558.3,
+"page": 1
+},
+{
+"str": "amount",
+"x": 485.2,
+"y": 569.4,
+"page": 1
+},
+{
+"str": "55.00",
+"x": 545.8,
+"y": 563.9,
+"page": 1
+},
+{
+"str": "Sales tax",
+"x": 477.9,
+"y": 597.3,
+"page": 1
+},
+{
+"str": "Shipping,",
+"x": 473,
+"y": 622.7,
+"page": 1
+},
+{
+"str": "handling &",
+"x": 466.8,
+"y": 633.8,
+"page": 1
+},
+{
+"str": "other fees",
+"x": 473.5,
+"y": 645,
+"page": 1
+},
+{
+"str": "INVOICE",
+"x": 355.8,
+"y": 41.9,
+"page": 1
+},
+{
+"str": "Invoice Number:",
+"x": 355.8,
+"y": 54.3,
+"page": 1
+},
+{
+"str": "INV-100200300",
+"x": 442.3,
+"y": 54.6,
+"page": 1
+},
+{
+"str": "Invoice Date:",
+"x": 355.8,
+"y": 83.4,
+"page": 1
+},
+{
+"str": "10/7/2026",
+"x": 442.3,
+"y": 84.2,
+"page": 1
+},
+{
+"str": "Due Date:",
+"x": 355.8,
+"y": 97.9,
+"page": 1
+},
+{
+"str": "10/10/2026",
+"x": 442.3,
+"y": 98.7,
+"page": 1
+},
+{
+"str": "CC",
+"x": 442.3,
+"y": 126.4,
+"page": 1
+},
+{
+"str": "Terms:",
+"x": 355.8,
+"y": 126.1,
+"page": 1
+},
+{
+"str": "Sales Order:",
+"x": 355.8,
+"y": 68.8,
+"page": 1
+},
+{
+"str": "SO-100200301",
+"x": 442.3,
+"y": 69.1,
+"page": 1
+},
+{
+"str": "SanMar Corp.",
+"x": 20.9,
+"y": 669.5,
+"page": 1
+},
+{
+"str": "Page 1 of 2",
+"x": 498,
+"y": 752.3,
+"page": 1
+},
+{
+"str": "Total",
+"x": 497.4,
+"y": 43,
+"page": 2
+},
+{
+"str": "55.00",
+"x": 545.8,
+"y": 43,
+"page": 2
+},
+{
+"str": "Page 2 of 2",
+"x": 498,
+"y": 752.3,
+"page": 2
+}
+]
+}

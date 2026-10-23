@@ -1,0 +1,15 @@
+-- Delivery / pickup options per shop.
+-- ===========================================================================================
+-- A shop used to offer exactly "Local pickup (free)" plus, when orgs.shippingEnabled = 1, carrier
+-- shipping. It now has a managed LIST the customer picks from at checkout:
+--   * pickup   — "Local pickup", free (at most one)
+--   * shipping — carrier rates by ZIP, the fee varies (at most one)
+--   * custom   — the shop's own wording and a flat fee, e.g. "Delivery at practice" $0 (any number)
+-- Stored as JSON: [{"id":"pickup","type":"pickup","label":"Local pickup","fee":0}, …]; fee in dollars.
+-- '' = not set: the list is derived from shippingEnabled exactly as before (pickup, + shipping when
+-- enabled), so every existing shop behaves the same until its list is edited. orgs.shippingEnabled
+-- is kept in step with the list (1 when it has a shipping entry) for the code that still reads it.
+--
+-- ADDITIVE ONLY: apply before deploying the code that uses it.
+-- ===========================================================================================
+ALTER TABLE orgs ADD COLUMN deliveryOptionsJson TEXT NOT NULL DEFAULT '';

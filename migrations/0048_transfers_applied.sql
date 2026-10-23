@@ -1,0 +1,13 @@
+-- Transfers applied, tracked on its own for lines that are ALSO embroidered.
+-- ===========================================================================================
+-- A plain (non-configurable) product can now carry a reorder QR code, so an embroidered line can
+-- also have a transfer to press. Such a line is in two queues: Run Order (its embroidery) and Run
+-- Transfer Sheets (its transfers). Finishing the embroidery makes the piece, as always; this column
+-- records that the transfers were pressed too, so the line stays on Run Transfer Sheets until they
+-- are — and finishing one queue no longer hides it from the other.
+--   order_items.transfersAppliedAt — when the line's transfers were marked applied (NULL = not yet).
+-- A transfer-only line doesn't use it: "Mark made" there still makes the line, as before.
+--
+-- ADDITIVE ONLY: apply before deploying the code that uses it.
+-- ===========================================================================================
+ALTER TABLE order_items ADD COLUMN transfersAppliedAt TEXT;

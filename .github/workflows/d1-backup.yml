@@ -1,0 +1,49 @@
+name: Nightly D1 backup
+
+# Exports the D1 database to a private R2 bucket every night (and on demand from the Actions tab).
+# See scripts/d1-backup.sh and docs/operations.md ("Backups") for setup and restoring.
+#
+# OFF BY DEFAULT. A fork or a copy of this repository has neither your Cloudflare token nor your
+# database, so the job below is skipped unless the repository VARIABLE D1_BACKUP_ENABLED is "true"
+# (Settings → Secrets and variables → Actions → Variables). Set that only in your own private
+# repository, together with the two secrets named below. Without it the schedule still ticks, but
+# nothing runs: no failed job every night, and no export against an account you didn't mean.
+on:
+  schedule:
+    - cron: "0 3 * * *"   # 03:00 UTC — pick a quiet hour where you are
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d1-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    if: ${{ vars.D1_BACKUP_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 (pinned to a commit: this job holds a Cloudflare token)
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - name: Check the secrets are there
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::D1_BACKUP_ENABLED is true, but the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are not both set. See docs/operations.md."
+            exit 1
+          fi
+      - name: Export the D1 database and upload it to R2
+        env:
+          # A token that can read D1 and write R2, and nothing else.
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Optional repository variables: another database or bucket name.
+          BACKUP_BUCKET: ${{ vars.D1_BACKUP_BUCKET || 'opendecodesk-db-backups' }}
+        run: bash scripts/d1-backup.sh "${{ vars.D1_BACKUP_DATABASE || 'opendecodesk-db' }}"

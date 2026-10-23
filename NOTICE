@@ -1,0 +1,13 @@
+OpenDecoDesk
+
+This repository includes third-party software:
+
+- pdf.js (public/vendor/pdfjs/) — Copyright Mozilla Foundation and contributors.
+  Licensed under the Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
+  Source: https://github.com/mozilla/pdf.js
+  The licence text is in public/vendor/pdfjs/LICENSE.
+
+- QR Code Generator for JavaScript (public/admin-qr.js) — Copyright (c) 2009 Kazuhiko Arase.
+  Licensed under the MIT license: http://www.opensource.org/licenses/mit-license.php
+  Source: https://github.com/kazuhikoarase/qrcode-generator
+  The word "QR Code" is a registered trademark of DENSO WAVE INCORPORATED.

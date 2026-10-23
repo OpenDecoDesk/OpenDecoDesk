@@ -1,0 +1,77 @@
+# Cloudflare Worker: static assets (public/) + the API (/api/*) + the scheduled daily roll-up.
+# Deploy:   npm run deploy   (migrations, every shop's hostname into this file, then the deploy — a bare
+#           `wrangler deploy` detaches any hostname that isn't listed below)
+# Dry run:  npx wrangler deploy --dry-run --outdir <dir>
+# First install: `npm run setup` fills in the database id, your hostnames and the plain settings below,
+# and stores the secrets. Secrets never go in this file — see docs/configuration.md.
+
+name = "opendecodesk"
+main = "src/worker.js"
+compatibility_date = "2025-09-01"
+# A deploy must not wipe variables set in the dashboard.
+keep_vars = true
+# The *.workers.dev address. A site installed with the Deploy to Cloudflare button has no domain at
+# first, so its admin answers there until one is set up in the admin's Setup page. `npm run deploy`
+# switches it off once the admin has been reached on its own domain, and `npm run setup` (which gives
+# the site its domain from the start) writes false. Previews stay off: they would be more addresses.
+workers_dev = true
+preview_urls = false
+
+# The hostnames this Worker serves: the admin host and one per shop (the Host header decides which shop
+# a visitor sees). List them one by one — a wildcard would also catch unrelated subdomains of the zone.
+# `npm run setup` adds your admin hostname below as a custom domain ({ pattern = "admin.example.com",
+# custom_domain = true } — Cloudflare then creates the DNS record and certificate itself). The older
+# route form shown here works too, but needs a proxied DNS record for the hostname to exist already.
+# routes = [
+#   { pattern = "admin.example.com/*", zone_name = "example.com" },
+#   { pattern = "myshop.example.com/*", zone_name = "example.com" },
+# ]
+
+[observability]
+enabled = true
+
+# public/ is served directly; the Worker only runs for /api/* (so page views cost no invocation).
+# Unmatched paths fall back to index.html, which decides what to show from the hostname.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+not_found_handling = "single-page-application"
+
+# The daily roll-up. Cron is UTC-only, so the Worker is woken every hour and
+# functions/_lib/schedule.js lets through the one tick that is DIGEST_HOUR (default 6) in the
+# install's time zone (Global settings → Region, else the TIMEZONE variable, else UTC). The other
+# 23 ticks a day do one small database read and stop. If you never change the time zone you can
+# list just the UTC hour(s) that match instead, e.g. crons = ["0 4 * * *", "0 5 * * *"] for
+# 6 AM in a UTC+1/+2 zone.
+[triggers]
+crons = ["0 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "opendecodesk-db"
+database_id = "REPLACE-WITH-YOUR-D1-DATABASE-ID"
+migrations_dir = "migrations"
+
+# The send-agent relay's mailbox (functions/_lib/agentMailbox.js): ONE Durable Object per environment, so a
+# phone and the shop's agent always see the same jobs (a per-data-centre store such as the Cache API would not do).
+[[durable_objects.bindings]]
+name = "AGENT_MAILBOX"
+class_name = "AgentMailbox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AgentMailbox"]
+
+[[r2_buckets]]
+binding = "IMAGES"
+bucket_name = "opendecodesk-images"
+
+[[r2_buckets]]
+binding = "RECEIPTS"
+bucket_name = "opendecodesk-receipts"
+
+[[r2_buckets]]
+binding = "DESIGNS"
+bucket_name = "opendecodesk-designs"
+
