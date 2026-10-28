@@ -43,6 +43,7 @@ import { checkShippedDeliveries, checkBlankShipments } from "../_lib/deliveryChe
 import { ensureOrgDomain, getOrgDomainStatus } from "../_lib/customDomain.js";
 import { setupStatus, setupSummary } from "../_lib/setupStatus.js";
 import { rateLimited, rateLimitResponse } from "../_lib/rateLimit.js";
+import { readInvoiceWithAi } from "../_lib/invoiceAi.js";
 import { jsonResponse, featureOffResponse, signOrderToken } from "../_lib/http.js";
 import {
   getAllOrgs, getOrgById, createOrg, updateOrg, cleanDeliveryOptions, setOrgDeliveryOptions, defaultDeliveryOptions, cleanShippingAddress, stagePrereqError, getSystemIssues,
@@ -177,7 +178,7 @@ const CATALOG_ADMIN_ACTIONS = new Set([
   "listAbortReasons", "saveAbortReason", "deleteAbortReason",
   "listActiveRuns", "startRun", "completeRun", "getRunStats", "abortRun", "markHoopingDone", "getRunReportByDesign",
   "setMachineStitchCount", "listMaintenanceTasks", "saveMaintenanceTask", "deleteMaintenanceTask", "recordMaintenance", "getMaintenanceLog", "setDesignVersionStitches", "fillDesignStitchCounts",
-  "receiveBlanks", "receiveBlankOrder", "addBlankSizes", "writeOffBlanks", "getBlankMovements", "voidInventoryMovement", "restoreInventoryMovement", "getInventoryReport", "previewBlankCatchUp", "applyBlankCatchUp",
+  "receiveBlanks", "receiveBlankOrder", "addBlankSizes", "readInvoiceWithAi", "writeOffBlanks", "getBlankMovements", "voidInventoryMovement", "restoreInventoryMovement", "getInventoryReport", "previewBlankCatchUp", "applyBlankCatchUp",
   "getBlankLinks", "setBlankLink", "deleteBlankLink",
   "getReadyToShip", "setReadyToShipQty", "makeForStock", "getFinishedGoodsMovements", "voidFinishedGoodsMovement",
   "listGraphics", "saveGraphic", "deleteGraphic", "setProductGraphicColorBlocked", "getTierPrices", "setTierPrices",
@@ -261,7 +262,7 @@ const STAFF_ACTIONS = [
   "saveMachine", "deleteMachine", "setMachineHoop", "setMachineNeedle", "recordMachineDiscovery", "getProductionQueue", "markManufacturedOnMachine",
   "listAbortReasons", "saveAbortReason", "deleteAbortReason", "listActiveRuns", "startRun", "completeRun", "getRunStats", "abortRun",
   "setMachineStitchCount", "listMaintenanceTasks", "saveMaintenanceTask", "deleteMaintenanceTask", "recordMaintenance", "getMaintenanceLog", "setDesignVersionStitches", "fillDesignStitchCounts",
-  "markHoopingDone", "getRunReportByDesign", "receiveBlanks", "receiveBlankOrder", "addBlankSizes", "markBlankPricesChecked", "confirmProductPrices", "getBlankVendorPriceHistory", "writeOffBlanks", "getBlankMovements", "voidInventoryMovement",
+  "markHoopingDone", "getRunReportByDesign", "receiveBlanks", "receiveBlankOrder", "addBlankSizes", "readInvoiceWithAi", "markBlankPricesChecked", "confirmProductPrices", "getBlankVendorPriceHistory", "writeOffBlanks", "getBlankMovements", "voidInventoryMovement",
   "restoreInventoryMovement", "getInventoryReport", "previewBlankCatchUp", "applyBlankCatchUp", "getBlankLinks", "setBlankLink", "deleteBlankLink",
   "getReadyToShip", "setReadyToShipQty", "makeForStock", "getFinishedGoodsMovements", "voidFinishedGoodsMovement", "listGraphics", "saveGraphic", "deleteGraphic", "setProductGraphicColorBlocked", "getTierPrices",
   "setTierPrices", "listTransfers", "saveTransfer", "deleteTransfer", "receiveTransferSheet", "writeOffTransfers", "getTransferMovements",
@@ -3233,6 +3234,15 @@ export async function onRequestPost(context) {
         if (r.deleted.length) audit({ orgId: null, orderId: null, action: "images.orphans_deleted", detail: { count: r.deleted.length, keys: r.deleted.slice(0, 500) } });
         return jsonResponse({ status: "ok", ...r });
       } catch (e) { if (e && e.userFacing) return jsonResponse({ status: "error", message: e.message }, 400); throw e; }
+    }
+
+    // Blanks → Import from PDF, when the layout reader can't make sense of the PDF: its text, read by a
+    // Workers AI model (functions/_lib/invoiceAi.js). Nothing is saved — the answer only pre-fills the preview.
+    if (body.action === "readInvoiceWithAi") {
+      const rl = await rateLimited(env, "invoice_ai", request, 20);
+      if (rl.blocked) return rateLimitResponse(rl.retryAfter);
+      try { return jsonResponse({ status: "ok", ...(await readInvoiceWithAi(env, body.text)) }); }
+      catch (e) { if (e && e.userFacing) return jsonResponse({ status: "error", message: e.message }, 400); throw e; }
     }
 
     if (body.action === "getBlanks") {

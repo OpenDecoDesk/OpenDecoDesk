@@ -12093,6 +12093,10 @@ function showWriteOffModal_(blank, onDone){
 // simple left-to-right column layout is read generically (by header words, not a
 // vendor-specific format), so the same code should handle a similar invoice from a
 // vendor not seen before, though it's only been checked against these two.
+// When that reading finds nothing, or what it finds doesn't add up (pdfParseProblem_),
+// the PDF's text (pdfItemsToText_) is read by a Workers AI model instead
+// (readInvoiceWithAi, functions/_lib/invoiceAi.js) — one call, a few hundred neurons —
+// and the preview's "Read with AI" button does the same on demand.
 
 let _pdfjsLib = null;
 async function loadPdfjsLib_(){
@@ -12294,6 +12298,40 @@ function parseVendorOrderPdf_(items){
   return { ...meta, groups };
 }
 
+// The PDF's text for the AI reader: one printed line per line, page by page, with " | " where
+// two pieces of text sit well apart (a column gap) — the model sees the table's columns, not
+// one run-on line. A piece's width isn't in the items, so it's estimated from its length.
+function pdfItemsToText_(items){
+  const out = [];
+  let page = null;
+  groupTextRows_(items, 4).forEach(line => {
+    if (line.page !== page) { if (page !== null) out.push(""); out.push(`--- page ${line.page} ---`); page = line.page; }
+    out.push(line.items.reduce((t, it, i) => {
+      if (!i) return it.str.trim();
+      const prev = line.items[i - 1];
+      return t + (it.x - prev.x - prev.str.length * 5 > 12 ? " | " : " ") + it.str.trim();
+    }, ""));
+  });
+  return out.join("\n");
+}
+
+// Why the layout reader's answer can't be trusted ("" when it can): nothing found, a line
+// with no price or total, or the lines not adding up to the subtotal the PDF prints. Any of
+// these sends the import to the AI reader.
+function pdfParseProblem_(parsed, items){
+  if (!parsed || parsed.error || !parsed.groups || !parsed.groups.length) return (parsed && parsed.error) || "No line items found in this PDF.";
+  const lines = parsed.groups.flatMap(g => g.lines);
+  if (lines.some(l => !(l.qty > 0) || !(l.unitCost > 0) || !(l.lineTotal > 0))) return "Some lines were read without a quantity, price or total.";
+  const subLine = groupTextRows_(items || [], 4).map(lineText_).find(t => /\bsub\s*total\b/i.test(t) && /\d/.test(t));
+  const nums = subLine ? subLine.match(/\$?[\d,]*\.\d{2}\b/g) : null;
+  if (nums) {
+    const printed = Math.round(pdfNum_(nums[nums.length - 1]) * 100);
+    const sum = lines.reduce((t, l) => t + Math.round(l.lineTotal * 100), 0);
+    if (Math.abs(printed - sum) > 1) return `The lines read add up to $${(sum / 100).toFixed(2)}, but the PDF's subtotal is $${(printed / 100).toFixed(2)}.`;
+  }
+  return "";
+}
+
 // A reasonable starting name/brand/color for a NEW blank from one parsed group — the
 // admin can fix any of it before saving. "Richardson - Five-Panel Gramps Cap - 356" →
 // brand "Richardson", name "Navy Five-Panel Gramps Cap" (color first, matching how
@@ -12345,17 +12383,36 @@ function matchBlanksForImport_(groups, blanks){
 async function showPdfImportModal_(file, onDone){
   const { ov, close } = inventoryModal_("Import from PDF", `<div id="pdfImpBody" style="font-size:13px;color:#777;">Reading ${escapeHtml(file.name)}…</div>`, 900);
   const body = ov.querySelector("#pdfImpBody");
-  let items, parsed, blanks;
+  let items, blanks;
   try {
     items = await extractPdfItems_(file);
     blanks = (await mnApi_({ action: "getBlanks" })).blanks || [];
   } catch (e) { body.innerHTML = `<div style="color:#b03a2e;">${escapeHtml(e.message || "Could not read that PDF.")}</div>`; return; }
-  parsed = parseVendorOrderPdf_(items);
-  if (parsed.error || !parsed.groups.length) {
-    body.innerHTML = `<div style="color:#b03a2e;">${escapeHtml(parsed.error || "No line items found in this PDF.")}</div>
-      <div style="font-size:12px;color:#777;margin-top:6px;">This importer reads S&amp;S and SanMar invoices/order confirmations. A different vendor's layout, or a scanned (non-text) PDF, won't be recognized — enter the order by hand with Receive order instead.</div>`;
-    return;
-  }
+  const showError = (message) => {
+    body.innerHTML = `<div style="color:#b03a2e;">${escapeHtml(message)}</div>
+      <div style="font-size:12px;color:#777;margin-top:6px;">A scanned (non-text) PDF can't be read — enter the order by hand with Receive order instead.</div>`;
+  };
+  // The PDF's text, read by a Workers AI model (one call). If that fails, the layout reader's own answer
+  // (`fallback`) is shown when it found anything, with why it may be wrong; otherwise the error.
+  const readWithAi = async (fallback, problem) => {
+    body.innerHTML = `<div style="font-size:13px;color:#777;">Reading ${escapeHtml(file.name)} with AI…</div>`;
+    try { showParsed(await mnApi_({ action: "readInvoiceWithAi", text: pdfItemsToText_(items) })); }
+    catch (e) {
+      if (fallback && fallback.groups && fallback.groups.length) showParsed({ ...fallback, warnings: [problem, (problem ? "Reading it with AI didn't work either: " : "Reading it with AI didn't work: ") + e.message].filter(Boolean) });
+      else showError(e.message);
+    }
+  };
+  const showParsed = (parsed) => showPdfImportPreview_(body, parsed, { file, blanks, close, onDone, showError, readWithAi });
+  const layout = parseVendorOrderPdf_(items);
+  const problem = pdfParseProblem_(layout, items);
+  if (problem) await readWithAi(layout, problem);
+  else showParsed(layout);
+}
+
+// The preview of what was read (by the layout reader, or with AI): pick which existing blank each item is,
+// or a new one, then on to Receive order. The last argument is the Import window's own pieces (showPdfImportModal_).
+function showPdfImportPreview_(body, parsed, { file, blanks, close, onDone, showError, readWithAi }){
+  if (!parsed.groups || !parsed.groups.length) { showError("No line items found in this PDF."); return; }
   const matched = matchBlanksForImport_(parsed.groups, blanks);
   const blankName = (b) => b.name || [b.brand, b.color].filter(Boolean).join(" ") || "Blank #" + b.id;
   const inp = "font-size:13px;padding:5px 7px;border:1px solid #ccc;border-radius:4px;";
@@ -12375,13 +12432,18 @@ async function showPdfImportModal_(file, onDone){
         </select></td>
     </tr>`;
   }).join("");
-  body.innerHTML = `
+  const warnings = parsed.warnings || [];
+  const aiNote = parsed.source === "ai"
+    ? `<div style="font-size:13px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:8px 10px;margin-bottom:10px;"><b>Read with AI</b> — check every line against the PDF before saving.${warnings.length ? `<ul style="margin:6px 0 0 18px;padding:0;">${warnings.map(t => `<li>${escapeHtml(t)}</li>`).join("")}</ul>` : ""}</div>`
+    : warnings.length ? `<div style="font-size:13px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:8px 10px;margin-bottom:10px;">${warnings.map(t => escapeHtml(t)).join("<br>")}</div>` : "";
+  body.innerHTML = `${aiNote}
     <div style="font-size:13px;color:#333;margin-bottom:10px;">Found ${matched.length} item${matched.length === 1 ? "" : "s"} in ${escapeHtml(file.name)}. Untick anything you don't want, and pick which existing blank each one is (or leave "New blank" to create it). The next screen lets you check every size/qty/cost before anything is saved.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
       <label style="font-size:12px;font-weight:600;">Vendor<br><input id="piVendor" value="${escapeHtml(parsed.vendor)}" style="${inp}width:150px;"></label>
       <label style="font-size:12px;font-weight:600;">Invoice / order #<br><input id="piRef" value="${escapeHtml(parsed.vendorRef)}" style="${inp}width:130px;"></label>
       <label style="font-size:12px;font-weight:600;">Date<br><input id="piDate" type="date" value="${escapeHtml(parsed.receivedAt || new Date().toISOString().slice(0, 10))}" style="${inp}"></label>
       <label style="font-size:12px;font-weight:600;">Shipping &amp; other costs<br>$<input id="piShip" type="number" min="0" step="0.01" value="${parsed.extraCost ? Number(parsed.extraCost).toFixed(2) : ""}" style="${inp}width:90px;"></label>
+      ${parsed.source === "ai" ? "" : `<button type="button" class="admin-btn admin-btn-sm" id="piAi" style="align-self:flex-end;background:#fff;color:#232323;border:1px solid #999;" title="Not what the PDF says? Have a Workers AI model read it instead">Read with AI</button>`}
     </div>
     <div style="overflow-x:auto;border:1px solid #ddd;border-radius:6px;"><table style="width:100%;border-collapse:collapse;">
       <thead><tr style="background:#f0f0f0;font-size:12px;text-align:left;"><th style="padding:5px 6px;"><input type="checkbox" id="piAll" checked></th><th style="padding:5px 6px;">Item</th><th style="padding:5px 6px;">Sizes</th><th style="padding:5px 6px;">Blank</th><th style="padding:5px 6px;">Category ${manageCategoriesBtn_('data-select=".pi-type"')}</th></tr></thead>
@@ -12397,6 +12459,8 @@ async function showPdfImportModal_(file, onDone){
     if (t) t.disabled = sel.value !== "__new__";
   }));
   body.querySelector("#piCancel").onclick = close;
+  const aiBtn = body.querySelector("#piAi");
+  if (aiBtn) aiBtn.onclick = () => readWithAi(parsed, "");
   body.querySelector("#piNext").onclick = async () => {
     const err = body.querySelector("#piErr"); err.textContent = "";
     const ticked = matched.filter((g, i) => body.querySelector(`.pi-on[data-i="${i}"]`).checked);
@@ -15893,7 +15957,7 @@ async function renderAdminBlanks(app) {
           <option value="onsale">On a product for sale</option><option value="unlinked">Not linked to any product</option><option value="low">Below reorder point</option></select>
         <button type="button" class="admin-btn" id="blankAddBtn">+ New blank</button>
         <button type="button" class="admin-btn" id="blankOrderBtn" title="Record a whole vendor order: several blanks, shipping, R&amp;D and personal items">Receive order</button>
-        <button type="button" class="admin-btn" id="blankImportPdfBtn" title="Read a vendor invoice PDF (S&amp;S, SanMar) and pre-fill Receive order from it">Import from PDF&hellip;</button>
+        <button type="button" class="admin-btn" id="blankImportPdfBtn" title="Read a vendor invoice or order confirmation PDF and pre-fill Receive order from it">Import from PDF&hellip;</button>
         <input type="file" id="blankImportPdfFile" accept="application/pdf" style="display:none;">
         <button type="button" class="admin-btn" id="blankVendorNewBtn" title="Bring in complete blanks from a vendor's product file — colors, sizes, prices per color, description, and images from the vendor's image download">+ New blank from vendor file&hellip;</button>
         <button type="button" class="admin-btn" id="blankVendorUpdBtn" title="Refresh the vendor prices (per color) of blanks you have from a vendor's product file">Update prices from vendor file&hellip;</button>

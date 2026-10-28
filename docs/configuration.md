@@ -24,12 +24,32 @@ each row is where to look.
 | `IMAGES` | R2 bucket, **public** | for picture uploads | Product and shop pictures, and pictures customers attach to a design approval. Needs `R2_PUBLIC_BASE` too. |
 | `RECEIPTS` | R2 bucket, **private** | for receipts | Expense receipts and vendor invoices attached to stock received. Opened only through short-lived signed links. |
 | `DESIGNS` | R2 bucket, **private** | for design files | Embroidery design files and files attached to order lines. Opened only through short-lived signed links. |
+| `AI` | Workers AI | no | Reads a vendor PDF with a model when Blanks → Import from PDF's own reader can't (see [AI reading of vendor PDFs](#ai-reading-of-vendor-pdfs)). Without it, the import uses its own reader only. |
 | `AGENT_MAILBOX` | Durable Object | for the send-agent relay | Holds jobs for the send-agent while a phone or tablet waits for the answer (`functions/_lib/agentMailbox.js`). |
 | `ASSETS` | static assets | yes | Serves `public/` (the storefront and admin pages). |
 | `EMAIL` | `send_email` binding | no | An alternative way to reach Cloudflare Email Service. Not declared in the shipped `wrangler.toml`; the installer uses the API-token route instead. |
 
 Also in `wrangler.toml`: the **hostnames** the Worker serves (`routes`), and the **cron trigger**
 (hourly — see [operations.md](operations.md)).
+
+### AI reading of vendor PDFs
+
+Blanks → Import from PDF first reads the PDF itself, by its layout (tuned to S&S and SanMar invoices).
+When that finds nothing, a line has no price or total, or the lines don't add up to the subtotal printed
+on the PDF, the PDF's text is sent to a Workers AI model (named at the top of
+`functions/_lib/invoiceAi.js`). The preview's **Read with AI** button does the same for any PDF. Only the text goes:
+the PDF is read in the browser, and the model runs in your own Cloudflare account. Nothing is saved
+until you check the lines and save Receive order. Each quantity, price and total the model returns is
+checked against the PDF's text and the subtotal, and any that don't match are listed above the preview.
+
+**Cost.** Workers AI is billed in neurons. Every account gets **10,000 neurons a day** at no charge, on
+the free plan and the $5 plan alike. A 1–2 page invoice uses about **150–350 neurons**, and a 5-page one
+about 900, on the default model (Llama 3.3 70B). On the $5 plan, use past 10,000 a day is
+**$0.011 per 1,000 neurons**, so about $0.002–0.004 an invoice. On the free plan the AI reader stops for
+the rest of the day (it resets at 00:00 UTC) and says so. PDFs the layout reader handles cost nothing.
+Usage shows in the Cloudflare dashboard under **AI → Workers AI**.
+
+To switch it off, remove the `[ai]` block from `wrangler.toml`.
 
 ## Plain settings (`[vars]` in `wrangler.toml`)
 
