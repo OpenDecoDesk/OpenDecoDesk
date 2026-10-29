@@ -175,6 +175,7 @@ async function adminRoute() {
 
   // A page of a feature that's switched off (Global settings → Features): say so instead of
   // showing a screen whose every request the server would refuse.
+  if (adminDesktopHides_(raw)) { renderDesktopOff_(app, raw); return; }
   { const off = adminPageFeature_(raw); if (off && !featureOn_(off)) { renderFeatureOff_(app, off, raw); return; } }
   // A page this user's role can't use: say so (the server would refuse every request it makes).
   if (!adminCan_(adminPageRole_(raw))) { renderRoleOff_(app, raw); return; }
@@ -819,10 +820,12 @@ async function adminLogin(){
   const stored = loadStoredSession();
   if(stored){ adminPending = stored.pending || null; adminMe = stored.user || null; return stored.token; }
 
-  // 2. Sign-in prompt
-  const key = (await promptAdminPassphrase()) || "";
+  // 2. Sign-in prompt — except the desktop program's very first start, which signs in with the
+  // passphrase it made itself (desktop/preload.js) and goes straight to "Finish setting up".
+  const desktopKey = adminDesktop_() ? await adminDesktopFirstRunKey_() : null;
+  const key = desktopKey || (await promptAdminPassphrase()) || "";
   if(!key) return "";
-  const email = _adminSignInEmail;
+  const email = desktopKey ? "" : _adminSignInEmail;
 
   // 3. POST to /api/admin-session (email + password first)
   let data;
@@ -1144,7 +1147,34 @@ const ADMIN_PAGE_FEATURE = {
 let FEATURE_LABELS_ = { storefront: "Storefront", production: "Production", bookkeeping: "Bookkeeping", shipping: "Shipping", designVerification: "Design approval" };
 function adminFeatureOn_(key){ return typeof featureOn_ !== "function" || featureOn_(key); }
 function adminPageFeature_(hash){ return ADMIN_PAGE_FEATURE[String(hash || "").replace(/^#\/?/, "").split("/")[0]] || ""; }
-function adminPageOn_(hash){ const f = adminPageFeature_(hash); return !f || adminFeatureOn_(f); }
+function adminPageOn_(hash){ const f = adminPageFeature_(hash); return !adminDesktopHides_(hash) && (!f || adminFeatureOn_(f)); }
+
+// ---- The desktop edition (desktop/; /api/catalog says edition "desktop") ---------------------------
+// The same admin, inside the desktop program on one computer. What needs the internet is left out:
+// these pages, and the buttons that send email, take card payments, attach a web address or talk
+// to a supplier's live connection (the server refuses those actions there too — orders.js
+// DESKTOP_REFUSED_ACTIONS). Everything else is the same screen as a cloud install's.
+function adminDesktop_(){ return typeof siteEdition !== "undefined" && siteEdition === "desktop"; }
+const ADMIN_DESKTOP_HIDDEN_PAGES = ["vendors", "comms"];
+function adminDesktopHides_(hash){ return adminDesktop_() && ADMIN_DESKTOP_HIDDEN_PAGES.includes(String(hash || "").replace(/^#\/?/, "").split("/")[0]); }
+// The passphrase for the program's own first sign-in, or null (a normal start, or not the program).
+async function adminDesktopFirstRunKey_(){
+  if(!adminDesktop_() || !window.oddDesktop || typeof window.oddDesktop.firstRunKey !== "function") return null;
+  try{ return (await window.oddDesktop.firstRunKey()) || null; }catch(e){ return null; }
+}
+function renderDesktopOff_(app, hash){
+  adminSetHash(hash);
+  document.title = adminTitle_("Not in the desktop version");
+  app.innerHTML = `
+    <div class="org-hero admin-hero" style="--org-accent:var(--accent);">
+      <h1>Not in the desktop version</h1>
+      <div class="stitch stitch-thick"></div>
+    </div>
+    <div class="admin-panel" style="--org-accent:var(--accent);" id="desktopOffPanel">
+      <div class="admin-empty">This page needs the internet (email, or a supplier's live connection), so it isn't part of the desktop version.</div>
+      <div class="admin-actions" style="margin-top:14px;"><button class="admin-btn" onclick="location.hash='#orders'">Back to Orders</button></div>
+    </div>`;
+}
 // The lowest role a page is for (see ACTION_ROLE in functions/api/orders.js — the server is the
 // authority; this keeps people from landing on screens that could only show refusals).
 // Global settings is an admin's page: every change on it is (updateGlobalSettings, updateFeatures, the
@@ -1380,7 +1410,7 @@ function shopBarHtml_(ctx){
       ${adminCanOpen_(shopBarHash_("products", shop)) ? link("products", "Products") : ""}
       ${adminCanOpen_(shopBarHash_("designs", shop)) ? link("designs", "Designs") : ""}
       ${adminCanOpen_(shopBarHash_("graphics", shop)) ? link("graphics", "Graphics") : ""}
-    </span><span class="shop-bar-end">${liveBtn}${discardBtn}${pubBtn}</span>` : ""}`;
+    </span><span class="shop-bar-end">${adminDesktop_() ? "" : liveBtn + discardBtn + pubBtn}</span>` : ""}`;
 }
 // The Live / Coming soon switch: asks, then opens or closes the shop for orders (nothing is published by it).
 async function shopBarLive_(orgId, ready){
@@ -2986,7 +3016,7 @@ function adminActionCell(org, o){
 
   if(!o.paid){
     return `<button class="admin-btn" ${dataAttrs} onclick="markOrderPaid(this.dataset.org, this.dataset.order)">Mark as paid</button>` +
-      `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>` +
+      (adminDesktop_() ? "" : `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>`) +
       invoiceCell_(org, o) +
       `<button class="admin-btn" ${dataAttrs} onclick="editOrder(this.dataset.org,this.dataset.order)" style="margin-top:4px;">Edit items</button>` +
       paymentsBtn + deleteBtn;
@@ -3005,7 +3035,7 @@ function adminActionCell(org, o){
         ${eligible.map(s => `<option value="${escapeHtml(s.stage)}">${escapeHtml(s.stage === "manufactured" && o.allFromStock ? "Pulled from stock" : s.label.replace(/^Mark /, ""))}</option>`).join("")}
         ${waiting.map(s => `<option value="" disabled>${escapeHtml(s.label.replace(/^Mark /, ""))} — upload the order design first</option>`).join("")}
       </select>`;
-  const emailBtn = `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>`;
+  const emailBtn = adminDesktop_() ? "" : `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>`;
   const hasAddr = o.shippingAddress && o.shippingAddress.line1;
   const shipBtn = `<button class="admin-btn" ${dataAttrs} onclick="setShippingInfo(this.dataset.org,this.dataset.order)" style="margin-top:4px;">${hasAddr ? "Edit shipping" : "Set shipping"}</button>`;
   const editBtn = `<button class="admin-btn" ${dataAttrs} onclick="editOrder(this.dataset.org,this.dataset.order)" style="margin-top:4px;">Edit items</button>`;
@@ -3024,7 +3054,7 @@ function invoiceCell_(org, o){
   const day = (iso) => { const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${+m[2]}/${+m[3]}` : ""; };
   const status = inv ? `<div class="mono invoice-status" style="font-size:11px;color:var(--ink-soft);margin-top:4px;line-height:1.35;">Invoice sent ${escapeHtml(day(inv.sentAt))}` +
     `${inv.viewedAt ? " · opened" : " · not opened yet"}${inv.deliveryChosenAt ? " · delivery chosen" : ""}</div>` : "";
-  const btn = owes ? `<button class="admin-btn" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="showSendInvoiceModal(this.dataset.org, this.dataset.order)" title="Email the customer a link to choose delivery and pay online" style="margin-top:4px;">${inv ? "Resend invoice…" : "Send invoice…"}</button>` : "";
+  const btn = owes && !adminDesktop_() ? `<button class="admin-btn" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="showSendInvoiceModal(this.dataset.org, this.dataset.order)" title="Email the customer a link to choose delivery and pay online" style="margin-top:4px;">${inv ? "Resend invoice…" : "Send invoice…"}</button>` : "";
   return btn + status;
 }
 
@@ -5269,7 +5299,7 @@ function showLocalSaleModal(products, blanks){
             <input type="checkbox" id="lsDelivered" style="width:auto;margin:0;"> Delivered
           </label>
         </div>
-        <div style="margin:-4px 0 14px;">
+        <div style="margin:-4px 0 14px;${adminDesktop_() ? "display:none;" : ""}">
           <label style="font-size:14px;display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
             <input type="checkbox" id="lsInvoice" style="width:auto;margin:3px 0 0;">
             <span>Email the customer an invoice <span style="color:var(--ink-soft,#888);font-size:13px;">— a link where they choose pickup or delivery and pay online. Needs their email (under Customer info); the order is recorded unpaid.</span></span>
@@ -5667,7 +5697,7 @@ function renderPackingLabels(orgId, selectedIds){
     if(!pw){ showToast("Allow popups to print labels", true); return; }
     pw.document.write(`<!DOCTYPE html><html><head>
 <meta charset="utf-8">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:wght@700&family=IBM+Plex+Mono&family=IBM+Plex+Sans&display=swap">
+<link rel="stylesheet" href="${location.origin}/vendor/fonts/fonts.css">
 <style>
 @page{size:letter;margin:0;}
 *{box-sizing:border-box;}
@@ -5886,7 +5916,7 @@ function renderBrandedLabels(orgId, selectedIds){
     if(!pw){ showToast("Allow popups to print labels", true); return; }
     pw.document.write(`<!DOCTYPE html><html><head>
 <meta charset="utf-8">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;1,9..144,400&family=IBM+Plex+Mono&family=IBM+Plex+Sans&display=swap">
+<link rel="stylesheet" href="${location.origin}/vendor/fonts/fonts.css">
 <style>
 @page{size:4.25in 10in;margin:0;}
 *{box-sizing:border-box;}
@@ -5996,7 +6026,7 @@ body{margin:0;padding:0;background:#fff;color:#000;}
     if(!pw){ showToast("Allow popups to print labels", true); return; }
     pw.document.write(`<!DOCTYPE html><html><head>
 <meta charset="utf-8">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:wght@700&display=swap">
+<link rel="stylesheet" href="${location.origin}/vendor/fonts/fonts.css">
 <style>${POPUP_CSS}</style></head><body>${html}<script>
 window.onload=function(){
   document.fonts.ready.then(function(){window.print();window.close();});
@@ -6359,8 +6389,8 @@ function renderAdminOrgListTable(orgs){
       <td data-label="Status">${o.ready ? "Live" : "Coming soon"}<div data-publish-state="${escapeHtml(o.orgId)}" style="font-size:12px;margin-top:2px;"></div><div data-shop-issues="${escapeHtml(o.orgId)}" style="font-size:12px;margin-top:2px;color:#92400e;"></div></td>
       <td class="stack-actions">
         ${adminCan_("manager") ? `<button class="admin-btn" data-org="${escapeHtml(o.orgId)}" onclick="location.hash='#wizard/'+encodeURIComponent(this.dataset.org)" title="The setup steps for this shop — picks up where it was left">Shop setup<span data-wizard-state="${escapeHtml(o.orgId)}"></span></button>
-        <button class="admin-btn" data-org="${escapeHtml(o.orgId)}" onclick="publishCatalog(this.dataset.org)" title="Shoppers see this shop's current products and settings">Publish</button>
-        <button class="admin-btn admin-btn-secondary" data-org="${escapeHtml(o.orgId)}" onclick="previewShop_(this.dataset.org)" title="Open the shop page as it will look after Publish">Preview</button>` : ""}
+        ${adminDesktop_() ? "" : `<button class="admin-btn" data-org="${escapeHtml(o.orgId)}" onclick="publishCatalog(this.dataset.org)" title="Shoppers see this shop's current products and settings">Publish</button>
+        <button class="admin-btn admin-btn-secondary" data-org="${escapeHtml(o.orgId)}" onclick="previewShop_(this.dataset.org)" title="Open the shop page as it will look after Publish">Preview</button>`}` : ""}
         ${adminCanOpen_("catalog/orgs/" + o.orgId + "/edit") ? `<button class="admin-btn" data-org="${escapeHtml(o.orgId)}" onclick="location.hash='#catalog/orgs/'+encodeURIComponent(this.dataset.org)+'/edit'">Edit</button>` : ""}
         <button class="admin-btn" data-org="${escapeHtml(o.orgId)}" data-issues="products" onclick="location.hash='#catalog/orgs/'+encodeURIComponent(this.dataset.org)+'/products'" style="margin-top:4px;">Products</button>
         ${adminFeatureOn_("production") ? `<button class="admin-btn" data-org="${escapeHtml(o.orgId)}" data-issues="designs" onclick="location.hash='#designs/'+encodeURIComponent(this.dataset.org)" style="margin-top:4px;">Designs</button>` : ""}
@@ -6371,7 +6401,7 @@ function renderAdminOrgListTable(orgs){
   panel.innerHTML = `
     <div class="admin-actions" style="margin:6px 0 10px 0;">
       ${adminCan_("manager") ? `<button class="admin-btn wiz-start-btn" onclick="location.hash='#wizard/new'">＋ New shop setup</button>
-      <button class="admin-btn" onclick="publishCatalog()" title="Publish every shop's current products and settings">Publish all shops</button>
+      ${adminDesktop_() ? "" : `<button class="admin-btn" onclick="publishCatalog()" title="Publish every shop's current products and settings">Publish all shops</button>`}
       <button class="admin-btn" id="catalogPriceBtn" onclick="showPriceAnalysis_({}, { title: 'Price analysis — every shop' })" title="What each item costs and leaves in every shop, and which are below your targets">Price analysis</button>` : ""}
     </div>
     <div id="publishStatus" class="admin-note"></div>
@@ -6434,7 +6464,8 @@ async function publishCatalog(orgId){
 }
 // Each shop's publish state, wherever a [data-publish-state="<orgId>"] slot is on the page.
 function publishStateHtml_(st){
-  if (!st) return "";
+  if (!st || adminDesktop_()) return "";   // the desktop version has no shop pages to publish
+
   if (st.state === "never") return `<span class="pub-state pub-never" title="Until it's published once, every change shows to shoppers straight away">Not published yet — changes show at once</span>`;
   if (st.state === "current") return `<span class="pub-state pub-current">✓ Published ${escapeHtml(String(st.publishedAt || "").slice(0, 10))}</span>`;
   const bits = [st.changedProducts && st.changedProducts.length ? `${st.changedProducts.length} product${st.changedProducts.length === 1 ? "" : "s"}` : "", st.shopChanged ? "shop settings" : ""].filter(Boolean).join(", ");
@@ -6801,7 +6832,7 @@ function wizScreen_(step){
             const subdomain = val("#wizSub") || o.subdomain;
             if (subdomain !== o.subdomain) { const why = webAddressProblem_(subdomain, o.orgId); if (why) return why; }
             if (name !== o.name || subdomain !== o.subdomain) await wizSaveOrg_({ name, subdomain });
-            if (subdomain !== o.subdomain) {
+            if (subdomain !== o.subdomain && !adminDesktop_()) {
               const r = await hoopApi_({ action: "setupOrgDomain", orgId: o.orgId }).catch(() => null);
               if (r && r.domain && r.domain.error) showToast(orgDomainText_(r.domain, subdomain), true);
               const orgs = await hoopApi_({ action: "listOrgsAdmin" }).catch(() => null);
@@ -7425,9 +7456,9 @@ function wizCheckScreen_(){
         ${later.length ? `<details class="wiz-more wiz-later"><summary>Before it can be made — not needed to publish (${later.length})</summary>
           <ul class="wiz-issues">${later.map(x => `<li><strong>${escapeHtml(nameOf(x.id))}</strong>: ${escapeHtml(x.text)}${stepFor(x.id, x.code) ? ` <button type="button" class="admin-btn admin-btn-secondary" data-goto="${escapeHtml(stepFor(x.id, x.code))}">Open</button>` : ""}</li>`).join("")}</ul>
           <div class="wiz-note">Link a stitch file (design) to each embroidery graphic on the Graphics screen, or on the product's Graphics step here, once it's digitized.</div></details>` : ""}
-        <button type="button" class="admin-btn admin-btn-secondary" id="wizPreview">Preview the shop</button>`;
+        ${adminDesktop_() ? "" : `<button type="button" class="admin-btn admin-btn-secondary" id="wizPreview">Preview the shop</button>`}`;
       box.querySelectorAll("[data-goto]").forEach(btn => btn.onclick = async () => { await wizSaveState_(); st.step = btn.dataset.goto; wizDraw_(); });
-      box.querySelector("#wizPreview").onclick = () => previewShop_(_wiz.orgId);
+      if (box.querySelector("#wizPreview")) box.querySelector("#wizPreview").onclick = () => previewShop_(_wiz.orgId);
       // Redraw the rail so the Check step's mark matches what was found.
       root.querySelectorAll('.wiz-step[data-step="check"]').forEach(el => { el.classList.remove("wiz-done", "wiz-warn", "wiz-todo"); el.classList.add(st.checkOk ? "wiz-done" : "wiz-warn"); });
     },
@@ -7437,7 +7468,7 @@ function wizCheckScreen_(){
 function wizLiveScreen_(){
   const o = _wiz.org || {}, st = _wiz.state;
   const root = location.hostname.split(".").slice(1).join(".");
-  const url = o.subdomain && root ? `https://${o.subdomain}.${root}/` : "";
+  const url = o.subdomain && root && !adminDesktop_() ? `https://${o.subdomain}.${root}/` : "";
   if (st.live && o.ready) return {
     title: "Your shop is open 🎉", noNext: true,
     html: `<div class="wiz-ok">${escapeHtml(o.name)} is open for orders and published.</div>
@@ -7553,13 +7584,13 @@ async function renderGlobalSettings(app){
           <input type="${/Email$/.test(key) ? "email" : "text"}" id="${id}" value="${escapeHtml(biz[key] || "")}" ${extra || ""}>
         </label>${note ? `<div class="admin-note" style="margin-top:-6px;">${note}</div>` : ""}`;
     // Features: the list (names and what each covers) and the switches come from the server.
-    let featureList = [], features = {};
+    let featureList = [], features = {}, lockedFeatures = [];
     try{
       const fr = await fetch("/api/orders", { method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({action: "getFeatures", key: adminKey}) });
       const fd = await fr.json();
       if(fr.ok && fd.status === "ok"){
-        featureList = fd.list || []; features = fd.features || {};
+        featureList = fd.list || []; features = fd.features || {}; lockedFeatures = Array.isArray(fd.locked) ? fd.locked : [];
         featureList.forEach(f => { FEATURE_LABELS_[f.key] = f.label; });
         if(typeof applyFeatures_ === "function") applyFeatures_(features);
       }
@@ -7594,11 +7625,15 @@ async function renderGlobalSettings(app){
         <h2 style="margin-bottom:12px;">Business profile</h2>
         <div class="admin-note" style="margin-bottom:14px;">Who runs this site. The name appears on the storefront, in every email, on labels and in the browser tab; the rest tells customers how to reach you and how to pay. Leave anything you don't use blank.</div>
         ${bizField("gBizName", "name", "Business name", "", 'maxlength="120" placeholder="e.g. Northside Stitch Co."')}
+        <div${adminDesktop_() ? ' style="display:none;"' : ""}>
         ${bizField("gBizTagline", "tagline", "One-line description", "Shown on the page people see when they reach the site without a shop link.", 'maxlength="200"')}
         ${bizField("gBizFooter", "footer", "Footer line", "Shown at the bottom of every storefront page.", 'maxlength="300"')}
+        </div>
         ${bizField("gBizSupportEmail", "supportEmail", "Contact email (shown to customers)", "", 'maxlength="200"')}
+        <div${adminDesktop_() ? ' style="display:none;"' : ""}>
         ${bizField("gBizOwnerEmail", "ownerEmail", "Your inbox (not shown to customers)", "Where the daily roll-up and other notices to you are sent, and where customers' replies go. Blank = owner@ your domain.", 'maxlength="200"')}
         ${bizField("gBizReceiptsEmail", "receiptsEmail", "Receipts inbox (optional)", "Gets a hidden copy of every email the site sends.", 'maxlength="200"')}
+        </div>
         ${bizField("gBizVenmo", "venmo", "Venmo username", "Without the @. Builds the customer's pre-filled Venmo link.", 'maxlength="60"')}
         ${bizField("gBizZelle", "zelle", "Zelle email or phone", "", 'maxlength="200"')}
         ${bizField("gBizLegalName", "legalName", "Checks payable to", "Your legal or bank-account name, if it differs from the business name.", 'maxlength="160"')}
@@ -7626,12 +7661,14 @@ async function renderGlobalSettings(app){
         ${featureList.length ? `<h2 style="margin:22px 0 12px;">Features</h2>
         <div class="admin-note" style="margin-bottom:14px;">Parts of the site you can do without. Turning one off hides its pages here and stops its actions; nothing is deleted, and turning it back on brings everything back as it was. Stock of blanks and transfers, and cost of goods, are always on — making an order uses them.<br>
           <strong>Storefront</strong> is the one switch that hides nothing here: with it off, customers see an “online ordering isn't available” page on every shop address, and you keep entering orders, sending payment links and design proofs, and using Publish, a shop's “ready” box and its custom domain exactly as before (they only matter once it's back on).</div>
-        <div id="gFeatures">${featureList.map(f => `<label class="checkbox-row"><input type="checkbox" class="gFeature" data-feature="${escapeHtml(f.key)}" ${features[f.key] !== false ? "checked" : ""}> ${escapeHtml(f.label)}</label>
-          <div class="admin-note" style="margin:-4px 0 12px 26px;">${escapeHtml(f.description)}</div>`).join("")}</div>` : ""}
+        ${lockedFeatures.length ? `<div class="admin-note" style="margin-bottom:14px;"><strong>Desktop version:</strong> the parts that need the internet — the online storefront, carrier shipping and emailed design approval — stay off here.</div>` : ""}
+        <div id="gFeatures">${featureList.map(f => { const locked = lockedFeatures.includes(f.key);
+          return `<label class="checkbox-row"><input type="checkbox" class="gFeature" data-feature="${escapeHtml(f.key)}" ${features[f.key] !== false ? "checked" : ""}${locked ? " disabled data-locked=\"1\"" : ""}> ${escapeHtml(f.label)}${locked ? ` <span style="font-size:12px;color:#666;">(not in the desktop version)</span>` : ""}</label>
+          <div class="admin-note" style="margin:-4px 0 12px 26px;">${escapeHtml(f.description)}</div>`; }).join("")}</div>` : ""}
 
         <h2 style="margin:22px 0 12px;">Payment methods</h2>
         <div class="admin-note" style="margin-bottom:14px;">These are site-wide toggles. Disabling a method here removes it for <strong>all shops</strong>, even if that org has it enabled. Org-level settings can further restrict methods but cannot re-enable a globally disabled one.</div>
-        <label class="checkbox-row"><input type="checkbox" id="gPayCard" ${checked("card")}> Credit / Debit Card (requires Stripe)</label>
+        <label class="checkbox-row"${adminDesktop_() ? ' style="display:none;"' : ""}><input type="checkbox" id="gPayCard" ${checked("card")}> Credit / Debit Card (requires Stripe)</label>
         <label class="checkbox-row"><input type="checkbox" id="gPayVenmo" ${checked("venmo")}> Venmo</label>
         <label class="checkbox-row"><input type="checkbox" id="gPayZelle" ${checked("zelle")}> Zelle</label>
         <label class="checkbox-row"><input type="checkbox" id="gPayCheck" ${checked("check")}> Check</label>
@@ -7720,7 +7757,7 @@ async function renderGlobalSettings(app){
         <div id="globalSettingsError" class="admin-error"></div>
         <div class="admin-actions" style="margin-top:16px;">
           <button class="admin-btn" onclick="submitGlobalSettings()">Save global settings</button>
-          <button class="admin-btn" type="button" onclick="backfillStripeFees(this)" title="Look up Stripe's processing fee and charge date for card payments (safe to run again)">Sync Stripe fees &amp; dates</button>
+          ${adminDesktop_() ? "" : `<button class="admin-btn" type="button" onclick="backfillStripeFees(this)" title="Look up Stripe's processing fee and charge date for card payments (safe to run again)">Sync Stripe fees &amp; dates</button>`}
           <button class="admin-btn" onclick="location.hash='#catalog'">Cancel</button>
         </div>
       </div>
@@ -7952,7 +7989,7 @@ async function submitGlobalSettings(){
     }
     // New fees / targets re-check every product: say which are now below a target.
     if((priceData.belowTarget || []).length) setTimeout(() => belowTargetToast_(priceData.belowTarget, "With these settings, "), 1200);
-    showToast(needPublish
+    showToast(adminDesktop_() ? "Global settings saved." : needPublish
       ? "Global settings saved. The payment-method change reaches the storefront when you click Publish on the Manage catalog screen; everything else is already live."
       : "Global settings saved. The changes are already live — no need to Publish.", false);
     location.hash = "#catalog";
@@ -8050,7 +8087,9 @@ async function renderAccountSetup(app){
   panel.innerHTML = `
       <form class="admin-form" id="acctForm" data-need-password="${needPassword ? "1" : "0"}" onsubmit="submitAccountSetup(event)" style="max-width:440px;">
         <h2 style="margin-bottom:8px;">Finish setting up</h2>
-        <p class="admin-note" style="margin-bottom:16px;">${needPassword
+        <p class="admin-note" style="margin-bottom:16px;">${needPassword && adminDesktop_()
+          ? "Welcome. Say who you are and choose a password. Each time the program opens, you sign in with your email and that password. Next comes Global settings: your business's name, where you are and your sales tax."
+          : needPassword
           ? "You signed in with the passphrase the installer printed. Say who you are and choose a password of your own. From then on you sign in with your email and that password, and the printed passphrase stops working."
           : "From now on each person signs in as themselves. Say who you are; you keep the password you have, and sign in with this email from now on."}</p>
         <label for="acctName">Your name</label>
@@ -8136,7 +8175,7 @@ function renderChangePassword(app, forced){
         <input type="password" id="pwNext" autocomplete="new-password" minlength="${ADMIN_MIN_PASSWORD_}" required style="width:100%;margin:4px 0 12px;" />
         <label for="pwAgain">New password again</label>
         <input type="password" id="pwAgain" autocomplete="new-password" required style="width:100%;margin-top:4px;" />
-        <p class="admin-note" style="margin-top:10px;">Forgotten it? An admin can reset it under Security → Users. If you are the only admin, run <code>npm run setup -- --new-passphrase</code> on the computer you installed from: it prints a passphrase that gets you back in (and resets everyone's password).</p>
+        <p class="admin-note" style="margin-top:10px;">Forgotten it? An admin can reset it under Security → Users. If you are the only admin, ${adminDesktop_() ? "choose Help → Locked out? Reset sign-in in the program's menu: you then set up your account again (and everyone's password is reset)." : "run <code>npm run setup -- --new-passphrase</code> on the computer you installed from: it prints a passphrase that gets you back in (and resets everyone's password)."}</p>
         <div id="pwError" class="admin-error" style="margin-top:8px;"></div>
         <div class="admin-actions" style="margin-top:14px;">
           <button class="admin-btn" type="submit" id="pwSubmit">${forced ? "Set password" : "Change password"}</button>
@@ -8813,7 +8852,7 @@ function renderOrgForm(app, org){
           <input type="text" id="orgFormSubdomain" value="${escapeHtml(org ? org.subdomain : "")}" placeholder="e.g. club404">
         </label>
         <div class="admin-note">Filled in from the name. Lowercase letters / numbers only — becomes &lt;address&gt;.${escapeHtml(siteRootDomain_())}. Creating the shop also sets that address up in Cloudflare.</div>
-        ${isEdit ? `<div id="orgDomainBox" data-org="${escapeHtml(org.orgId)}" style="margin:-4px 0 12px;padding:8px 10px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#111;font-size:13px;">Checking custom domain&hellip;</div>` : ""}
+        ${isEdit && !adminDesktop_() ? `<div id="orgDomainBox" data-org="${escapeHtml(org.orgId)}" style="margin:-4px 0 12px;padding:8px 10px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#111;font-size:13px;">Checking custom domain&hellip;</div>` : ""}
         <label>Small heading above the name (optional)
           <input type="text" id="orgFormEyebrow" value="${escapeHtml(org ? org.eyebrow : "")}" placeholder="e.g. Team store">
         </label>
@@ -8908,7 +8947,7 @@ function renderOrgForm(app, org){
   }
   { const pick = document.getElementById("orgFormAccentPick"), txt = document.getElementById("orgFormAccent");
     if (pick && txt) { pick.oninput = () => { txt.value = pick.value; }; txt.addEventListener("input", () => { if (/^#[0-9a-f]{6}$/i.test(txt.value.trim())) pick.value = txt.value.trim(); }); } }
-  if (isEdit) loadOrgDomainBox_(org.orgId, "getOrgDomainStatus");
+  if (isEdit && !adminDesktop_()) loadOrgDomainBox_(org.orgId, "getOrgDomainStatus");
   if (isEdit) loadOrgTierBox_(org.orgId);
 }
 
@@ -9259,7 +9298,7 @@ function renderProductListTable(orgId, products){
       <button class="admin-btn" id="prodCopyBtn" title="Copy products — with their prices, sizes, colors and blank links — from another shop">Copy from another shop&hellip;</button>
       ${adminCan_("manager") ? `<button class="admin-btn" id="prodListPriceBtn" title="What each item costs and leaves, and which are below your targets">Price analysis</button>` : ""}
       <input type="file" id="prodImportCsvFile" accept=".csv,text/csv" style="display:none;">
-      ${adminCan_("manager") ? `<button class="admin-btn admin-btn-secondary" data-org="${escapeHtml(orgId)}" onclick="previewShop_(this.dataset.org)" title="Open the shop page as it will look after Publish">Preview</button>` : ""}
+      ${adminCan_("manager") && !adminDesktop_() ? `<button class="admin-btn admin-btn-secondary" data-org="${escapeHtml(orgId)}" onclick="previewShop_(this.dataset.org)" title="Open the shop page as it will look after Publish">Preview</button>` : ""}
     </div>
     <div data-publish-state="${escapeHtml(orgId)}" class="admin-note"></div>
     <div id="publishStatus" class="admin-note"></div>

@@ -11,3 +11,9 @@ This repository includes third-party software:
   Licensed under the MIT license: http://www.opensource.org/licenses/mit-license.php
   Source: https://github.com/kazuhikoarase/qrcode-generator
   The word "QR Code" is a registered trademark of DENSO WAVE INCORPORATED.
+
+- Fraunces (public/vendor/fonts/fraunces-*) — Copyright 2018 The Fraunces Project Authors.
+  IBM Plex Sans and IBM Plex Mono (public/vendor/fonts/ibm-plex-*) — Copyright 2017 IBM Corp.,
+  with Reserved Font Name "Plex".
+  Licensed under the SIL Open Font License, Version 1.1: https://openfontlicense.org
+  The licence texts are in public/vendor/fonts/OFL-*.txt.

@@ -11,7 +11,7 @@
  *   - Prices are recalculated server-side from D1 (priceItem()), never trusted from client
  */
 
-import { classifyHost, rootDomain, adminSubdomains } from "../_lib/hostConfig.js";
+import { classifyHost, rootDomain, adminSubdomains, isDesktopEdition, DESKTOP_LOCKED_FEATURES } from "../_lib/hostConfig.js";
 import { getCatalogData, invalidateCatalogVersionCache } from "../_lib/catalogCache.js";
 import { validateOrgFields, validateProductImages, cleanImageUrl, PRODUCT_ID_RE } from "../_lib/catalogValidation.js";
 import { requireAdmin, adminActor, adminUser } from "../_lib/adminAuth.js";
@@ -321,6 +321,18 @@ const FEATURE_ACTIONS = {
 };
 const ACTION_FEATURE = {};
 for (const [feature, actions] of Object.entries(FEATURE_ACTIONS)) for (const a of actions) ACTION_FEATURE[a] = feature;
+// The desktop edition (hostConfig.js isDesktopEdition): actions that only work by reaching a service
+// on the internet — sending email, Stripe, attaching a shop's web address, a supplier's live
+// connection (PromoStandards) and fetching a picture from a web address. The desktop program
+// leaves them out of its pages; these are refused (403) in case anything still asks. Importing a
+// supplier's files (CSV, PDF invoices, product files) stays: that is reading a file on this computer.
+const DESKTOP_REFUSED_ACTIONS = new Set([
+  "sendTestEmail", "resendEmail", "sendInvoice", "createShippingPaymentLink", "backfillStripeFees",
+  "setupOrgDomain", "getOrgDomainStatus", "getPreviewLink", "copyVendorImage",
+  "vendorDirectorySearch", "vendorDirectoryEndpoints", "saveVendorConnection", "testVendorConnection", "linkVendorConnectionBlanks", "fetchVendorProducts",
+  "previewSupplierOrder", "placeSupplierOrder", "checkSupplierOrderShipments",
+]);
+const DESKTOP_REFUSED_MSG = "This needs the internet, so it isn't part of the desktop version.";
 const featureLabel_ = (key) => (FEATURES.find(f => f.key === key) || { label: key }).label;
 const NO_SHIPPING_FEATURE_MSG = "Carrier shipping is turned off (Global settings → Features → Shipping). Use Local pickup or a custom delivery option with a flat fee instead.";
 
@@ -516,6 +528,11 @@ export async function onRequestPost(context) {
     const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
     if (denied) return denied;
     return featureOffResponse(ACTION_FEATURE[body.action], featureLabel_(ACTION_FEATURE[body.action]));
+  }
+  if (DESKTOP_REFUSED_ACTIONS.has(body.action) && isDesktopEdition(env)) {
+    const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
+    if (denied) return denied;
+    return jsonResponse({ status: "error", code: "desktop", message: DESKTOP_REFUSED_MSG }, 403);
   }
 
   // ---- listOrgs — admin org picker -------------------------------------------
@@ -3048,8 +3065,11 @@ export async function onRequestPost(context) {
       return jsonResponse({ status: "ok", locale, effectiveTimeZone: await resolveTimeZone(env), envTimeZone: env.TIMEZONE ? String(env.TIMEZONE) : "" });
     }
     // ---- Features: which optional parts of the site are on (db.js FEATURES) ----
+    // The desktop edition (hostConfig.js) has no internet-facing parts: those switches are shown as
+    // locked off, and turning one on is refused below.
+    const lockedFeatures_ = isDesktopEdition(env) ? DESKTOP_LOCKED_FEATURES : [];
     if (body.action === "getFeatures") {
-      return jsonResponse({ status: "ok", features: await getFeatures(env.DB), list: FEATURES });
+      return jsonResponse({ status: "ok", features: await getFeatures(env.DB), list: FEATURES, locked: lockedFeatures_ });
     }
     if (body.action === "updateFeatures") {
       const before = await getFeatures(env.DB);
@@ -3057,6 +3077,7 @@ export async function onRequestPost(context) {
       for (const k of Object.keys(want)) {
         if (!FEATURES.some(f => f.key === k)) return jsonResponse({ status: "error", message: `"${String(k).slice(0, 40)}" isn't a feature.` }, 400);
         if (typeof want[k] !== "boolean") return jsonResponse({ status: "error", message: "Each feature is either on (true) or off (false)." }, 400);
+        if (want[k] && lockedFeatures_.includes(k)) return jsonResponse({ status: "error", message: `${featureLabel_(k)} isn't part of the desktop version.` }, 400);
       }
       const changes = {};
       for (const f of FEATURES) if (typeof want[f.key] === "boolean" && want[f.key] !== before[f.key]) changes[f.key] = { from: before[f.key], to: want[f.key] };
@@ -3068,7 +3089,7 @@ export async function onRequestPost(context) {
       const features = await setFeatures(env.DB, want);
       // Everything reads the switches from the cached catalog — refresh it.
       try { await bumpCatalogVersion(env.DB); invalidateCatalogVersionCache(); } catch (e) { console.error("catalog version bump failed:", e); }
-      return jsonResponse({ status: "ok", features, list: FEATURES });
+      return jsonResponse({ status: "ok", features, list: FEATURES, locked: lockedFeatures_ });
     }
     if (body.action === "getShipFromAddress") {
       const shipFrom = await getShipFromAddress(env.DB, env);

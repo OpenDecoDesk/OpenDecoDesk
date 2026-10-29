@@ -35,6 +35,8 @@ import * as upload from "../functions/api/upload.js";
 import * as verify from "../functions/api/verify.js";
 import { recordSystemIssue, resolveTimeZone } from "../functions/_lib/db.js";
 import { isDigestHour } from "../functions/_lib/schedule.js";
+import { isDesktopEdition } from "../functions/_lib/hostConfig.js";
+import { ensureDesktopReady } from "../functions/_lib/desktop.js";
 import { fillMissingCardFees } from "../functions/_lib/stripeFees.js";
 
 // The send-agent relay's mailbox is a Durable Object (one globally consistent instance); the class must be
@@ -73,8 +75,20 @@ function handlerFor(mod, method) {
   return mod["onRequest" + m] || mod.onRequest || null;
 }
 
+// The desktop edition's start-up step (functions/_lib/desktop.js), once per process: every request
+// waits for the same promise, and a failure is retried by the next request.
+let desktopReady_ = null;
+function desktopReady(env) {
+  if (!desktopReady_) desktopReady_ = ensureDesktopReady(env).catch((e) => { desktopReady_ = null; throw e; });
+  return desktopReady_;
+}
+
 export async function handleRequest(request, env, ctx) {
   const url = new URL(request.url);
+  if (isDesktopEdition(env) && env.DB) {
+    try { await desktopReady(env); }
+    catch (e) { console.error("Desktop start-up step failed:", e); return text("The database isn't ready. Close the program and open it again.", 503); }
+  }
   const match = /^\/api\/([a-z0-9-]+)\/?$/.exec(url.pathname);
   const mod = match && Object.prototype.hasOwnProperty.call(ROUTES, match[1]) ? ROUTES[match[1]] : null;
   if (!mod) {
@@ -99,6 +113,8 @@ export async function handleRequest(request, env, ctx) {
 // configured local hour runs it, so it goes out once a day at the same local time all year. The
 // time zone is the install's one zone: Global settings → Region, else TIMEZONE, else UTC.
 export async function handleScheduled(event, env) {
+  // The desktop program has no cron, and nothing here applies offline (Stripe, customer uploads, email).
+  if (isDesktopEdition(env)) return { ran: false, reason: "desktop edition" };
   const when = new Date(event && event.scheduledTime ? event.scheduledTime : Date.now());
   if (!isDigestHour(env, when, await resolveTimeZone(env))) return { ran: false, reason: "not the digest hour" };
   // Safety net: fill in Stripe fees the webhook couldn't read yet (see functions/_lib/stripeFees.js).

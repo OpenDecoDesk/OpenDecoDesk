@@ -20,6 +20,17 @@ export const DEFAULT_ROOT_DOMAIN = "example.com";
 // One list, for New shop (catalogValidation.js) and for attaching a shop's hostname (customDomain.js).
 export const RESERVED_SUBDOMAINS = ["www", "api", "images", "mail", "admin", "all"];
 
+// ---- The desktop edition (desktop/) ---------------------------------------------------------------
+// The same code run on one computer by the desktop program: the Worker inside Miniflare, the
+// database and files on that computer, the window on http://localhost:<port>. EDITION=desktop
+// (set only by desktop/server.js) makes localhost the admin panel, and keeps the parts that need the
+// internet switched off for good — the storefront, carrier shipping and emailed design approval
+// (FEATURES in db.js). A cloud install never sets EDITION and behaves exactly as before.
+export const DESKTOP_LOCKED_FEATURES = ["storefront", "shipping", "designVerification"];
+export function isDesktopEdition(env){
+  return String((env && env.EDITION) || "").trim().toLowerCase() === "desktop";
+}
+
 export function rootDomain(env){
   return String((env && env.ROOT_DOMAIN) || DEFAULT_ROOT_DOMAIN).trim().toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
 }
@@ -32,13 +43,20 @@ export function adminSubdomains(env){
 /**
  * Given a request's hostname, the current subdomain -> orgId map and the environment, returns:
  *   { kind: "locked", orgId }   — a recognized shop subdomain
- *   { kind: "admin" }           — the admin subdomain
+ *   { kind: "admin" }           — the admin subdomain ({ kind: "admin", desktop: true } in the
+ *                                 desktop edition, where it is localhost)
  *   { kind: "root" }            — the root domain itself (or www.)
  *   { kind: "unknown" }         — anything else (typo, probe, wildcard catch-all) — refused, never
  *                                 quietly treated as the root.
  */
 export function classifyHost(hostname, subdomainMap, env){
   const host = String(hostname || "").toLowerCase().replace(/\.$/, "");
+  // Desktop: the program's own window is the admin, and nothing else is anything. Refusing every
+  // other name matters here: a web page the person visits could point a hostname of its own at
+  // 127.0.0.1 (DNS rebinding) — its requests then arrive with that name and are refused.
+  if(isDesktopEdition(env)){
+    return host === "localhost" || host === "127.0.0.1" ? { kind: "admin", desktop: true } : { kind: "unknown" };
+  }
   const apex = rootDomain(env);
   if(host === apex || host === "www." + apex){
     return { kind: "root" };
