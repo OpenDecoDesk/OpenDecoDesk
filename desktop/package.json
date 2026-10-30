@@ -37,6 +37,7 @@
       "files.js",
       "r2-files-binding.mjs",
       "log.js",
+      "icons/icon.png",
       "package.json",
       "!node_modules/workerd/bin/**",
       "!node_modules/sharp/**",
@@ -77,7 +78,8 @@
       }
     ],
     "win": {
-      "target": "portable"
+      "target": "portable",
+      "icon": "icons/icon.ico"
     },
     "portable": {
       "artifactName": "OpenDecoDesk-${version}-windows-portable.exe"
@@ -85,6 +87,7 @@
     "mac": {
       "target": "zip",
       "category": "public.app-category.business",
+      "icon": "icons/icon.icns",
       "identity": null,
       "artifactName": "OpenDecoDesk-${version}-mac-${arch}.zip"
     }

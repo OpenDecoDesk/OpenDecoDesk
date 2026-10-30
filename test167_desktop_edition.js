@@ -212,6 +212,17 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
     /Miniflare[\s\S]*workerd/.test(read("NOTICE")));
   ok("pictures are stored under an address that can never be a real site", /^https:\/\/[a-z.]+\.invalid$/.test(server.IMAGES_BASE));
 
+  // The icon: the logo (public/images/icon.svg, the website's), made into each system's format by
+  // desktop/icons/make-icons.js.
+  const pkg = JSON.parse(read("desktop/package.json")).build;
+  const icnsFile = fs.readFileSync(path.join(__dirname, "desktop/icons/icon.icns")), icoFile = fs.readFileSync(path.join(__dirname, "desktop/icons/icon.ico"));
+  const icoSizes = Array.from({ length: icoFile.readUInt16LE(4) }, (_, i) => icoFile[6 + 16 * i] || 256);
+  ok("the Mac and Windows builds have the logo as their icon", pkg.mac.icon === "icons/icon.icns" && pkg.win.icon === "icons/icon.ico" &&
+    icnsFile.toString("ascii", 0, 4) === "icns" && icnsFile.readUInt32BE(4) === icnsFile.length && icnsFile.includes("ic10") &&
+    icoFile.readUInt16LE(2) === 1 && [16, 32, 48, 256].every(n => icoSizes.includes(n)));
+  ok("…and the window and a Mac's dock (run from the source) show it too", pkg.files.includes("icons/icon.png") && /icon: path\.join\(__dirname, "icons", "icon\.png"\)/.test(mainSrc) &&
+    /app\.dock\.setIcon\(path\.join\(__dirname, "icons", "dock\.png"\)\)/.test(mainSrc) && fs.existsSync(path.join(__dirname, "desktop/icons/dock.png")));
+
   console.log("\n=== H. Shipping: by hand, and with a Shippo key ===");
   {
     const keyed = { ...env, SHIPPO_API_KEY: "shippo_test_key" };
@@ -300,6 +311,10 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
   await tick(200);
   ok("the page learns it is in the desktop program from /api/catalog", w.eval("siteEdition") === "desktop" && w.eval("featureOn_('storefront')") === false);
+  ok("the admin's tab and home-screen icon are the logo", doc.querySelector('link[rel="icon"]')?.getAttribute("href") === "/images/icon.svg" &&
+    doc.querySelector('link[rel="apple-touch-icon"]')?.getAttribute("href") === "/images/icon-180.png" && fs.existsSync(path.join(__dirname, "public/images/icon-180.png")));
+  ok("…and only the admin's: a shop's pages carry no OpenDecoDesk logo", !/rel="icon"/.test(read("public/index.html").split("<style>")[0]) &&
+    (read("public/index.html").match(/applyAdminIcon_\(\)/g) || []).length === 2 && /status === "admin"\)\{ applyEdition_\([^)]*\); applyAdminIcon_\(\);/.test(read("public/index.html")));
   await w.loadAdminScript();
   await tick(200);
   ok("signing in first asks the program for its first-run passphrase", askedForKey >= 1);

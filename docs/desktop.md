@@ -216,6 +216,11 @@ npx electron-builder --mac zip --arm64 --x64  # dist/OpenDecoDesk-<version>-mac-
 
 (`desktop/package.json` has the same two as its `dist:win` and `dist:mac` scripts.)
 
+The program's icon is the OpenDecoDesk logo, `public/images/icon.svg`, which is also the admin's
+browser-tab icon and the website's. `desktop/icons/` has it in each system's format (`icon.icns`
+for the Mac, `icon.ico` for Windows, `icon.png` for the window). After changing the logo, run
+`npx electron icons/make-icons.js` in `desktop/` and commit what it writes.
+
 A build carries `src/`, `functions/`, `public/`, `migrations/`, `schema.sql`, `LICENSE` and
 `NOTICE` next to the program, and runs them as they are. It has no build step of its own. On
 Linux the packaged program is about 440 MB unpacked, nearly all of it Electron (about 280 MB) and

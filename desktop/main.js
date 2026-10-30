@@ -57,6 +57,8 @@ const isOurs = (u) => { try { const x = new URL(u); return x.hostname === "local
 function createWindow() {
   win = new BrowserWindow({
     width: 1280, height: 860, title: "OpenDecoDesk",
+    // Windows and Linux show this in the title bar and taskbar; a Mac uses the app's icon.icns.
+    ...(process.platform === "darwin" ? {} : { icon: path.join(__dirname, "icons", "icon.png") }),
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   // Links to anywhere else open in the person's browser, not in this window.
@@ -234,6 +236,8 @@ ipcMain.handle("odd:first-run-key", async (e) => {
 });
 
 app.whenReady().then(async () => {
+  // Run from the source (npm start) on a Mac, the dock would show Electron's own icon.
+  if (process.platform === "darwin" && !app.isPackaged) app.dock.setIcon(path.join(__dirname, "icons", "dock.png"));
   try { await start(); }
   catch (e) {
     let started = false;

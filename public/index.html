@@ -965,6 +965,16 @@ function featureOn_(key){ return siteFeatures[key] !== false; }
 // admin then leaves out what needs the internet. Only the admin answer carries it.
 let siteEdition = "", siteDesktopSuppliers = false;
 function applyEdition_(e, suppliers){ siteEdition = e === "desktop" ? "desktop" : ""; siteDesktopSuppliers = siteEdition === "desktop" && suppliers === true; }
+// The admin's tab and home-screen icon: OpenDecoDesk's logo (the website's, and the desktop
+// program's). Only the admin: a shop and its customers' pages are the business's, not ours.
+function applyAdminIcon_(){
+  if(document.querySelector('link[rel="icon"]')) return;
+  for(const [rel, href, type] of [["icon", "/images/icon.svg", "image/svg+xml"], ["apple-touch-icon", "/images/icon-180.png", ""]]){
+    const l = document.createElement("link");
+    l.rel = rel; l.href = href; if(type) l.type = type;
+    document.head.appendChild(l);
+  }
+}
 function applyBusiness_(b){
   if(b && typeof b === "object") business = Object.assign({}, business, b);
   VENMO_USERNAME = business.venmo || "";
@@ -1195,7 +1205,7 @@ async function resolveCurrentOrg(){
     applyBusiness_(data.business);
     applyCountry_(data.country);
     applyFeatures_(data.features);
-    if(data.status === "admin"){ applyEdition_(data.edition, data.desktopSuppliers); return {admin:true}; }
+    if(data.status === "admin"){ applyEdition_(data.edition, data.desktopSuppliers); applyAdminIcon_(); return {admin:true}; }
     // Global settings → Features → Storefront is off: no shop is served here (see catalog.js).
     if(data.status === "closed") return {closed:true};
     if(data.status !== "ok") return null;
