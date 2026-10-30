@@ -17,3 +17,17 @@ This repository includes third-party software:
   with Reserved Font Name "Plex".
   Licensed under the SIL Open Font License, Version 1.1: https://openfontlicense.org
   The licence texts are in public/vendor/fonts/OFL-*.txt.
+
+The desktop program (desktop/, docs/desktop.md) also bundles, in its downloads:
+
+- Electron — Copyright (c) Electron contributors and GitHub Inc. MIT license. Its LICENSE and the
+  licences of Chromium and its other components (LICENSES.chromium.html) are next to the program.
+  Source: https://github.com/electron/electron
+- Miniflare — Copyright (c) 2020 Cloudflare, Inc. MIT license; the text is in
+  desktop/licenses/miniflare-LICENSE.txt (resources/licenses/ in the program).
+  Source: https://github.com/cloudflare/workers-sdk
+- workerd, Cloudflare's Workers runtime — Copyright Cloudflare, Inc. Apache License, Version 2.0;
+  the text is in desktop/licenses/workerd-LICENSE.txt (resources/licenses/ in the program).
+  Source: https://github.com/cloudflare/workerd
+- Miniflare's own dependencies (undici, ws, youch and others), each with its licence file in its
+  folder under the program's node_modules (MIT, ISC, Apache-2.0 or CC0-1.0).

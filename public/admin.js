@@ -974,6 +974,7 @@ async function loadAdminOrgList(){
     await refreshAdminMe_();
     renderAdminNav();
     if (adminFeatureOn_("shipping")) fetchBoxPresets(); // warm cache in background; sync loadBoxPresets() reads from it
+    adminDesktopBackupNudge_();
     // Only an admin can change what the setup list complains about, so only an admin is sent to it.
     if (_adminJustSignedIn) {
       _adminJustSignedIn = false;
@@ -1239,6 +1240,40 @@ function wireDesktopSuppliersSection_(){
       if(r && r.ok === false && errEl) errEl.textContent = r.message || "Could not save.";
     }catch(e){ if(errEl) errEl.textContent = "Could not save."; }
   };
+}
+
+// The desktop version's backup reminder: there is no copy in the cloud, so a slim note under the menu
+// once the last backup is a week old — or a day after the program was first used, with none yet. It
+// says when, and Back up now opens File → Back up…. "Later" hides it until the program is next opened.
+const DESKTOP_BACKUP_DAYS = 7;
+function desktopBackupNote_(status, now){
+  if (!status) return "";
+  const day = 864e5, t = (iso) => { const v = Date.parse(iso || ""); return Number.isFinite(v) ? v : null; };
+  const last = t(status.lastBackupAt), created = t(status.createdAt);
+  if (last !== null) {
+    const days = Math.floor((now - last) / day);
+    return days >= DESKTOP_BACKUP_DAYS ? `Your last backup was ${days} days ago.` : "";
+  }
+  return created !== null && now - created >= day ? "Nothing has been backed up yet." : "";
+}
+async function adminDesktopBackupNudge_(){
+  if (!adminDesktop_() || !window.oddDesktop || typeof window.oddDesktop.backupStatus !== "function") return;
+  try { if (sessionStorage.getItem("oddBackupLater")) return; } catch (e) {}
+  let note = "";
+  try { note = desktopBackupNote_(await window.oddDesktop.backupStatus(), Date.now()); } catch (e) { return; }
+  const old = document.getElementById("desktopBackupNote");
+  if (old) old.remove();
+  if (!note) return;
+  const nav = document.getElementById("adminNav"), bar = document.createElement("div");
+  bar.id = "desktopBackupNote";
+  bar.setAttribute("role", "status");
+  bar.style.cssText = "display:flex;gap:10px;align-items:center;flex-wrap:wrap;max-width:1180px;margin:8px auto;padding:8px 12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;font-size:13px;color:#78350f;";
+  bar.innerHTML = `<span>${escapeHtml(note)} Everything is only on this computer — keep a copy somewhere else (a USB drive or a synced folder).</span>
+    <button type="button" class="admin-btn" id="desktopBackupNow" style="padding:3px 10px;font-size:12px;">Back up now&hellip;</button>
+    <button type="button" class="admin-btn admin-btn-secondary" id="desktopBackupLater" style="padding:3px 10px;font-size:12px;">Later</button>`;
+  if (nav && nav.parentNode) nav.parentNode.insertBefore(bar, nav.nextSibling); else document.body.prepend(bar);
+  bar.querySelector("#desktopBackupNow").onclick = () => { window.oddDesktop.backUp(); };
+  bar.querySelector("#desktopBackupLater").onclick = () => { try { sessionStorage.setItem("oddBackupLater", "1"); } catch (e) {} bar.remove(); };
 }
 
 function renderDesktopOff_(app, hash){
@@ -6702,7 +6737,7 @@ function wizStepList_(state){
   out.push({ id: "blanks", label: "Choose blanks", group: "Products" });
   (state.products || []).forEach((p, i) => WIZ_PRODUCT_STEPS_.forEach(([k, label]) =>
     out.push({ id: `p${i}:${k}`, label, group: "Products", productIndex: i, productStep: k })));
-  out.push({ id: "check", label: "Check everything", group: "Finish" }, { id: "live", label: "Go live", group: "Finish" });
+  out.push({ id: "check", label: "Check everything", group: "Finish" }, { id: "live", label: adminDesktop_() ? "Ready for orders" : "Go live", group: "Finish" });
   return out;
 }
 // done | warn | todo for one step, from what's been saved.
@@ -7657,8 +7692,35 @@ function wizCheckScreen_(){
     save: async () => "" };
 }
 
+function wizDesktopFinish_(o, st){
+  const links = `<div class="wiz-actions"><a class="admin-btn" href="#orders/${encodeURIComponent(o.orgId)}">Its orders</a>
+        <a class="admin-btn admin-btn-secondary" href="#catalog/orgs/${encodeURIComponent(o.orgId)}/products">Its products</a>
+        <a class="admin-btn admin-btn-secondary" href="#wizard/${encodeURIComponent(o.orgId)}/products">Add more products</a></div>`;
+  if (st.live && o.ready) return { title: "Ready for orders", noNext: true,
+    html: `<div class="wiz-ok">${escapeHtml(o.name)}'s products are ready to use in Local sale and on orders.</div>${links}`, save: async () => "" };
+  return {
+    title: "Finish setting up this shop?",
+    html: `<ul class="wiz-summary"><li><strong>${escapeHtml(o.name || "")}</strong></li>
+        <li>${st.products.filter(x => x.saved).length} product${st.products.filter(x => x.saved).length === 1 ? "" : "s"} made in this setup</li></ul>
+      ${st.checkOk ? "" : `<div class="wiz-warn">“Check everything” found something to fix — you can still finish, and fix it later on the product.</div>`}
+      <div class="wiz-note">Finishing makes every product made here available for orders.</div>`,
+    nextLabel: "Finish",
+    save: async () => {
+      for (const x of st.products.filter(x => x.saved && x.productId)) await hoopApi_({ action: "setProductVisible", org: o.orgId, productId: x.productId, visible: true }).catch(() => {});
+      await hoopApi_({ action: "setOrgReady", orgId: o.orgId, ready: true });
+      _wiz.org = Object.assign({}, o, { ready: true });
+      { const reg = (window._adminOrgRegistry || []).find(x => x.orgId === o.orgId); if (reg) reg.ready = true; }
+      st.live = true; st.done = true;
+      return "";
+    },
+    nextStep: "live" };
+}
+
 function wizLiveScreen_(){
   const o = _wiz.org || {}, st = _wiz.state;
+  // The desktop version has no shop page for anyone to see: the last step only makes the products made
+  // here available for orders (the same saves: visible, open, published — which changes nothing a customer sees).
+  if (adminDesktop_()) return wizDesktopFinish_(o, st);
   const root = location.hostname.split(".").slice(1).join(".");
   const url = o.subdomain && root && !adminDesktop_() ? `https://${o.subdomain}.${root}/` : "";
   if (st.live && o.ready) return {
@@ -7819,7 +7881,9 @@ async function renderGlobalSettings(app){
         ${shippoKeySet === null ? "" : desktopShippoSectionHtml_(shippoKeySet, features.shipping !== false)}
         ${shippoKeySet === null ? "" : desktopSuppliersSectionHtml_(adminDesktopSuppliers_())}
         <h2 style="margin-bottom:12px;">Business profile</h2>
-        <div class="admin-note" style="margin-bottom:14px;">Who runs this site. The name appears on the storefront, in every email, on labels and in the browser tab; the rest tells customers how to reach you and how to pay. Leave anything you don't use blank.</div>
+        <div class="admin-note" style="margin-bottom:14px;">${adminDesktop_()
+          ? "Your business. The name appears on packing slips, labels, invoices and reports, and in the window title; the rest is printed where customers need it (how to pay, where to mail a check). Leave anything you don't use blank."
+          : "Who runs this site. The name appears on the storefront, in every email, on labels and in the browser tab; the rest tells customers how to reach you and how to pay. Leave anything you don't use blank."}</div>
         ${bizField("gBizName", "name", "Business name", "", 'maxlength="120" placeholder="e.g. Northside Stitch Co."')}
         <div${adminDesktop_() ? ' style="display:none;"' : ""}>
         ${bizField("gBizTagline", "tagline", "One-line description", "Shown on the page people see when they reach the site without a shop link.", 'maxlength="200"')}
@@ -7837,7 +7901,9 @@ async function renderGlobalSettings(app){
         ${bizField("gBizPoPrefix", "poPrefix", "Purchase order prefix", "Starts the number of each order placed with a supplier from Blanks to Order (PO-20261021-1). Letters and numbers; blank = PO.", 'maxlength="10" placeholder="PO"')}
 
         <h2 style="margin:22px 0 12px;">Region</h2>
-        <div class="admin-note" style="margin-bottom:14px;">Where the business is. The time zone decides the hour the daily roll-up arrives and the dates and times printed in emails; the country decides how addresses are checked.</div>
+        <div class="admin-note" style="margin-bottom:14px;">Where the business is. ${adminDesktop_()
+          ? "The time zone decides the dates and times on orders and reports"
+          : "The time zone decides the hour the daily roll-up arrives and the dates and times printed in emails"}; the country decides how addresses are checked.</div>
         <label>Time zone
           <input type="text" id="gLocaleTimeZone" maxlength="64" value="${escapeHtml(locale.timeZone || "")}" placeholder="${escapeHtml(locale.timeZone ? "" : effectiveTz)}" list="gLocaleTimeZoneList" autocomplete="off" spellcheck="false" style="max-width:320px;">
           <datalist id="gLocaleTimeZoneList">${["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Toronto", "Europe/London", "Europe/Berlin", "Asia/Tokyo", "Australia/Sydney"].map(z => `<option value="${z}">`).join("")}</datalist>
@@ -9346,7 +9412,8 @@ async function submitOrgForm(isEdit){
           showToast(`Shop created, but copying the products failed${e && e.message ? " (" + e.message + ")" : ""} — use Products → Copy from another shop.\n\n${domainMsg}`, true);
         }
       } else {
-        showToast(`Shop created — Shop setup shows what's left, starting with its products.\n\n${domainMsg}\n\nUntil the shop is published once, changes show to shoppers straight away (it says "Coming soon" until it's opened for orders).`, domainFailed);
+        showToast(adminDesktop_() ? "Shop created — Shop setup shows what's left, starting with its products."
+          : `Shop created — Shop setup shows what's left, starting with its products.\n\n${domainMsg}\n\nUntil the shop is published once, changes show to shoppers straight away (it says "Coming soon" until it's opened for orders).`, domainFailed);
       }
       location.hash = goProducts;
       return;
@@ -9502,7 +9569,7 @@ function renderProductListTable(orgId, products){
     <div id="publishStatus" class="admin-note"></div>
     <h2>Products</h2>
     ${products.length === 0 ? '<div class="admin-empty">No products yet.</div>' : `
-      <div class="admin-note" style="margin-bottom:4px;">Listed the way the shop's page shows them: a section per category, then the products in this order. Use &uarr; &darr; to rearrange a section; the sections' own order and headings are in Product categories ${manageCategoriesBtn_(`data-org="${escapeHtml(orgId)}" data-after="productListCategoriesChanged_"`)} Hidden products aren't shown to customers, and are listed last in their section.</div>
+      <div class="admin-note" style="margin-bottom:4px;">${adminDesktop_() ? "Listed" : "Listed the way the shop's page shows them:"} a section per category, then the products in this order. Use &uarr; &darr; to rearrange a section; the sections' own order and headings are in Product categories ${manageCategoriesBtn_(`data-org="${escapeHtml(orgId)}" data-after="productListCategoriesChanged_"`)} ${adminDesktop_() ? "Hidden products are listed last in their section." : "Hidden products aren't shown to customers, and are listed last in their section."}</div>
       ${sections}
     `}
   `;

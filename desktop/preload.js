@@ -16,4 +16,7 @@ contextBridge.exposeInMainWorld("oddDesktop", {
   // restarts the program's server and reloads the page).
   suppliersOn: () => ipcRenderer.invoke("odd:suppliers-on"),
   setSuppliersOn: (on) => ipcRenderer.invoke("odd:set-suppliers-on", !!on),
+  // The backup reminder: { createdAt, lastBackupAt } (ISO times or null), and File → Back up….
+  backupStatus: () => ipcRenderer.invoke("odd:backup-status"),
+  backUp: () => ipcRenderer.invoke("odd:back-up"),
 });

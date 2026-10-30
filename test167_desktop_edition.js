@@ -192,6 +192,24 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   try { server.restoreState(tmp, tmp); } catch (e) { thrown = e; }
   ok("restoring refuses a folder that isn't a backup", thrown && /isn't an OpenDecoDesk backup/.test(thrown.message));
   fs.rmSync(tmp, { recursive: true, force: true });
+  // The log (desktop/log.js): time-stamped lines, terminal colours stripped, and a size cap.
+  const { createLog } = require("./desktop/log.js");
+  const logDir = fs.mkdtempSync(path.join(os.tmpdir(), "odd-log-"));
+  const lg = createLog(logDir, { maxBytes: 400 });
+  lg.write("\x1b[32mReady\x1b[0m on port 47830\n\nsecond line", "program");
+  const logged = fs.readFileSync(lg.file, "utf8").trim().split("\n");
+  ok("the log writes each line with the time and where it came from, without terminal colours", logged.length === 2 &&
+    /^\d{4}-\d{2}-\d{2}T[\d:.]+Z \[program\] Ready on port 47830$/.test(logged[0]) && / \[program\] second line$/.test(logged[1]));
+  for (let i = 0; i < 10; i++) lg.write("worker output line number " + i, "worker");
+  ok("…and when it passes its size it starts a new file, keeping one older one", fs.existsSync(lg.file + ".1") && fs.statSync(lg.file).size <= 400 &&
+    / \[worker\] worker output line number 9$/.test(fs.readFileSync(lg.file, "utf8").trim()));
+  fs.rmSync(logDir, { recursive: true, force: true });
+  const mainSrc = read("desktop/main.js");
+  ok("the program logs its start, its errors and the Worker's output, and Help opens the log", /createLog\(dataDir\)/.test(mainSrc) && /onOutput: \(t\) => logFile\.write\(t, "worker"\)/.test(mainSrc) &&
+    /uncaughtException/.test(mainSrc) && /label: "Open the log"/.test(mainSrc) && /handleRuntimeStdio/.test(read("desktop/server.js")));
+  ok("the packaged program carries the licence texts it must", JSON.parse(read("desktop/package.json")).build.extraResources.some(r => r.from === "licenses") &&
+    fs.existsSync(path.join(__dirname, "desktop/licenses/workerd-LICENSE.txt")) && fs.existsSync(path.join(__dirname, "desktop/licenses/miniflare-LICENSE.txt")) &&
+    /Miniflare[\s\S]*workerd/.test(read("NOTICE")));
   ok("pictures are stored under an address that can never be a real site", /^https:\/\/[a-z.]+\.invalid$/.test(server.IMAGES_BASE));
 
   console.log("\n=== H. Shipping: by hand, and with a Shippo key ===");
@@ -302,6 +320,28 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   w.eval("siteDesktopSuppliers = true");
   ok("…and come back once they are on (Communications stays hidden)", w.adminDesktopHides_("vendors") === false && w.adminDesktopHides_("comms") === true);
   w.eval("siteDesktopSuppliers = false");
+
+  // The backup reminder.
+  const DAY = 864e5, now = Date.parse("2026-11-20T12:00:00Z");
+  const note = (status) => w.desktopBackupNote_(status, now);
+  ok("no reminder in the first day, nor within a week of a backup", note({ createdAt: new Date(now - 3600e3).toISOString(), lastBackupAt: null }) === "" &&
+    note({ createdAt: "2026-01-01T00:00:00Z", lastBackupAt: new Date(now - 6 * DAY).toISOString() }) === "");
+  ok("a reminder once a day has passed with no backup", note({ createdAt: new Date(now - 2 * DAY).toISOString(), lastBackupAt: null }) === "Nothing has been backed up yet.");
+  ok("…and once the last backup is a week old, saying how old", note({ createdAt: "2026-01-01T00:00:00Z", lastBackupAt: new Date(now - 9 * DAY).toISOString() }) === "Your last backup was 9 days ago.");
+  let backedUp = 0;
+  w.oddDesktop.backupStatus = async () => ({ createdAt: "2026-01-01T00:00:00Z", lastBackupAt: null });
+  w.oddDesktop.backUp = async () => { backedUp++; };
+  w.renderAdminNav();
+  await w.adminDesktopBackupNudge_();
+  const bar = doc.getElementById("desktopBackupNote");
+  ok("the reminder appears under the menu, and Back up now opens the program's backup", bar && /Nothing has been backed up yet/.test(bar.textContent) && (bar.querySelector("#desktopBackupNow").click(), backedUp === 1));
+  bar.querySelector("#desktopBackupLater").click();
+  await w.adminDesktopBackupNudge_();
+  ok("Later hides it until the program is next opened", !doc.getElementById("desktopBackupNote"));
+
+  // Wording that only made sense with a web shop.
+  ok("the desktop wizard ends with Ready for orders, not Go live", w.wizStepList_({ products: [] }).pop().label === "Ready for orders");
+  ok("…and Global settings' notes speak of the business, not a site and its emails", /packing slips, labels, invoices and reports/.test(adminJs) && /dates and times on orders and reports/.test(adminJs));
   const shippo = w.desktopShippoSectionHtml_(false, false);
   ok("Global settings explains carrier shipping by hand and with a Shippo key, and takes the key in a password field", /Ship this order/.test(shippo) && /No Shippo key yet/.test(shippo) && /type="password" id="gShippoKey"/.test(shippo) && !/gShippoRemove/.test(shippo));
   ok("…with a key set it offers to remove it, and never shows the key", /A Shippo key is set — turn on Shipping/.test(w.desktopShippoSectionHtml_(true, false)) && /gShippoRemove/.test(w.desktopShippoSectionHtml_(true, true)));

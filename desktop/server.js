@@ -106,7 +106,10 @@ const stamp = () => new Date().toISOString().replace(/[:.]/g, "-").replace("T", 
 //   dataDir       the data folder (made if missing)
 //   port          the port to try first (0 or missing: any free one); the one used is remembered
 //   protect, unprotect   encrypt / decrypt the secrets at rest (optional, see loadConfig)
-async function startServer({ dataDir, port, protect, unprotect, log = () => {} } = {}) {
+//   log           called with each message of the program's own (start-up, updates, copies)
+//   onOutput      called with what the Worker prints (its console.log / console.error), as text;
+//                 without it, Miniflare prints it to the terminal
+async function startServer({ dataDir, port, protect, unprotect, log = () => {}, onOutput } = {}) {
   const { Miniflare } = require("miniflare");
   const root = appRoot();
   fs.mkdirSync(dataDir, { recursive: true });
@@ -136,6 +139,10 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {} }
   const options = (p) => ({
     host: "127.0.0.1",
     port: p,
+    ...(onOutput ? { handleRuntimeStdio: (stdout, stderr) => {
+      stdout.on("data", (d) => onOutput(String(d)));
+      stderr.on("data", (d) => onOutput(String(d)));
+    } } : {}),
     d1Persist: paths.d1,
     durableObjectsPersist: paths.durableObjects,
     cachePersist: false,
@@ -183,7 +190,7 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {} }
   }
   const db = await mf.getD1Database("DB");
   const result = await migrate(db, src);
-  cfg = { ...cfg, port: used, lastMigration: latest };
+  cfg = { ...cfg, port: used, lastMigration: latest, createdAt: cfg.createdAt || new Date().toISOString() };
   saveConfig(dataDir, cfg, secrets, { protect });
   const url = "http://localhost:" + used + "/";
   return {
@@ -205,6 +212,8 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {} }
     hasShippoKey: () => !!secrets.SHIPPO_API_KEY,
     // Whether supplier connections (PromoStandards) are turned on.
     suppliersOn: () => !!cfg.supplierConnections,
+    // When this data folder was first used and last backed up (File → Back up…), for the reminder.
+    backupStatus: () => ({ createdAt: cfg.createdAt || null, lastBackupAt: cfg.lastBackupAt || null }),
     // The Worker's scheduled handler, which in the desktop version only checks tracking (src/worker.js):
     // run by main.js while the program is open, since there is no cron here.
     async runScheduled() {
@@ -266,6 +275,13 @@ function setSupplierConnections(dataDir, on, { unprotect, protect } = {}) {
   saveConfig(dataDir, next, secrets, { protect });
 }
 
+// File → Back up… finished: remember when, for the reminder in the admin. Only while stopped.
+function recordBackup(dataDir, { protect, unprotect } = {}) {
+  const { cfg, secrets } = loadConfig(dataDir, { unprotect });
+  if (!secrets) return;
+  saveConfig(dataDir, { ...cfg, lastBackupAt: new Date().toISOString() }, secrets, { protect });
+}
+
 // Puts a copy made by copyState back, after moving the current state aside (never deleting it).
 function restoreState(dataDir, from) {
   const { state } = statePaths(dataDir);
@@ -280,7 +296,7 @@ function restoreState(dataDir, from) {
   return { aside };
 }
 
-module.exports = { startServer, adminHasUsablePassword, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, stamp, statePaths, IMAGES_HOST, IMAGES_BASE, desktopCsp };
+module.exports = { startServer, adminHasUsablePassword, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, recordBackup, stamp, statePaths, IMAGES_HOST, IMAGES_BASE, desktopCsp };
 
 if (require.main === module) {
   const dataDir = path.resolve(process.argv[2] || path.join(process.cwd(), "desktop-data"));

@@ -144,6 +144,9 @@ it's turned back on.
 - `state/do/`: the send-agent's mailbox.
 - `desktop.json`: the port, the secrets the program signs links and passwords with, and the last
   database update applied.
+- `logs/opendecodesk.log`: what the program and the Worker printed, each line with its time.
+  **Help → Open the log** opens it. Send it along when reporting a problem. It never holds
+  passwords or keys. At 5 MB it becomes `opendecodesk.log.1` and a new one starts.
 - `backups/` and `electron/` (the window's own storage).
 
 Earlier test versions kept the files in Miniflare's own storage (`state/r2/`). The first start of
@@ -163,6 +166,10 @@ keeps everything.
 There is no cloud copy. **File → Back up…** asks for a folder (a USB drive, a synced folder) and
 copies everything into `OpenDecoDesk backup <date and time>` there: the database, pictures, receipts
 and design files. The program closes the database for the few seconds this takes.
+
+It reminds you: once your last backup is a week old, or a day after you first used the program with
+no backup yet, a note under the menu says so, with **Back up now**. **Later** hides it until the
+program is next opened.
 
 **File → Restore a backup…** puts one back. What was there is moved to `backups/before-restore-…`
 in the data folder, not deleted. You sign in with the password that was in use when the backup was

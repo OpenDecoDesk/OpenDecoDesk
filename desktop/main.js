@@ -10,7 +10,8 @@
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain, safeStorage, session, net } = require("electron");
 const fs = require("fs");
 const path = require("path");
-const { startServer, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
+const { startServer, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, recordBackup, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
+const { createLog } = require("./log.js");
 
 const SOURCE_URL = "https://github.com/opendecodesk/opendecodesk";
 const argData = process.argv.find(a => a.startsWith("--data-dir="));
@@ -19,9 +20,22 @@ app.setPath("userData", path.join(dataDir, "electron"));   // the window's own s
 
 let server = null, win = null, busy = false;
 
+// Everything the program and the Worker print goes to logs/opendecodesk.log too (desktop/log.js;
+// Help → Open the log), and anything that would otherwise vanish — an error nobody caught — is kept.
+const logFile = createLog(dataDir);
+const log = (m) => { console.log(m); logFile.write(m, "program"); };
+// (Catching it would otherwise hide Electron's own error box, so it's still shown.)
+process.on("uncaughtException", (e) => {
+  logFile.write("Uncaught: " + ((e && e.stack) || e), "program");
+  try { dialog.showErrorBox("OpenDecoDesk", String((e && e.message) || e) + "\n\nThe log is in " + logFile.file); } catch (_) {}
+});
+process.on("unhandledRejection", (e) => logFile.write("Unhandled: " + ((e && e.stack) || e), "program"));
 // Two copies of the program on one database would each think they own it: the second one just
-// brings the first one's window forward.
-if (!app.requestSingleInstanceLock()) app.quit();
+// brings the first one's window forward (and writes nothing to the log).
+const primary = app.requestSingleInstanceLock();
+if (primary) log("OpenDecoDesk " + app.getVersion() + " starting (Electron " + process.versions.electron + ", " + process.platform + " " + process.arch + "), data in " + dataDir);
+
+if (!primary) app.quit();
 app.on("second-instance", () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
 
 // The secrets in desktop.json are encrypted with the operating system's keychain when it has one.
@@ -31,7 +45,8 @@ const crypt = () => safeStorage.isEncryptionAvailable() ? {
 } : {};
 
 async function start() {
-  server = await startServer({ dataDir, port: 47830, ...crypt(), log: (m) => console.log(m) });
+  server = await startServer({ dataDir, port: 47830, ...crypt(), log, onOutput: (t) => logFile.write(t, "worker") });
+  log("Server ready on " + server.url + (server.migrations.isNew ? " (new database)" : server.migrations.applied.length ? " (database updated: " + server.migrations.applied.join(", ") + ")" : ""));
   return server;
 }
 async function stop() {
@@ -106,6 +121,7 @@ async function whileStopped(work, hash) {
     finally { await start(); if (win) showPage(server.url + (hash ? "#" + hash : "")); }
     return true;
   } catch (e) {
+    log("Failed: " + ((e && e.stack) || e));
     dialog.showErrorBox("OpenDecoDesk", String((e && e.message) || e));
     return false;
   } finally { busy = false; }
@@ -120,7 +136,7 @@ function startTrackingChecks() {
   const run = async () => {
     if (!server || busy || !(server.hasShippoKey() || server.suppliersOn())) return;
     try { await server.runScheduled(); }
-    catch (e) { console.error("Tracking check failed:", e); }
+    catch (e) { log("Tracking check failed: " + ((e && e.stack) || e)); }
   };
   setTimeout(run, 60 * 1000);
   setInterval(run, TRACKING_EVERY_MS);
@@ -130,7 +146,8 @@ async function backUp() {
   const r = await dialog.showOpenDialog(win, { title: "Back up to which folder?", buttonLabel: "Back up here", properties: ["openDirectory", "createDirectory"] });
   if (r.canceled || !r.filePaths[0]) return;
   const dest = path.join(r.filePaths[0], "OpenDecoDesk backup " + stamp());
-  await whileStopped(async () => { copyState(dataDir, dest); });
+  await whileStopped(async () => { if (copyState(dataDir, dest)) recordBackup(dataDir, crypt()); });
+  log("Backed up to " + dest);
   if (fs.existsSync(dest)) dialog.showMessageBox(win, { message: "Backed up.", detail: "Everything — orders, books, stock, pictures and files — is in\n" + dest + "\n\nKeep a copy somewhere other than this computer." });
 }
 
@@ -176,6 +193,7 @@ function buildMenu() {
     ] },
     { role: "help", submenu: [
       { label: "Locked out? Reset sign-in…", click: resetSignInMenu },
+      { label: "Open the log", click: () => shell.openPath(logFile.file) },
       { type: "separator" },
       { label: "Source code and licence (AGPL-3.0)", click: () => shell.openExternal(SOURCE_URL) },
     ] },
@@ -204,6 +222,11 @@ ipcMain.handle("odd:set-suppliers-on", async (e, on) => {
   return { ok };
 });
 
+// The backup reminder in the admin (admin.js adminDesktopBackupNudge_): when this data folder was first
+// used and last backed up, and a button that opens File → Back up….
+ipcMain.handle("odd:backup-status", async (e) => isOurs(e.senderFrame && e.senderFrame.url) && server ? server.backupStatus() : null);
+ipcMain.handle("odd:back-up", async (e) => { if (isOurs(e.senderFrame && e.senderFrame.url)) await backUp(); });
+
 ipcMain.handle("odd:first-run-key", async (e) => {
   // Only the program's own page may ask.
   if (!isOurs(e.senderFrame && e.senderFrame.url)) return null;
@@ -223,7 +246,8 @@ app.whenReady().then(async () => {
       } else { app.exit(0); return; }
     }
     if (!started) {
-      dialog.showErrorBox("OpenDecoDesk couldn't start", String((e && e.message) || e) + "\n\nData folder: " + dataDir);
+      log("Couldn't start: " + ((e && e.stack) || e));
+      dialog.showErrorBox("OpenDecoDesk couldn't start", String((e && e.message) || e) + "\n\nData folder: " + dataDir + "\nThe log is in " + logFile.file);
       app.exit(1);
       return;
     }
