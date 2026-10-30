@@ -1240,8 +1240,8 @@ function desktopEmailSectionHtml_(cur){
   const lbl = "font-size:12px;font-weight:600;display:block;margin-bottom:8px;max-width:360px;";
   return `<div id="gEmailSection">
         <h2 style="margin:22px 0 12px;">Email</h2>
-        <div class="admin-note" style="margin-bottom:10px;">Send order emails (received, payment confirmed, shipped, cancelled), invoices and your morning roll-up from your own mailbox. They go out from its address, as if you had sent them, and copies land in its Sent folder with Gmail, iCloud and most others. This needs the internet. Microsoft 365 and Outlook.com mailboxes aren't supported yet.</div>
-        <div id="gEmailStatus" style="font-size:14px;margin-bottom:10px;">${cur ? `Email is on: sending from <strong>${escapeHtml(cur.from)}</strong> through ${escapeHtml(cur.host)}. <a href="#comms">Send a test email</a> from Communications.` : "Email is off: nothing is sent."}</div>
+        <div class="admin-note" style="margin-bottom:10px;">Send order emails (received, payment confirmed, shipped, cancelled), invoices, design proofs and your morning roll-up from your own mailbox. They go out from its address, as if you had sent them, and copies land in its Sent folder with Gmail, iCloud and most others. This needs the internet. Microsoft 365 and Outlook.com mailboxes aren't supported yet.</div>
+        <div id="gEmailStatus" style="font-size:14px;margin-bottom:10px;">${cur ? `Email is on: sending from <strong>${escapeHtml(cur.from)}</strong> through ${escapeHtml(cur.host)}. <a href="#comms">Send a test email</a> from Communications. To email design proofs, turn on Design approval under Features.` : "Email is off: nothing is sent."}</div>
         <label style="${lbl}">Your mailbox<br><select id="gEmailPreset">${DESKTOP_MAIL_PRESETS.map(p => `<option value="${p.id}"${p.id === pre.id ? " selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}</select></label>
         <div id="gEmailPresetNote" class="admin-note" style="margin:-2px 0 10px;max-width:520px;">${escapeHtml(pre.note)}</div>
         <label style="${lbl}">Email address<br><input type="email" id="gEmailFrom" maxlength="200" autocomplete="off" spellcheck="false" value="${escapeHtml(v.from || "")}" placeholder="you@example.com"></label>
@@ -2005,10 +2005,14 @@ async function bulkCancelLineItems(orgId){
 // Returns {message, imageUrls} or null on cancel.
 function showDesignVerifModal(){
   return new Promise(function(resolve){
+    // The desktop program: the pictures are attached to the email and the customer replies to it (no
+    // page to open); marking the order Design approved records their approval.
+    const desktop = adminDesktop_();
     const { ov, close } = inventoryModal_("Send design verification", `
+          ${desktop ? `<div class="admin-note" style="margin:0 0 10px;">The pictures are attached to the email, and the customer replies to approve or ask for changes. When they approve, mark the order <strong>Design approved</strong>.</div>` : ""}
           <label style="display:block;margin-bottom:4px;font-size:13px;font-weight:600;color:#1a1a1a;">Message to customer <span style="color:#b03a2e">*</span></label>
           <textarea id="dvMessage" rows="5" placeholder="Please review the design below and let us know if you approve or have any changes." style="width:100%;box-sizing:border-box;padding:8px;border:1px solid #ccc;border-radius:4px;font-size:14px;font-family:inherit;color:#1a1a1a;resize:vertical;"></textarea>
-          <div style="margin-top:14px;font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:6px;">Design images (optional — paste https:// URLs or upload)</div>
+          <div style="margin-top:14px;font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:6px;">${desktop ? "Design images (upload them; at most 15 MB in all)" : "Design images (optional — paste https:// URLs or upload)"}</div>
           ${[1,2,3].map(i => `
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
               <input type="text" id="dvImg${i}" placeholder="https://..." style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;color:#1a1a1a;">
@@ -3475,7 +3479,7 @@ function verifSentCell(verif, rowspan){
   const d = m ? `${+m[2]}/${+m[3]}/${m[1]}` : new Date(verif.sentAt).toLocaleDateString();
   const statusLabel = verif.status === "approved" ? `<br><span style="font-size:11px;color:#15803d">✓ Approved</span>`
     : verif.status === "revision" ? `<br><span style="font-size:11px;color:#b45309">⚠ Changes</span>`
-    : `<br><span style="font-size:11px;color:var(--dim)">Pending</span>`;
+    : `<br><span style="font-size:11px;color:var(--dim)">${adminDesktop_() ? "Awaiting reply" : "Pending"}</span>`;
   return `<td rowspan="${rowspan}">${d}${statusLabel}</td>`;
 }
 
@@ -8017,9 +8021,9 @@ async function renderGlobalSettings(app){
         ${featureList.length ? `<h2 style="margin:22px 0 12px;">Features</h2>
         <div class="admin-note" style="margin-bottom:14px;">Parts of the site you can do without. Turning one off hides its pages here and stops its actions; nothing is deleted, and turning it back on brings everything back as it was. Stock of blanks and transfers, and cost of goods, are always on — making an order uses them.<br>
           <strong>Storefront</strong> is the one switch that hides nothing here: with it off, customers see an “online ordering isn't available” page on every shop address, and you keep entering orders, sending payment links and design proofs, and using Publish, a shop's “ready” box and its custom domain exactly as before (they only matter once it's back on).</div>
-        ${lockedFeatures.length ? `<div class="admin-note" style="margin-bottom:14px;"><strong>Desktop version:</strong> the online storefront and emailed design approval stay off here; Shipping (carrier rates, labels and tracking) can be turned on once a Shippo key is set above.</div>` : ""}
+        ${lockedFeatures.length ? `<div class="admin-note" style="margin-bottom:14px;"><strong>Desktop version:</strong> the online storefront stays off here. Shipping (carrier rates, labels and tracking) can be turned on once a Shippo key is set above, and Design approval (a proof emailed to the customer, who replies to approve it) once email is set up above.</div>` : ""}
         <div id="gFeatures">${featureList.map(f => { const locked = lockedFeatures.includes(f.key);
-          return `<label class="checkbox-row"><input type="checkbox" class="gFeature" data-feature="${escapeHtml(f.key)}" ${features[f.key] !== false ? "checked" : ""}${locked ? " disabled data-locked=\"1\"" : ""}> ${escapeHtml(f.label)}${locked ? ` <span style="font-size:12px;color:#666;">${f.key === "shipping" ? "(needs a Shippo key — see Carrier shipping above)" : "(not in the desktop version)"}</span>` : ""}</label>
+          return `<label class="checkbox-row"><input type="checkbox" class="gFeature" data-feature="${escapeHtml(f.key)}" ${features[f.key] !== false ? "checked" : ""}${locked ? " disabled data-locked=\"1\"" : ""}> ${escapeHtml(f.label)}${locked ? ` <span style="font-size:12px;color:#666;">${f.key === "shipping" ? "(needs a Shippo key — see Carrier shipping above)" : f.key === "designVerification" ? "(needs email — see Email above)" : "(not in the desktop version)"}</span>` : ""}</label>
           <div class="admin-note" style="margin:-4px 0 12px 26px;">${escapeHtml(f.description)}</div>`; }).join("")}</div>` : ""}
 
         <h2 style="margin:22px 0 12px;">Payment methods</h2>

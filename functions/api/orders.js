@@ -85,7 +85,7 @@ import {
   getOrderTotal, getOrderForShipping,
   updateOrderCustomerInfo,
   priceItem, CUSTOM_DESIGN_KINDS, CUSTOM_PLAIN_LOCATION, customFromConfig,
-  createDesignVerification,
+  createDesignVerification, approvePendingDesignVerifications,
   getLatestVerificationsByOrg,
   updateOrderShipping,
   addOrderPayment, getOrderPaymentById, setOrderDiscount,
@@ -2072,6 +2072,7 @@ export async function onRequestPost(context) {
     const now = new Date().toISOString();
     const res = await setFulfillmentStage(env.DB, body.orderId, body.stage, extras);
     if (body.stage === "shipped" && res && res.changed) sendShippedEmailLater_(body.orderId);
+    if (body.stage === "designApproved" && isDesktopEdition(env)) await approvePendingDesignVerifications(env.DB, body.orderId, now);
     audit({ orgId: body.org, orderId: body.orderId, action: "order.fulfillment_stage",
       detail: { stage: body.stage, ...extras } });
     return jsonResponse({ status: "ok", timestamp: now });
@@ -2190,6 +2191,7 @@ export async function onRequestPost(context) {
         const perOrderExtras = itemsByOrder[orderId] ? { ...extras, itemIds: itemsByOrder[orderId] } : extras;
         const res = await setFulfillmentStage(env.DB, orderId, body.stage, perOrderExtras);
         if (body.stage === "shipped" && res && res.changed) sendShippedEmailLater_(orderId);
+        if (body.stage === "designApproved" && isDesktopEdition(env)) await approvePendingDesignVerifications(env.DB, orderId, new Date().toISOString());
         updated++;
       } catch (e) {
         errors.push(orderId + ": " + e.message);
@@ -3104,6 +3106,7 @@ export async function onRequestPost(context) {
         if (typeof want[k] !== "boolean") return jsonResponse({ status: "error", message: "Each feature is either on (true) or off (false)." }, 400);
         if (want[k] && lockedFeatures_.includes(k)) return jsonResponse({ status: "error", message: k === "shipping"
           ? "Carrier shipping needs a Shippo key — add it under Global settings → Carrier shipping (Shippo)."
+          : k === "designVerification" ? "Design approval needs email — set up your mailbox under Global settings → Email."
           : `${featureLabel_(k)} isn't part of the desktop version.` }, 400);
       }
       const changes = {};
@@ -4935,6 +4938,11 @@ export async function onRequestPost(context) {
     const imageUrls = Array.isArray(body.imageUrls)
       ? body.imageUrls.filter(u => typeof u === "string" && /^https?:\/\//i.test(u)).slice(0, 5)
       : [];
+    // The desktop program: the customer can't open its pictures or a page on this computer, so the
+    // pictures uploaded here go in the email as attachments, and the customer replies to it.
+    const desktop = isDesktopEdition(env);
+    const proof = desktop ? await proofAttachments_(env, imageUrls) : { linked: imageUrls, attachments: [] };
+    if (proof.error) return jsonResponse({ status: "error", message: proof.error }, 400);
 
     let sent = 0, skipped = 0;
     const skippedReasons = [];
@@ -4982,14 +4990,39 @@ export async function onRequestPost(context) {
         orderId,
         orgName: order.orgId,
         message,
-        imageUrls,
-        verifyUrl,
+        imageUrls: proof.linked,
+        attachments: proof.attachments,
+        verifyUrl: desktop ? "" : verifyUrl,
       });
 
       if (emailSent) sent++; else { skipped++; skippedReasons.push(orderId + ": email failed"); }
     }
 
     return jsonResponse({ status: "ok", sent, skipped, skippedReasons });
+  }
+
+  // The pictures for an emailed proof, in the desktop program: those stored here (R2_PUBLIC_BASE, the
+  // IMAGES bucket) become attachments; any other https picture stays a link. At most 15 MB in all,
+  // so the email stays inside what mailboxes accept (about 25 MB once encoded).
+  async function proofAttachments_(env, urls) {
+    const base = String(env.R2_PUBLIC_BASE || "").replace(/\/+$/, "") + "/";
+    const attachments = [], linked = [];
+    let total = 0;
+    for (const u of urls) {
+      if (!env.IMAGES || base === "/" || !u.startsWith(base)) { linked.push(u); continue; }
+      const key = decodeURIComponent(u.slice(base.length).split(/[?#]/)[0]);
+      const obj = await env.IMAGES.get(key);
+      if (!obj) return { error: "A picture for the proof isn't stored any more: " + key + ". Upload it again." };
+      const bytes = new Uint8Array(await obj.arrayBuffer());
+      total += bytes.length;
+      if (total > 15 * 1024 * 1024) return { error: "The pictures add up to more than 15 MB, too big for one email. Use smaller or fewer pictures." };
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      const type = (obj.httpMetadata && obj.httpMetadata.contentType) || "image/jpeg";
+      attachments.push({ filename: "proof-" + (attachments.length + 1) + "." + (type.split("/")[1] || "jpg").replace(/[^a-z0-9]/g, ""),
+        contentType: type, contentBase64: btoa(bin), cid: "proof" + (attachments.length + 1) });
+    }
+    return { attachments, linked };
   }
 
   // ---- listDesignVerifications — latest verification per order for an org -----

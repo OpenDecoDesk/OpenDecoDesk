@@ -90,12 +90,13 @@ async function send_(env, msg) {
 // The desktop program's mailbox (desktop/mailer.js, over its MAILER binding): the program sends from
 // the mailbox's own address (EMAIL_FROM) under the business's name. Returns true or false; `report`
 // as for Resend, with the mail server's answer.
-async function sendViaMailer_(env, { to, subject, html, text }, id, report) {
+async function sendViaMailer_(env, { to, subject, html, text, attachments }, id, report) {
   const bcc = id.bcc && id.bcc.toLowerCase() !== String(to).trim().toLowerCase() ? [id.bcc] : [];
   try {
     const res = await env.MAILER.fetch("https://mailer.desktop.invalid/send", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ to, fromName: id.name, replyTo: id.owner, bcc, subject, html: html || undefined, text: text || "(no plain-text body)" }),
+      body: JSON.stringify({ to, fromName: id.name, replyTo: id.owner, bcc, subject, html: html || undefined, text: text || "(no plain-text body)",
+        ...((attachments || []).length ? { attachments } : {}) }),
     });
     const data = await res.json().catch(() => ({}));
     if (report) Object.assign(report, { httpStatus: res.status, providerMessage: String(data.message || "").slice(0, 500) });
@@ -749,11 +750,30 @@ export async function sendCancellationEmail(env, order, cancelledItems, reason, 
 }
 
 // Sent to customer with a link to review and approve/request changes on their design.
-export async function sendDesignVerificationEmail(env, { customerName, customerEmail, orderId, orgName, message, imageUrls, verifyUrl }) {
+// With no verifyUrl (the desktop program: no page to open), the customer replies to the email instead,
+// and `attachments` ({ filename, contentType, contentBase64, cid }) are the proof pictures, shown in
+// the email by their cid.
+export async function sendDesignVerificationEmail(env, { customerName, customerEmail, orderId, orgName, message, imageUrls, verifyUrl, attachments }) {
   const subject = `Design verification — ${orderId}`;
-  const imagesHtml = (imageUrls || []).filter(Boolean).map(
-    u => `<div style="margin:12px 0"><img src="${escHtml(u)}" alt="Design image" style="max-width:100%;border:1px solid #e5e7eb;border-radius:4px"></div>`
-  ).join("");
+  const img = (src) => `<div style="margin:12px 0"><img src="${escHtml(src)}" alt="Design image" style="max-width:100%;border:1px solid #e5e7eb;border-radius:4px"></div>`;
+  const imagesHtml = (attachments || []).map(a => img("cid:" + a.cid)).join("") + (imageUrls || []).filter(Boolean).map(img).join("");
+  if (!verifyUrl) {
+    const reply = "Please reply to this email: say “approved” if it's right, or tell us what you'd like changed.";
+    const html = `<div style="font-family:sans-serif;max-width:600px;margin:auto">
+    <h2 style="color:#1d4ed8">Design Verification — ${escHtml(orderId)}</h2>
+    <p>Hi ${escHtml(customerName)},</p>
+    <p>${escHtml(message).replace(/\n/g, "<br>")}</p>
+    ${imagesHtml}
+    <p style="background:#f0fdf4;border-left:3px solid #15803d;padding:10px 14px">${escHtml(reply)}</p>
+    <p style="font-size:13px;color:#555">We won't start on your order until you've approved the design.</p>
+    <hr/>
+    <p style="font-size:12px;color:#666">%%BUSINESS%% — %%SITE%%</p>
+  </div>`;
+    const text = `Design Verification — ${orderId}\n\nHi ${customerName},\n\n${message}\n\n` +
+      ((attachments || []).length ? `The design is attached (${attachments.map(a => a.filename).join(", ")}).\n\n` : "") +
+      ((imageUrls || []).length ? imageUrls.join("\n") + "\n\n" : "") + `${reply}\n\n%%BUSINESS%%`;
+    return send_(env, { to: customerEmail, subject, html, text, attachments: attachments || [] });
+  }
   const html = `<div style="font-family:sans-serif;max-width:600px;margin:auto">
     <h2 style="color:#1d4ed8">Design Verification — ${escHtml(orderId)}</h2>
     <p>Hi ${escHtml(customerName)},</p>

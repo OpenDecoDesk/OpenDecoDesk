@@ -9054,6 +9054,15 @@ export async function createDesignVerification(db, { token, orgId, orderId, cust
     .run();
 }
 
+// The desktop program has no page for the customer's answer: they reply to the email, and marking the
+// order Design approved records it on the proofs still waiting (orders.js). Returns how many.
+export async function approvePendingDesignVerifications(db, orderId, respondedAt) {
+  const result = await db.prepare(
+    "UPDATE design_verifications SET status='approved', customerNote='Approved by reply (recorded in the admin)', respondedAt=? WHERE orderId=? AND status='pending'"
+  ).bind(respondedAt, orderId).run();
+  return (result.meta && result.meta.changes) || 0;
+}
+
 // ---- Order invoices (migrations/0053) — a link the customer opens to choose delivery and pay ----
 // One row per order; the token is the credential (the emailed link is /?invoice=<token>). Sending
 // again keeps the token, so an earlier email's link keeps working, and renews the 60 days.

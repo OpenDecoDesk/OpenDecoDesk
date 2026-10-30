@@ -14,6 +14,7 @@ const server = require("./desktop/server.js");
 //   C. email.js and orders.js: the email actions come back with a mailbox; invoices are the email
 //      itself; with no mailbox nothing is sent and nothing is reported as a failure.
 //   D. The morning roll-up, from the program's scheduled run.
+//   D2. Design approval: the proof emailed with its pictures attached, approved by reply.
 //   E. The admin: Global settings → Email, the buttons and Communications.
 // The mail server itself is stood in for here; the real program was tried against a local SMTP
 // server (desktop/mailer.js with nodemailer).
@@ -58,6 +59,14 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   ok("the Worker's MAILER binding: a JSON message in, { ok, message } out", res.status === 200 && (await res.json()).ok === true && sent[sent.length - 1].subject === "Hello");
   res = await mailer.handle(new Request("https://mailer.desktop.invalid/send", { method: "POST", body: "nope" }));
   ok("…and anything else is refused", res.status === 400);
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  r = await mailer.send({ to: "c@d.co", subject: "Proof", html: '<img src="cid:proof1">', attachments: [{ filename: "proof 1.png", contentType: "image/png", contentBase64: png.toString("base64"), cid: "proof1" }] });
+  const att = (sent[sent.length - 1].attachments || [])[0] || {};
+  ok("a picture can be attached, shown in the email by its cid", r.ok && Buffer.isBuffer(att.content) && att.content.equals(png) && att.cid === "proof1" && att.filename === "proof_1.png" && att.contentType === "image/png");
+  const before = sent.length;
+  r = await mailer.send({ to: "c@d.co", subject: "x", attachments: [{ filename: "a.exe", contentType: "application/x-msdownload", contentBase64: "TVo=" }] });
+  const tooMany = await mailer.send({ to: "c@d.co", subject: "x", attachments: Array.from({ length: 6 }, () => ({ filename: "p.png", contentType: "image/png", contentBase64: png.toString("base64") })) });
+  ok("…but only pictures, and at most five", !r.ok && /Only pictures/.test(r.message) && !tooMany.ok && /At most 5/.test(tooMany.message) && sent.length === before);
   const mailerSrc = read("desktop/mailer.js");
   ok("it never sends without encryption: TLS from the start on 465, else STARTTLS required", /secure: settings\.security === "tls"/.test(mailerSrc) && /requireTLS: settings\.security !== "tls"/.test(mailerSrc));
 
@@ -148,6 +157,45 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   const emailSrc = read("functions/_lib/email.js");
   ok("one provider per install: the mailbox in the desktop program, before Resend or Cloudflare", /const via = desktopEmail_\(env\) === "on" \? "mailbox" : env && env\.RESEND_API_KEY \? "resend" : "cloudflare";/.test(emailSrc));
 
+  console.log("\n=== D2. Design approval by email ===");
+  {
+    const host = new Function(strip(read("functions/_lib/hostConfig.js")) + "\nreturn { desktopLockedFeatures };")();
+    ok("design approval is locked off without email, and unlocked with it", host.desktopLockedFeatures(off).includes("designVerification") && !host.desktopLockedFeatures(on).includes("designVerification") &&
+      host.desktopLockedFeatures({ ...on, SHIPPO_API_KEY: "k" }).join() === "storefront");
+    r = await post(off, { action: "updateFeatures", key: "x", features: { designVerification: true } });
+    ok("…turning it on without email says to set up the mailbox", r.status === 400 && /Design approval needs email — set up your mailbox under Global settings → Email/.test(r.body.message));
+    const stored = { "uploads/verify/abc123.png": png };
+    const IMAGES = { get: async (k) => stored[k] ? { arrayBuffer: async () => stored[k].buffer.slice(stored[k].byteOffset, stored[k].byteOffset + stored[k].length), httpMetadata: { contentType: "image/png" } } : null };
+    const withImages = { ...on, IMAGES, R2_PUBLIC_BASE: "https://images.desktop.invalid" };
+    r = await post(withImages, { action: "updateFeatures", key: "x", features: { designVerification: true } });
+    ok("…and with email it turns on", r.status === 200 && r.body.features.designVerification === true);
+    await lib.ensureDesktopReady(withImages);
+    ok("the start-up step leaves it as the owner set it while email is on", (await new Function(strip(read("functions/_lib/db.js")) + "\nreturn getFeatures;")()(d1)).designVerification === true);
+    r = await post(withImages, { action: "createLocalSale", key: "x", org: "shop", paymentMethod: "Venmo", customerName: "Sam", contact: "sam@example.net",
+      items: [{ productId: "__custom__", name: "Polo", qty: 1, customUnitPrice: 30, type: "shirt" }] });
+    const proofOrder = r.body.orderId;
+    mail.length = 0;
+    r = await post(withImages, { action: "sendDesignVerification", key: "x", org: "shop", orderIds: [proofOrder], message: "Here is your logo on the polo.",
+      imageUrls: ["https://images.desktop.invalid/uploads/verify/abc123.png", "https://cdn.example.org/mockup.png"] });
+    const dv = mail[0] || {};
+    ok("the proof is emailed with the picture stored here attached, shown in the email by its cid", r.status === 200 && r.body.sent === 1 && (dv.attachments || []).length === 1 &&
+      dv.attachments[0].contentBase64 === png.toString("base64") && dv.attachments[0].contentType === "image/png" && dv.attachments[0].cid === "proof1" && /src="cid:proof1"/.test(dv.html));
+    ok("…a picture on another site stays a link, and nothing points at this computer", /src="https:\/\/cdn\.example\.org\/mockup\.png"/.test(dv.html) && !/images\.desktop\.invalid|\?verify=|localhost/.test(dv.html + dv.text));
+    ok("…and asks the customer to reply to approve it or say what to change", /Please reply to this email: say “approved” if it's right/.test(dv.html) && /The design is attached \(proof-1\.png\)/.test(dv.text) && !/Review &amp; Respond/.test(dv.html));
+    r = await post(withImages, { action: "sendDesignVerification", key: "x", org: "shop", orderIds: [proofOrder], message: "Again", imageUrls: ["https://images.desktop.invalid/uploads/verify/gone.png"] });
+    ok("a picture that isn't stored any more is reported, and nothing is sent", r.status === 400 && /isn't stored any more/.test(r.body.message) && mail.length === 1);
+    const verif = async () => ((await post(withImages, { action: "listDesignVerifications", key: "x", org: "shop" })).body.verifications || []).find(v => v.orderId === proofOrder) || {};
+    ok("the proof is waiting for the customer's answer", (await verif()).status === "pending");
+    await post(withImages, { action: "markPaidManual", key: "x", org: "shop", orderId: proofOrder });
+    await post(withImages, { action: "setFulfillmentStage", key: "x", org: "shop", orderId: proofOrder, stage: "digitizingComplete" });
+    r = await post(withImages, { action: "setFulfillmentStage", key: "x", org: "shop", orderId: proofOrder, stage: "designApproved" });
+    const v2 = await verif();
+    ok("marking the order Design approved records their approval on the proof", r.status === 200 && v2.status === "approved" && /Approved by reply/.test(v2.customerNote) && !!v2.respondedAt);
+    ok("a cloud install's proof still links to its page", /Review &amp; Respond/.test(read("functions/_lib/email.js")) && /verifyUrl: desktop \? "" : verifyUrl/.test(read("functions/api/orders.js")));
+    await lib.ensureDesktopReady(off);
+    ok("once email is turned off, the next start switches design approval off again", (await new Function(strip(read("functions/_lib/db.js")) + "\nreturn getFeatures;")()(d1)).designVerification === false);
+  }
+
   console.log("\n=== D. The morning roll-up ===");
   const worker = await import("./src/worker.js");
   const realFetch = global.fetch, looked = [];
@@ -225,6 +273,12 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   await $("gEmailSave").onclick();
   ok("saving hands the settings and password to the program, and shows why it wasn't saved", saved.length === 1 && saved[0].settings.host === "mail.stitch.example" && saved[0].settings.port === 465 &&
     saved[0].settings.security === "tls" && saved[0].settings.user === "orders@stitch.example" && /refused the sign-in/.test($("gEmailError").textContent));
+  const proofModal = w.showDesignVerifModal();
+  await tick(20);
+  ok("the proof window says the pictures are attached and the customer replies", /attached to the email, and the customer replies/.test(doc.body.textContent) && /Design approved/.test(doc.body.textContent));
+  doc.getElementById("dvCancel").click();
+  ok("…and closes with nothing sent", (await proofModal) === null);
+  ok("a proof waiting for an answer reads Awaiting reply", /Awaiting reply/.test(w.verifSentCell({ sentAt: "2026-11-02T10:00:00Z", status: "pending" }, 1)));
   ok("Global settings shows the Email section first in the desktop version", /\$\{emailSettings === undefined \? "" : desktopEmailSectionHtml_\(emailSettings\)\}\s*\$\{shippoKeySet === null/.test(adminJs));
   w.close();
 })().catch(e => { console.error(e); process.exit(1); });

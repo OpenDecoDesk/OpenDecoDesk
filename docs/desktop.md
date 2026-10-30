@@ -24,7 +24,8 @@ carrier shipping ([Shipping](#shipping)) or turn on [supplier connections](#supp
 |---|---|---|
 | Storefront (shops online) | optional | **off** (locked) |
 | Email: order emails, invoices, the morning roll-up | Cloudflare or Resend | optional, from your own mailbox (SMTP) |
-| Email with a link to a page: payment links, design proofs, invoices to pay online | yes | **none** (no pages on the web) |
+| Email with a link to a page: payment links, invoices to pay online | yes | **none** (no pages on the web) |
+| Design approval: a proof emailed to the customer | they answer on a page | optional, with email: the pictures attached, they reply, you mark it approved |
 | Card payments (Stripe) | optional | **none**: payments are recorded by hand |
 | Shipping an order: address, carrier, charge, tracking number | yes | yes, typed in (Local sale → Ship this order) |
 | Carrier rates, buying labels, tracking checks (Shippo) | optional | optional, with a Shippo key and the internet |
@@ -47,9 +48,10 @@ With it:
 
 - `localhost` is the admin panel and no other name is anything (`functions/_lib/hostConfig.js`),
   so a web page that points a name of its own at this computer gets nothing.
-- The storefront and design approval are saved off at every start and can't be turned on, and so
-  is carrier shipping while the program has no Shippo key (`functions/_lib/desktop.js`,
-  `desktopLockedFeatures` in `hostConfig.js`, `updateFeatures` in `functions/api/orders.js`).
+- The storefront is saved off at every start and can't be turned on, and so are carrier shipping
+  while the program has no Shippo key and design approval while email isn't set up
+  (`functions/_lib/desktop.js`, `desktopLockedFeatures` in `hostConfig.js`, `updateFeatures` in
+  `functions/api/orders.js`).
 - Actions that need the internet are refused (`DESKTOP_REFUSED_ACTIONS` in `orders.js`), and the
   admin leaves out their pages and buttons. Supplier connections (`DESKTOP_SUPPLIER_ACTIONS`) are
   refused only until the owner turns them on, which sets `DESKTOP_SUPPLIERS=on`, and email
@@ -85,7 +87,7 @@ certificate, both paid). Signing can be added to the workflow later without chan
 
 Off until you set it up; then the program sends from your own mailbox, as if you had sent the
 emails yourself: order received, payment confirmed, shipped (with the tracking link), cancelled,
-invoices, and your morning roll-up. It needs the internet.
+invoices, design proofs, and your morning roll-up. It needs the internet.
 
 1. **Settings → Global settings, email and shipping…**, then *Email*. Choose your mailbox (Gmail or
    Google Workspace, iCloud Mail, Fastmail, Zoho Mail, or another provider) and type its address and
@@ -110,12 +112,31 @@ What's different from a cloud install:
 - **The morning roll-up** goes out at the first check on or after 6 AM while the program is open
   (a minute after it opens, then every two hours), once a day. On a day the program isn't opened,
   there is none; the next one covers everything since.
-- Payment links, design proofs and anything else that sends the customer to a page are still not in
-  the desktop version.
+- **Design proofs are answered by reply** ([below](#design-approval)).
+- Payment links and anything else that sends the customer to a page are still not in the desktop
+  version.
 - Microsoft 365 and Outlook.com mailboxes need "Sign in with Microsoft", which isn't supported yet.
 - Gmail sends at most about 500 emails a day (Google Workspace 2,000).
 
-**Turn off email** sends nothing more and forgets the password.
+**Turn off email** sends nothing more and forgets the password, and switches Design approval off.
+
+### Design approval
+
+With email on, **Design approval** can be turned on under Global settings → Features. Then, as on a
+cloud install, orders with free-form personalization wait for the customer's approval before they
+are made, and the Orders screen has **✉ Send verification** for the selected orders.
+
+The customer can't open a page on this computer, so the proof works by email:
+
+1. Select the orders, choose **✉ Send verification**, write the message and upload the pictures (at
+   most 15 MB in all). They are attached to the email and shown in it.
+2. The email asks the customer to reply: "approved", or what to change. Their reply comes to your
+   mailbox (or the owner's inbox under Business profile).
+3. When they approve, mark the order **Design approved** (its stage list, or **→ Design approved**
+   for the selected orders). That also records the approval on the proof, which the order shows as
+   *Approved* instead of *Awaiting reply*. For changes, send a new proof.
+
+Pictures linked from another website (an https:// address) stay links in the email.
 
 ## Shipping
 

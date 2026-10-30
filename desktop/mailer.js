@@ -8,6 +8,28 @@
 // Only sending: nothing here reads the mailbox.
 
 const EMAIL_RE = /^[^@\s<>"]+@[^@\s<>"]+\.[^@\s<>"]+$/;
+// Attachments (a design proof's pictures): pictures only, at most 5 and 20 MB in all.
+const MAX_ATTACHMENTS = 5, MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+// [{ filename, contentType, contentBase64, cid }] from the Worker → nodemailer's attachments, or an
+// error saying what's wrong.
+function cleanAttachments(list) {
+  if (list == null) return { attachments: [] };
+  if (!Array.isArray(list) || list.length > MAX_ATTACHMENTS) return { error: "At most " + MAX_ATTACHMENTS + " attachments." };
+  let total = 0;
+  const attachments = [];
+  for (const a of list) {
+    const type = String((a && a.contentType) || "");
+    if (!/^image\/(jpeg|png|gif|webp|heic|heif)$/.test(type)) return { error: "Only pictures can be attached." };
+    const content = Buffer.from(String(a.contentBase64 || ""), "base64");
+    total += content.length;
+    if (!content.length || total > MAX_ATTACHMENT_BYTES) return { error: "The attachments are too big for one email." };
+    const filename = String(a.filename || "picture").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80);
+    const cid = /^[A-Za-z0-9._-]{1,60}$/.test(String(a.cid || "")) ? String(a.cid) : undefined;
+    attachments.push({ filename, contentType: type, content, ...(cid ? { cid } : {}) });
+  }
+  return { attachments };
+}
 
 // The settings as they will be saved, or an error saying what's wrong with them.
 function cleanSmtpSettings(s) {
@@ -71,9 +93,11 @@ class Mailer {
 
   // One message, from the mailbox's own address (a mailbox rewrites or refuses any other) under
   // the business's name. { ok, message }.
-  async send({ to, fromName, replyTo, bcc, subject, html, text } = {}) {
+  async send({ to, fromName, replyTo, bcc, subject, html, text, attachments } = {}) {
     to = String(to || "").trim();
     if (!EMAIL_RE.test(to)) return { ok: false, message: "That isn't an email address: " + to.slice(0, 100) };
+    const att = cleanAttachments(attachments);
+    if (att.error) return { ok: false, message: att.error };
     const name = String(fromName || "").replace(/[<>"\r\n]/g, "").trim().slice(0, 100);
     const bccList = (Array.isArray(bcc) ? bcc : bcc ? [bcc] : []).map(String).filter(a => EMAIL_RE.test(a));
     const reply = EMAIL_RE.test(String(replyTo || "")) && String(replyTo).toLowerCase() !== this.settings.from.toLowerCase() ? String(replyTo) : undefined;
@@ -82,6 +106,7 @@ class Mailer {
       to, ...(bccList.length ? { bcc: bccList } : {}), ...(reply ? { replyTo: reply } : {}),
       subject: String(subject || "").replace(/[\r\n]+/g, " ").slice(0, 300),
       text: text || "(no plain-text body)", ...(html ? { html } : {}),
+      ...(att.attachments.length ? { attachments: att.attachments } : {}),
     };
     try {
       const info = await this.transport.sendMail(message);

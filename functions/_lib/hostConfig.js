@@ -28,7 +28,9 @@ export const RESERVED_SUBDOMAINS = ["www", "api", "images", "mail", "admin", "al
 // and carrier shipping until a Shippo key is set in the program (Global settings → Carrier
 // shipping). A cloud install never sets EDITION and behaves exactly as before.
 export function desktopLockedFeatures(env){
-  return env && env.SHIPPO_API_KEY ? ["storefront", "designVerification"] : ["storefront", "shipping", "designVerification"];
+  // Carrier shipping needs a Shippo key; design approval needs email (the proof goes out as an email
+  // the customer replies to — there is no page for them to open).
+  return ["storefront", ...(env && env.SHIPPO_API_KEY ? [] : ["shipping"]), ...(desktopEmailOn(env) ? [] : ["designVerification"])];
 }
 export function isDesktopEdition(env){
   return String((env && env.EDITION) || "").trim().toLowerCase() === "desktop";
