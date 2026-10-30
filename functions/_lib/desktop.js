@@ -18,7 +18,7 @@
  */
 
 import { desktopLockedFeatures } from "./hostConfig.js";
-import { getFeatures, setFeatures, getAllOrgs, createOrg, bumpCatalogVersion } from "./db.js";
+import { getFeatures, setFeatures, getAllOrgs, createOrg, bumpCatalogVersion, getSettingRaw, setSettingRaw, deleteSettingRaw } from "./db.js";
 
 // The default shop. Card payments need Stripe, which the desktop program doesn't have.
 export const DESKTOP_DEFAULT_SHOP = { orgId: "shop", subdomain: "shop", name: "My shop" };
@@ -30,6 +30,15 @@ export async function ensureDesktopReady(env) {
   const off = {};
   for (const k of desktopLockedFeatures(env)) if (features[k] !== false) off[k] = false;
   if (Object.keys(off).length) { await setFeatures(db, off); changed = true; }
+  // Adding a Shippo key is asking for carrier shipping: the first start that has one turns Shipping
+  // on (once — the owner can turn it off again, and it stays off). Without a key it's locked off
+  // above, and the next key turns it on again.
+  const keyed = !!(env && env.SHIPPO_API_KEY);
+  const marked = (await getSettingRaw(db, "desktopShippoKeySeen")) === "1";
+  if (keyed && !marked) {
+    if (features.shipping === false) { await setFeatures(db, { shipping: true }); changed = true; }
+    await setSettingRaw(db, "desktopShippoKeySeen", "1");
+  } else if (!keyed && marked) await deleteSettingRaw(db, "desktopShippoKeySeen");
   if (!(await getAllOrgs(db)).length) {
     try {
       await createOrg(db, { ...DESKTOP_DEFAULT_SHOP, ready: true, shippingEnabled: false,

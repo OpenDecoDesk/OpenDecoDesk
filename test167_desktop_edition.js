@@ -238,6 +238,15 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
     ok("with a key, the start-up step leaves Shipping as the owner set it", (await lib.getFeatures(d1)).shipping === true);
     await lib.ensureDesktopReady(env);
     ok("…and once the key is removed, the next start switches it off again", (await lib.getFeatures(d1)).shipping === false);
+    await lib.ensureDesktopReady(keyed);
+    ok("adding a key turns Shipping on at the next start (the owner asked for carrier shipping)", (await lib.getFeatures(d1)).shipping === true);
+    await lib.setFeatures(d1, { shipping: false });
+    await lib.ensureDesktopReady(keyed);
+    ok("…once: turned off again by the owner, it stays off", (await lib.getFeatures(d1)).shipping === false);
+    await lib.ensureDesktopReady(env);
+    await lib.ensureDesktopReady(keyed);
+    ok("…and a key removed and added again turns it on again", (await lib.getFeatures(d1)).shipping === true);
+    await lib.setFeatures(d1, { shipping: false });
 
     // Local sale → Ship this order (the form is shared, so a cloud install gets it too).
     const sale = (e, extra, hostname) => post(e, { action: "createLocalSale", key: "x", org: "shop", paymentMethod: "Cash", customerName: "Pat",

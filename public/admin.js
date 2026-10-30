@@ -1184,7 +1184,7 @@ function desktopShippoSectionHtml_(keySet, shippingOn){
   return `<div id="gShippoSection">
         <h2 style="margin:22px 0 12px;">Carrier shipping (Shippo)</h2>
         <div class="admin-note" style="margin-bottom:10px;">Without this, shipping is by hand: tick <strong>Ship this order</strong> in Local sale for the address, carrier and charge, and type the tracking number on the order. With a key from your Shippo account, turn on <strong>Shipping</strong> under Features (below) for carrier rates, buying and printing labels from the order's <strong>Ship</strong> button, and tracking checks every two hours while this program is open. Those need the internet; labels are paid to Shippo.</div>
-        <div id="gShippoStatus" style="font-size:14px;margin-bottom:8px;">${keySet ? `A Shippo key is set${shippingOn ? "." : " — turn on Shipping under Features to use it."}` : "No Shippo key yet."}</div>
+        <div id="gShippoStatus" style="font-size:14px;margin-bottom:8px;">${keySet ? `A Shippo key is set${shippingOn ? ": Shipping is on. Add it to a shop under Manage catalog → the shop's Edit → Delivery &amp; pickup, and fill in the Ship-from address below." : " — turn on Shipping under Features to use it."}` : "No Shippo key yet."}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
           <input type="password" id="gShippoKey" maxlength="200" autocomplete="off" spellcheck="false" placeholder="${keySet ? "Paste a new key to replace it" : "shippo_live_… or shippo_test_…"}" style="max-width:320px;">
           <button class="admin-btn" type="button" id="gShippoSave">Save key</button>
@@ -9171,7 +9171,7 @@ function drawOrgDeliveryList_(){
         : `<button type="button" class="admin-btn" data-dlv-add="shipping" style="${btn}" disabled title="Carrier rates need a US ZIP">+ Shipping</button>`)}
       <button type="button" class="admin-btn" data-dlv-add="custom" style="${btn}">+ Custom option</button>
     </div>
-    ${!adminFeatureOn_("shipping") ? `<div class="admin-note" id="orgDeliveryFeatureNote" style="margin-top:6px;">Carrier shipping is turned off (Global settings → Features → Shipping)${has("shipping") ? ", so the Shipping option above isn't offered to customers" : ""}. For delivery, add a custom option with a flat fee.</div>` : ""}
+    ${!adminFeatureOn_("shipping") ? `<div class="admin-note" id="orgDeliveryFeatureNote" style="margin-top:6px;">Carrier shipping is turned off (<a href="#settings">Global settings → Features → Shipping</a>${adminDesktop_() ? ", which needs a Shippo key under Carrier shipping there" : ""})${has("shipping") ? ", so the Shipping option above isn't offered to customers" : ""}. For delivery, add a custom option with a flat fee.</div>` : ""}
     ${!adminIsUS_() ? `<div class="admin-note" id="orgDeliveryRegionNote" style="margin-top:6px;">Carrier shipping (rates by ZIP) is only available when the country in Global settings → Region is US. For delivery, add a custom option with a flat fee.</div>`
       : has("shipping") ? `<div class="admin-note" style="margin-top:6px;">Shipping needs a weight on every visible product, and the customer's ZIP to price it.</div>` : ""}`;
   box.onclick = (e) => {
