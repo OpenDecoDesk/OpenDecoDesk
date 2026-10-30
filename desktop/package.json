@@ -6,6 +6,9 @@
   "private": true,
   "main": "main.js",
   "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "start": "electron .",
     "serve": "node server.js",

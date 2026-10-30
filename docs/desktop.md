@@ -170,6 +170,10 @@ not a barrier against them. The computer's own sign-in is.
 
 ## Running it from the source, and building it
 
+This needs **Node.js 22.12 or newer** (`node -v`). Electron's installer fails on older 22.x
+releases with `ERR_REQUIRE_ESM`; after updating Node, delete `desktop/node_modules` and run
+`npm install` again.
+
 ```bash
 cd desktop
 npm install        # Electron, Miniflare and electron-builder
