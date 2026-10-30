@@ -1350,6 +1350,64 @@ function adminNavActive_(){
   if(top === "wizard") return "setup";
   return raw;
 }
+// ---- Small action menus (the Blanks toolbar and rows) ------------------------------------------------
+// A button that opens a short list of actions (index.html .admin-menu). The list opens below the button
+// (above it near the bottom of the window), fixed to the window so a scrolling table can't cut it off. It
+// closes on choosing an item, on Escape, on a click anywhere else, and when the page or a table scrolls.
+// Arrow keys move between the items. `opts`: id, hidden (start hidden — shown by the caller later), dots
+// (a "⋯" button with no ▾), ariaLabel, title, btnStyle.
+function adminMenuHtml_(label, itemsHtml, opts){
+  opts = opts || {};
+  return `<div class="admin-menu${opts.dots ? " admin-menu-dots" : ""}"${opts.id ? ` id="${escapeHtml(opts.id)}"` : ""}${opts.hidden ? ' style="display:none;"' : ""}>`
+    + `<button type="button" class="admin-btn" style="${opts.btnStyle || ""}" aria-haspopup="menu" aria-expanded="false"${opts.title ? ` title="${escapeHtml(opts.title)}"` : ""}${opts.ariaLabel ? ` aria-label="${escapeHtml(opts.ariaLabel)}"` : ""} onclick="toggleAdminMenu_(this)" onkeydown="adminMenuKey_(event)">${label}</button>`
+    + `<div class="admin-menu-list" role="menu" onkeydown="adminMenuKey_(event)">${itemsHtml}</div></div>`;
+}
+// One item: `attrs` is its id / onclick / data- / title attributes, already escaped by the caller.
+function adminMenuItem_(attrs, label, danger){
+  return `<button type="button" role="menuitem" class="admin-menu-item${danger ? " danger" : ""}" ${attrs || ""}>${label}</button>`;
+}
+function closeAdminMenus_(except){
+  document.querySelectorAll(".admin-menu.open").forEach(m => {
+    if (m === except) return;
+    m.classList.remove("open");
+    const b = m.querySelector(":scope > button"); if (b) b.setAttribute("aria-expanded", "false");
+  });
+}
+function toggleAdminMenu_(btn){
+  if (!window._adminMenusWired) {
+    window._adminMenusWired = true;
+    // Choosing an item or clicking elsewhere closes it (the item's own action runs first).
+    document.addEventListener("click", (e) => {
+      if (e.target.closest(".admin-menu-item") || !e.target.closest(".admin-menu")) closeAdminMenus_();
+    });
+    document.addEventListener("scroll", (e) => { if (!(e.target && e.target.closest && e.target.closest(".admin-menu-list"))) closeAdminMenus_(); }, true);
+    window.addEventListener("resize", () => closeAdminMenus_());
+  }
+  const menu = btn.parentNode, open = !menu.classList.contains("open");
+  closeAdminMenus_(menu);
+  menu.classList.toggle("open", open);
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (!open) return;
+  const list = menu.querySelector(".admin-menu-list"), r = btn.getBoundingClientRect();
+  const w = list.offsetWidth, h = list.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+  let left = r.left, top = r.bottom + 4;
+  if (left + w > vw - 8) left = Math.max(8, r.right - w);
+  if (top + h > vh - 8 && r.top - h - 4 >= 8) top = r.top - h - 4;
+  list.style.left = left + "px"; list.style.top = top + "px";
+}
+function adminMenuKey_(e){
+  const menu = e.target.closest(".admin-menu");
+  if (!menu) return;
+  const btn = menu.querySelector(":scope > button"), items = [...menu.querySelectorAll(".admin-menu-item")];
+  if (e.key === "Escape" && menu.classList.contains("open")) { e.preventDefault(); e.stopPropagation(); closeAdminMenus_(); btn.focus(); return; }
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  e.preventDefault();
+  if (!menu.classList.contains("open")) toggleAdminMenu_(btn);
+  const i = items.indexOf(document.activeElement);
+  const next = e.key === "ArrowDown" ? (i + 1) % items.length : (i <= 0 ? items.length - 1 : i - 1);
+  if (items[next]) items[next].focus();
+}
+
 function toggleNavDropdown(btn){
   const group = btn.parentNode, wasOpen = group.classList.contains("open");
   closeNavDropdowns();
@@ -16091,15 +16149,21 @@ async function renderAdminBlanks(app) {
           <option value="onsale">On a product for sale</option><option value="unlinked">Not linked to any product</option><option value="low">Below reorder point</option></select>
         <button type="button" class="admin-btn" id="blankAddBtn">+ New blank</button>
         <button type="button" class="admin-btn" id="blankOrderBtn" title="Record a whole vendor order: several blanks, shipping, R&amp;D and personal items">Receive order</button>
-        <button type="button" class="admin-btn" id="blankImportPdfBtn" title="Read a vendor invoice PDF (S&amp;S, SanMar) and pre-fill Receive order from it">Import from PDF&hellip;</button>
+        ${adminMenuHtml_("Import", [
+          adminMenuItem_('id="blankImportPdfBtn" title="Read a vendor invoice PDF (S&amp;S, SanMar) and pre-fill Receive order from it — Import from PDF"', "Vendor invoice (PDF)&hellip;"),
+          adminMenuItem_('id="blankVendorNewBtn" title="Bring in complete blanks from a vendor\'s product file — colors, sizes, prices per color, description, and images from the vendor\'s image download"', "Vendor product file — new blanks&hellip;"),
+          adminMenuItem_('id="blankVendorUpdBtn" title="Refresh the vendor prices (per color) of blanks you have from a vendor\'s product file"', "Vendor product file — update prices&hellip;"),
+          adminMenuItem_('id="blankImportCsvBtn" title="Add or update many blanks at once from a spreadsheet saved as CSV: one row per style, a cost column per size"', "Spreadsheet (CSV)&hellip;"),
+        ].join(""), { title: "Bring blanks in from a file: a vendor's invoice or product file, or a spreadsheet" })}
+        ${adminMenuHtml_("Connected vendor", [
+          adminMenuItem_('id="blankVendorApiNewBtn" title="Look up a style at a connected vendor and bring it in as a complete blank"', "Look up a style → new blank&hellip;"),
+          adminMenuItem_('id="blankVendorLiveBtn" title="Fetch live prices, colors and content for the blanks linked to a connected vendor"', "Refresh prices and colors&hellip;"),
+        ].join(""), { id: "blankVendorMenu", hidden: true, title: "A vendor connected under Vendor integrations" })}
+        ${adminMenuHtml_("More", [
+          adminMenuItem_('id="blankDupPhotosBtn" title="Find the same photo more than once on a blank\'s color, and take the extra copies off"', "Find duplicate photos&hellip;"),
+          adminMenuItem_('id="blankRepairThumbsBtn" title="Make the small preview copy for blank photos that don\'t have one (photos downloaded from a vendor before this was fixed)"', "Repair photo thumbnails&hellip;"),
+        ].join(""))}
         <input type="file" id="blankImportPdfFile" accept="application/pdf" style="display:none;">
-        <button type="button" class="admin-btn" id="blankVendorNewBtn" title="Bring in complete blanks from a vendor's product file — colors, sizes, prices per color, description, and images from the vendor's image download">+ New blank from vendor file&hellip;</button>
-        <button type="button" class="admin-btn" id="blankVendorUpdBtn" title="Refresh the vendor prices (per color) of blanks you have from a vendor's product file">Update prices from vendor file&hellip;</button>
-        <button type="button" class="admin-btn" id="blankVendorLiveBtn" title="Fetch live prices, colors and content for the blanks linked to a connected vendor (Tools → Vendor integrations)">Refresh from vendor&hellip;</button>
-        <button type="button" class="admin-btn" id="blankVendorApiNewBtn" title="Look up a style at a connected vendor and bring it in as a complete blank">+ New blank from a connected vendor&hellip;</button
-        ><button type="button" class="admin-btn" id="blankImportCsvBtn" title="Add or update many blanks at once from a spreadsheet saved as CSV: one row per style, a cost column per size">Import CSV&hellip;</button>
-        <button type="button" class="admin-btn" id="blankDupPhotosBtn" title="Find the same photo more than once on a blank's color, and take the extra copies off">Find duplicate photos&hellip;</button>
-        <button type="button" class="admin-btn" id="blankRepairThumbsBtn" title="Make the small preview copy for blank photos that don't have one (photos downloaded from a vendor before this was fixed)">Repair photo thumbnails&hellip;</button>
         <input type="file" id="blankImportCsvFile" accept=".csv,text/csv" style="display:none;">
       </div>
       <div id="blanksPanel" data-keep-scroll="blanks" style="overflow:auto;max-height:66vh;border:1px solid var(--card-line);border-radius:4px;"><div class="admin-summary">Loading&hellip;</div></div>
@@ -16127,7 +16191,18 @@ async function renderAdminBlanks(app) {
     const file = e.target.files[0]; e.target.value = "";
     if (file) await showBlankCsvImportModal_(file, refresh);
   };
+  showBlankVendorMenu_();
   await loadBlanksPanel(app);
+}
+
+// Blanks → Connected vendor ▾ appears only when a vendor is connected (with a login) under Vendor integrations.
+// The desktop version doesn't even ask while supplier connections are off (they would be refused there).
+function showBlankVendorMenu_(){
+  if (adminDesktop_() && !adminDesktopSuppliers_()) return;
+  hoopApi_({ action: "listVendorConnections" }).then(r => {
+    const menu = document.getElementById("blankVendorMenu");
+    if (menu && ((r && r.connections) || []).some(c => c.hasCredentials)) menu.style.display = "";
+  }).catch(() => { /* stays hidden */ });
 }
 
 // Blanks → Repair photo thumbnails: every blank photo in the image store whose 320px "-thumb" copy doesn't load
@@ -16433,12 +16508,15 @@ function renderBlanksTable(panel, app, blanks, query) {
           <td style="padding:8px 10px;font-family:monospace;font-size:12px;vertical-align:top;">${escapeHtml(b.brand)}${b.sku ? " / " + escapeHtml(b.sku) : ""}</td>
           <td style="padding:8px 10px;vertical-align:top;">${colorBlocks}<div style="font-size:11px;color:var(--ink-soft);margin-top:3px;">${totalStock} units${totalHeld ? ` · ${totalHeld} set aside` : ""} · $${totalValue.toFixed(2)} value</div></td>
           <td style="padding:8px 10px;white-space:nowrap;vertical-align:top;">
-            <button class="admin-btn" style="padding:3px 10px;font-size:12px;" data-blank-id="${b.id}" onclick="blankHistory(this.dataset.blankId)" title="Every stock movement for this blank">History</button>
-            <button class="admin-btn" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" onclick="blankWriteOff(this.dataset.blankId)" title="Damaged, lost, or used for testing/samples/shop scrap">Write off</button>
-            <button class="admin-btn" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" onclick="blankEdit(this.dataset.blankId)">Edit</button>
-            <button class="admin-btn" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" onclick="blankMerge(this.dataset.blankId)" title="Fold other blanks (old per-color rows) into this one">Merge…</button>
-            <button class="admin-btn" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" onclick="blankClone(this.dataset.blankId)">Clone</button>
-            <button class="admin-btn admin-btn-danger" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" data-blank-name="${escapeHtml(b.name || [b.brand, b.color].filter(Boolean).join(" "))}" onclick="blankDelete(this.dataset.blankId, this.dataset.blankName)">Delete</button>
+            <button class="admin-btn" style="padding:3px 10px;font-size:12px;" data-blank-id="${b.id}" onclick="blankEdit(this.dataset.blankId)">Edit</button>
+            <button class="admin-btn" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" onclick="blankHistory(this.dataset.blankId)" title="Every stock movement for this blank">History</button>
+            ${adminMenuHtml_("⋯", [
+              adminMenuItem_(`data-blank-id="${b.id}" onclick="blankWriteOff(this.dataset.blankId)" title="Damaged, lost, or used for testing/samples/shop scrap"`, "Write off&hellip;"),
+              adminMenuItem_(`data-blank-id="${b.id}" onclick="blankMerge(this.dataset.blankId)" title="Fold other blanks (old per-color rows) into this one"`, "Merge&hellip;"),
+              adminMenuItem_(`data-blank-id="${b.id}" onclick="blankClone(this.dataset.blankId)" title="Start a new blank from this one: its colors, sizes, prices and photos, with no stock"`, "Clone"),
+              '<div class="admin-menu-sep" role="separator"></div>',
+              adminMenuItem_(`data-blank-id="${b.id}" data-blank-name="${escapeHtml(b.name || [b.brand, b.color].filter(Boolean).join(" "))}" onclick="blankDelete(this.dataset.blankId, this.dataset.blankName)"`, "Delete&hellip;", true),
+            ].join(""), { dots: true, ariaLabel: "More for " + (b.name || "this blank"), btnStyle: "padding:3px 10px;font-size:12px;margin-left:4px;" })}
           </td>
         </tr>`;
     });

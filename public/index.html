@@ -340,6 +340,18 @@
   .admin-nav-menu .admin-nav-btn{display:block; width:100%; text-align:left; border-color:transparent; background:#fff; white-space:nowrap;}
   .admin-nav-menu .admin-nav-btn:hover{background:var(--accent-soft);}
   .admin-nav-menu .admin-nav-btn.active{background:var(--accent); color:#fff;}
+  /* Small action menus on admin screens (adminMenuHtml_ in admin.js): a button that opens a short list.
+     The list is fixed-positioned when it opens, so a scrolling table can't cut it off. */
+  .admin-menu{display:inline-block;}
+  .admin-menu > .admin-btn::after{content:" \25be"; font-size:9px; opacity:.7;}
+  .admin-menu.admin-menu-dots > .admin-btn::after{content:none;}
+  .admin-menu-list{position:fixed; z-index:960; background:#fff; border:1px solid var(--card-line); border-radius:6px; box-shadow:0 6px 18px rgba(0,0,0,.16); min-width:210px; padding:5px; display:none; flex-direction:column; gap:2px;}
+  .admin-menu.open .admin-menu-list{display:flex;}
+  .admin-menu-item{display:block; width:100%; text-align:left; font-size:13px; padding:6px 10px; border:0; border-radius:4px; background:#fff; color:#111; cursor:pointer; white-space:nowrap;}
+  .admin-menu-item:hover{background:var(--accent-soft);}
+  .admin-menu-item:focus-visible{background:var(--accent-soft); outline:2px solid var(--accent); outline-offset:-2px;}
+  .admin-menu-item.danger{color:#b03a2e;}
+  .admin-menu-sep{border-top:1px solid var(--card-line); margin:4px 2px;}
   .admin-summary{font-family:'IBM Plex Mono',monospace; font-size:13px; margin-bottom:14px; color:var(--ink-soft);}
   .admin-summary strong{color:var(--ink);}
   textarea.export-box{

@@ -259,10 +259,10 @@ Times report shows stitches per run. It's part of the Production feature.
 
 ## Cleaning up images
 
-- **Blanks → Find duplicate photos** looks through each color's photos for copies of the same picture
+- **Blanks → More → Find duplicate photos** looks through each color's photos for copies of the same picture
   (the same address, the same file, or one that looks the same) and lets you remove the extras. A
   garment's front and back are never called duplicates, and a color always keeps at least one photo.
-  **Repair photo thumbnails** remakes missing small copies.
+  **More → Repair photo thumbnails** remakes missing small copies.
 - **Tools → Orphaned images** (admins) lists files in the image store that nothing points to any more —
   a photo replaced or removed, an upload whose form was never saved. **Scan the image store**, then
   **Download selected (.zip)** to keep a copy and **Remove selected from storage**. Anything uploaded in

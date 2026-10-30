@@ -244,8 +244,8 @@ changes, every product priced on that blank is flagged (the catalog check, and o
 you update its prices or click **Prices still OK**. Every 30 days the morning roll-up and Communications
 list the blanks on products for sale whose prices haven't been checked.
 
-**Blanks from a vendor's file:** Blanks → **+ New blank from vendor file…** (or **Update prices from
-vendor file…**) reads SanMar's product file (SDL CSV) or S&S's Data Library (Products + Styles .xlsx).
+**Blanks from a vendor's file:** Blanks → **Import → Vendor product file — new blanks…** (or **— update
+prices…**) reads SanMar's product file (SDL CSV) or S&S's Data Library (Products + Styles .xlsx).
 Pick the styles; each comes up for review — colors, sizes, prices per color, description, features and
 photos (from a folder of the vendor's images on your computer, or downloaded from the vendor) — and
 nothing changes until **Create / apply**. An update only takes what you tick, and never touches stock
@@ -253,8 +253,9 @@ or average cost. On a product, **Copy from blank** brings in the blank's descrip
 
 **Live from a vendor (PromoStandards):** Tools → **Vendor integrations** (admins) connects suppliers
 that offer PromoStandards web services, with a login the vendor gives you, stored encrypted (it needs
-the `VENDOR_CREDENTIALS_KEY` secret — see [accounts-and-keys.md](accounts-and-keys.md)). Then **Refresh
-from vendor** on Blanks, and **New blank from a connected vendor**, bring live data into the same review.
+the `VENDOR_CREDENTIALS_KEY` secret — see [accounts-and-keys.md](accounts-and-keys.md)). Then Blanks →
+**Connected vendor → Refresh prices and colors…** and **Look up a style → new blank…** bring live data
+into the same review. (The Connected vendor menu appears on Blanks only once a vendor is connected.)
 A blank made or updated from a connection stays linked to it.
 
 **Ordering blanks from a supplier** (admins): on Blanks to Order, a supplier whose connection offers
