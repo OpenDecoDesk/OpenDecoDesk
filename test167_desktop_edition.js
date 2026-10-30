@@ -159,7 +159,8 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   ok("once the owner has a password, it doesn't", await server.adminHasUsablePassword(pw, authEnv.PROXY_ADMIN_PASSPHRASE) && !(await auth.bootstrapState(authEnv)).open);
   ok("after Reset sign-in (a new passphrase) it does again — as the sign-in code agrees", !(await server.adminHasUsablePassword(pw, "q".repeat(64))) && (await auth.bootstrapState({ ...authEnv, PROXY_ADMIN_PASSPHRASE: "q".repeat(64) })).open);
   const csp = server.desktopCsp((read("public/_headers").match(/Content-Security-Policy: (.*)/) || [])[1]);
-  ok("the window's security policy names no Cloudflare or Google address, and allows the bundled fonts", !/cloudflare|google|gstatic|8787/.test(csp) && /font-src 'self'/.test(csp) && /default-src 'self'/.test(csp) && /frame-ancestors 'none'/.test(csp));
+  ok("the window's security policy names no Cloudflare or Google address, and allows the bundled fonts", !/cloudflare|google|gstatic/.test(csp) && /font-src 'self'/.test(csp) && /default-src 'self'/.test(csp) && /frame-ancestors 'none'/.test(csp));
+  ok("…and still lets the page reach the send-agent on this computer (machines)", /connect-src [^;]*http:\/\/127\.0\.0\.1:8787/.test(csp) && read("public/admin.js").includes('const EMBROIDERY_AGENT_URL = "http://127.0.0.1:8787"'));
   const os = require("os"), path = require("path");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "odd-desktop-"));
   fs.writeFileSync(path.join(tmp, "desktop.json"), JSON.stringify({ port: 47830, secretsProtected: "not readable here" }));

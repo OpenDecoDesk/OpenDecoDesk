@@ -64,7 +64,8 @@ function makeSecrets() {
 function desktopCsp(csp) {
   return csp.split(";").map(d => d.trim()).filter(Boolean).map(d => {
     const [name, ...vals] = d.split(/\s+/);
-    const keep = vals.filter(v => !/cloudflareinsights|challenges\.cloudflare|fonts\.googleapis|fonts\.gstatic|127\.0\.0\.1:8787/.test(v));
+    // http://127.0.0.1:8787 stays: it is the send-agent on this same computer (machines, admin.js).
+    const keep = vals.filter(v => !/cloudflareinsights|challenges\.cloudflare|fonts\.googleapis|fonts\.gstatic/.test(v));
     if (name === "font-src") keep.push("'self'");
     if (name === "frame-src" && !keep.length) keep.push("'none'");
     return [name, ...new Set(keep)].join(" ");
