@@ -178,7 +178,9 @@ change is written to the audit log.
   Package sizes, the ship-from address, the tracking checks in the morning roll-up and the "your order has
   shipped" email. Off: a shop's "Shipping" delivery option isn't offered (local pickup and the shop's own
   flat-fee options still are), and an order can still be marked shipped by hand. Carrier shipping also
-  needs the country in Region to be `US`; either one being off turns it off.
+  needs the country in Region to be `US`; either one being off turns it off. It can only be saved on
+  with a Shippo key (`SHIPPO_API_KEY`) and a complete ship-from address (all but the name): Global
+  settings shows the address as soon as Shipping is ticked, and saves nothing until both are there.
 - **Design approval** — emailing a customer a design proof to approve, and the "Design approved" stage.
   Off: no order waits for an approval, the stage can't be set, and a link already emailed tells the
   customer that approval isn't available.

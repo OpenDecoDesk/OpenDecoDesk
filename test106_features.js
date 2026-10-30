@@ -40,7 +40,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
   await lib.createProduct(d1, "acme", { productId: "tee", type: "shirt", name: "Tee", pricingMode: "sized", sizePricing: { M: 20 }, visible: true, personalizationPrice: 2 });
   const blankId = (await lib.createBlank(d1, { name: "Blank tee", productType: "shirt" }, [{ size: "M", purchasePrice: 4, quantity: 10 }])).id;
   await lib.setBlankLink(d1, "acme", "tee", "M", blankId, "M");
-  const env = { DB: d1, QUOTE_SIGNING_SECRET: "q".repeat(40), SIGNING_SECRET: "s".repeat(40), ...MAIL_ENV };
+  const env = { DB: d1, QUOTE_SIGNING_SECRET: "q".repeat(40), SIGNING_SECRET: "s".repeat(40), SHIPPO_API_KEY: "shippo_test_106", ...MAIL_ENV };
   const A = api(async () => ({ subdomainMap: SUBS, ...(await lib.getPublicCatalogData(d1)), subdomainMap2: null }));
   let emails = [], shippoCalls = 0;
   global.fetch = async (url, init) => {
@@ -54,6 +54,9 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
   };
   const admin = (body) => post("admin", Object.assign({ key: "x" }, body));
   const setF = async (features) => { const r = await admin({ action: "updateFeatures", features }); await tick(20); return r; };
+  // Shipping on straight in the database, where a check is about what Shipping does rather than the
+  // rule for switching it on (a Shippo key and a complete ship-from address — see "Shipping setup").
+  const shipOn = async () => { await lib.setFeatures(d1, { shipping: true }); await tick(20); };
   const items = [{ productId: "tee", size: "M", qty: 2 }];
   const place = (id, extra) => post("acme", Object.assign({ orderId: id, orgId: "acme", customerName: "Cust", contact: "c@x.com", paymentMethod: "Venmo", items }, extra));
   const stock = () => Number(d1.q("SELECT quantity FROM blank_sizes WHERE blankId = ? AND size = 'M'", blankId)[0].quantity);
@@ -86,7 +89,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
     Number(d1.q("SELECT value FROM global_settings WHERE key='catalogVersion'")[0].value) > Number((ver0 || { value: 0 }).value));
   await setF({ shipping: false });
   ok("saving the same thing again writes no audit row", d1.q("SELECT count(*) n FROM audit_log WHERE action='settings.features_set'")[0].n === 1);
-  await setF({ shipping: true });
+  await shipOn();
   ok("nothing in the schema changed for this: it is one global_settings row", d1.q("SELECT count(*) n FROM global_settings WHERE key='features'")[0].n === 1);
 
   console.log("\n=== /api/catalog tells every page ===");
@@ -228,7 +231,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
   ok("off: so is a \"quote to follow\" shipment", r.status === 400);
   ok("off: pickup and the custom option keep working", (await place("PICK-OFF")).status === 200 && (await place("HAND-OFF", { deliveryOptionId: handId })).status === 200 &&
     (await lib.getOrderById(d1, "HAND-OFF")).shippingCost === 5 && (await lib.getOrderById(d1, "HAND-OFF")).shippingMethod === "Hand delivery");
-  const shipActions = ["getShipFromAddress", "updateShipFromAddress", "getBoxPresets", "setBoxPresets", "getOrderForShipping", "checkDeliveries", "checkBlankShipments"];
+  const shipActions = ["updateShipFromAddress", "getBoxPresets", "setBoxPresets", "getOrderForShipping", "checkDeliveries", "checkBlankShipments"];
   refused.length = 0; for (const a of shipActions) refused.push(off403(await admin({ action: a, orderId: "SHIP-ON" }), "Shipping"));
   ok("off: ship-from address, package sizes and the tracking checks answer 403 naming the feature", refused.every(Boolean));
   ok("off: the missing weight isn't flagged any more", !JSON.stringify((await admin({ action: "getCatalogIssues" })).body).includes("noWeight"));
@@ -271,7 +274,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
   r = await stage("MAIL-OFF", "shipped", { trackingNumber: "1Z999" }); await tick(40);
   ok("off: an order can still be marked shipped by hand, but no \"shipped\" email goes out", r.status === 200 && !!(await lib.getOrderById(d1, "MAIL-OFF")).shippedAt && !emails.some(e => /shipped/i.test(e.subject)));
 
-  await setF({ shipping: true });
+  await shipOn();
   c = await cat("acme");
   ok("back on: the shop's carrier option is offered again, exactly as it was saved", c.catalog.shippingEnabled === true && c.catalog.deliveryOptions.map(o => o.type).join() === "pickup,shipping,custom");
   ok("back on: carrier-quote orders are taken and the ship-from address is still there", (await place("SHIP-BACK", { shippingAddress: usAddr, shippingQuoteToken: await quote() })).status === 200 &&
@@ -402,7 +405,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
       "listClosedPeriods", "closePeriod", "reopenPeriod", "getAccountantExport",                              // Periods & Export
     ],
     shipping: [
-      "getShipFromAddress", "updateShipFromAddress",   // Global settings → Ship-from address
+      "updateShipFromAddress",                         // Global settings → Ship-from address
       "getBoxPresets", "setBoxPresets",                // Package sizes
       "getOrderForShipping",                           // label purchase
       "checkDeliveries", "checkBlankShipments",        // tracking checks (Communications → Check now)
@@ -421,7 +424,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
     "getAuditLog", "getRevenueReport", "getSalesTaxReport", "getInventoryReport",
     // Shops, products, catalog, settings
     "listOrgsAdmin", "createOrg", "setupOrgDomain", "getOrgDomainStatus", "updateOrg", "listProducts", "createProduct", "updateProduct", "importProducts", "setProductVisible", "setProductOrder", "createProductVersion", "copyProductVersionSettings", "separateProductVersion", "copyProductsFromOrg", "getCatalogIssues", "publish",
-    "getGlobalSettings", "updateGlobalSettings", "getSetupStatus", "getBusinessProfile", "updateBusinessProfile", "getLocaleSettings", "updateLocaleSettings", "getFeatures", "updateFeatures", "getSalesTaxSettings", "updateSalesTaxSettings",
+    "getGlobalSettings", "updateGlobalSettings", "getSetupStatus", "getBusinessProfile", "updateBusinessProfile", "getLocaleSettings", "updateLocaleSettings", "getFeatures", "updateFeatures", "getShipFromAddress", "getSalesTaxSettings", "updateSalesTaxSettings",
     "listLocations", "saveLocation", "deleteLocation", "listProductCategories", "saveProductCategory", "deleteProductCategory", "listProductGraphicImages", "setProductGraphicImage", "deleteProductGraphicImage",
     "listGraphics", "saveGraphic", "setProductGraphicColorBlocked", "deleteGraphic", "getTierPrices", "setTierPrices",
     // Inventory — always on in this release: blanks, transfers, stock movements, cost of goods
@@ -459,12 +462,12 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
   console.log("\n=== The admin: menu, routes, Global settings ===");
   const adminJs = read("public/admin.js");
   class L extends ResourceLoader { fetch(url, o){ if (url.includes("/admin.js")) return Promise.resolve(Buffer.from(adminJs)); return super.fetch(url, o); } }
-  const sent = [];
+  const sent = [], sentBodies = [];
   const dom = new JSDOM(read("public/index.html"), { runScripts: "dangerously", resources: new L(), url: "https://admin.example.com/", pretendToBeVisual: true,
     beforeParse(win){
       win.fetch = async (url, opts) => {
         if (String(url).includes("/api/orders") && opts && opts.body) {
-          const body = JSON.parse(opts.body); sent.push(body.action);
+          const body = JSON.parse(opts.body); sent.push(body.action); sentBodies.push(body);
           const res = await post("admin", body);
           return { ok: res.status < 400, status: res.status, json: async () => res.body };
         }
@@ -579,7 +582,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
   sent.length = 0;
   await go("settings"); await settle(() => doc.querySelectorAll("#gFeatures .gFeature").length === 5);
   ok("the form comes back showing what's saved, without the switched-off feature's section", boxes().filter(b => !b.checked).map(b => b.dataset.feature).join() === "bookkeeping,shipping" &&
-    doc.getElementById("gShipFromSection").style.display === "none" && !sent.includes("getShipFromAddress") && doc.getElementById("gMachineSection").style.display !== "none");
+    doc.getElementById("gShipFromSection").style.display === "none" && doc.getElementById("gMachineSection").style.display !== "none");
   boxes().forEach(b => { b.checked = true; });
   await w.submitGlobalSettings(); await tick(80);
   ok("ticking them again turns everything back on", ALL.every(k => w.eval(`featureOn_("${k}")`)) && Object.values(await lib.getFeatures(d1)).every(Boolean) && desktop().includes("Expenses") && mobile().includes("Package sizes"));
@@ -595,6 +598,58 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
   doc.getElementById("gPayVenmo").checked = !doc.getElementById("gPayVenmo").checked;
   await w.submitGlobalSettings(); await tick(80);
   ok("the ship-from address saved before the switch is untouched", (await admin({ action: "getShipFromAddress" })).body.shipFrom.street1 === "2 Elm St");
+
+  console.log("--- Shipping setup: on only with a Shippo key and a complete ship-from address ---");
+  {
+    const full = { name: "Acme", street1: "2 Elm St", city: "Columbus", state: "OH", zip: "43004", phone: "614-555-0100", email: "a@x.com" };
+    await setF({ shipping: false });
+    r = await admin({ action: "updateFeatures", features: { shipping: true }, shipFrom: { ...full, street1: "9 New Rd", phone: "", email: "" } });
+    ok("Shipping with an incomplete ship-from address is refused, naming what's missing — and nothing is saved", r.status === 400 && r.body.code === "shipping_setup" &&
+      /in the Ship-from address: Phone, Email/.test(r.body.message) && /or untick Shipping/.test(r.body.message) && (await lib.getFeatures(d1)).shipping === false &&
+      (await admin({ action: "getShipFromAddress" })).body.shipFrom.street1 === "2 Elm St");
+    r = await admin({ action: "updateFeatures", features: { shipping: true }, shipFrom: { ...full, zip: "4300" } });
+    ok("…so is one in the wrong format (by Region)", r.status === 400 && /ZIP must be 5 digits/.test(r.body.message) && (await lib.getFeatures(d1)).shipping === false);
+    const key = env.SHIPPO_API_KEY; delete env.SHIPPO_API_KEY;
+    r = await admin({ action: "updateFeatures", features: { shipping: true }, shipFrom: full });
+    ok("…and so is Shipping without a Shippo key, saying where it goes", r.status === 400 && /a Shippo key \(the SHIPPO_API_KEY secret/.test(r.body.message) && r.body.shippoKey === false && (await lib.getFeatures(d1)).shipping === false);
+    await shipOn();
+    r = await admin({ action: "updateFeatures", features: { storefront: true } });
+    ok("a change that doesn't mention Shipping isn't held up by it", r.status === 200);
+    await lib.setFeatures(d1, { shipping: false });
+    env.SHIPPO_API_KEY = key;
+    r = await admin({ action: "getFeatures" });
+    ok("the page is told whether there is a key — never the key", r.body.shippoKey === true && !JSON.stringify(r.body).includes(key));
+    r = await admin({ action: "updateFeatures", features: { shipping: true }, shipFrom: { ...full, street1: "5 Oak Ave" } });
+    ok("with a key and a complete address, both are saved together", r.status === 200 && r.body.features.shipping === true && (await admin({ action: "getShipFromAddress" })).body.shipFrom.street1 === "5 Oak Ave");
+    r = await admin({ action: "updateFeatures", features: { shipping: true } });
+    ok("…and later saves check the saved address", r.status === 200);
+
+    // The page: ticking Shipping shows the address; Save checks it before sending anything.
+    await setF({ shipping: false });
+    await go("settings"); await settle(() => doc.querySelectorAll("#gFeatures .gFeature").length === 5);
+    const shipBox = boxes().find(b => b.dataset.feature === "shipping"), section = doc.getElementById("gShipFromSection");
+    ok("Shipping off: no Ship-from section", !shipBox.checked && section.style.display === "none");
+    shipBox.checked = true; shipBox.dispatchEvent(new w.Event("change"));
+    ok("ticking Shipping shows it at once, with what's saved", section.style.display !== "none" && doc.getElementById("gShipStreet1").value === "5 Oak Ave" && /Required while Shipping is on/.test(section.textContent));
+    doc.getElementById("gShipPhone").value = ""; doc.getElementById("gShipZip").value = "abc";
+    sent.length = 0;
+    await w.submitGlobalSettings(); await tick(60);
+    const err = doc.getElementById("globalSettingsError").textContent;
+    ok("Save with a field missing sends nothing at all, and says what to fill in", sent.length === 0 && /Nothing was saved/.test(err) && /Phone/.test(err) && /ZIP must be 5 digits/.test(err) &&
+      doc.getElementById("gShipPhone").style.outline.includes("solid") && doc.getElementById("gShipZip").style.outline.includes("solid") && !doc.getElementById("gShipCity").style.outline);
+    doc.getElementById("gShipPhone").value = "614-555-0199"; doc.getElementById("gShipZip").value = "43004";
+    w.eval("window._gShippoKey = false");
+    sent.length = 0;
+    await w.submitGlobalSettings(); await tick(60);
+    ok("…and so does one without a Shippo key", sent.length === 0 && /a Shippo key/.test(doc.getElementById("globalSettingsError").textContent));
+    w.eval("window._gShippoKey = true");
+    sent.length = 0; sentBodies.length = 0;
+    await w.submitGlobalSettings(); await tick(80);
+    const featReq = sentBodies.find(b => b.action === "updateFeatures") || {};
+    ok("complete: the address goes with the features in one request, after the Region", featReq.features && featReq.features.shipping === true && featReq.shipFrom && featReq.shipFrom.phone === "614-555-0199" &&
+      !sent.includes("updateShipFromAddress") && sent.indexOf("updateLocaleSettings") < sent.indexOf("updateFeatures") && sent.indexOf("updateFeatures") < sent.indexOf("updateGlobalSettings"));
+    ok("…and both are saved", (await lib.getFeatures(d1)).shipping === true && (await admin({ action: "getShipFromAddress" })).body.shipFrom.phone === "614-555-0199");
+  }
   ok("admin.js still parses as a classic script", (() => { try { new Function(adminJs); return true; } catch (e) { return false; } })());
 
   // ------------------------------------------------------------------------------------------------
@@ -609,7 +664,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
   sw = await shopPage(); section = sw.eval("renderShippingSection(currentOrg)");
   ok("shipping off: only pickup and the shop's own option are offered — no ZIP box, no carrier rates", sw.eval("offersShipping_(currentOrg)") === false && sw.eval('featureOn_("shipping")') === false &&
     !/shippingZipInput|carrier/i.test(section) && /Local pickup/.test(section) && /Hand delivery/.test(section));
-  await setF({ shipping: true });
+  await shipOn();
   sw = await shopPage();
   ok("shipping back on: the ZIP box is back", /shippingZipInput/.test(sw.eval("renderShippingSection(currentOrg)")));
   const vAnswer = { status: "unavailable", feature: "designVerification", message: "Design approval isn't available right now. Please contact us about your order." };

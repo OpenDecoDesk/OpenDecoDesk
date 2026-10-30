@@ -233,20 +233,17 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
     r = await post(keyed, { action: "getFeatures", key: "x" });
     ok("with a key, Shipping is no longer locked", r.status === 200 && !r.body.locked.includes("shipping") && r.body.locked.includes("storefront"));
     r = await post(keyed, { action: "updateFeatures", key: "x", features: { shipping: true } });
+    ok("with a key but no ship-from address, Shipping is refused until it's filled in", r.status === 400 && /in the Ship-from address: Street address, City, State, ZIP, Phone, Email/.test(r.body.message) &&
+      !/Shippo key/.test(r.body.message));
+    r = await post(keyed, { action: "updateFeatures", key: "x", features: { shipping: true },
+      shipFrom: { name: "Stitch Co", street1: "1 Main St", city: "Columbus", state: "OH", zip: "43215", phone: "614-555-0100", email: "ship@stitch.test" } });
     ok("…and can be turned on", r.status === 200 && r.body.features.shipping === true);
     await lib.ensureDesktopReady(keyed);
     ok("with a key, the start-up step leaves Shipping as the owner set it", (await lib.getFeatures(d1)).shipping === true);
     await lib.ensureDesktopReady(env);
     ok("…and once the key is removed, the next start switches it off again", (await lib.getFeatures(d1)).shipping === false);
     await lib.ensureDesktopReady(keyed);
-    ok("adding a key turns Shipping on at the next start (the owner asked for carrier shipping)", (await lib.getFeatures(d1)).shipping === true);
-    await lib.setFeatures(d1, { shipping: false });
-    await lib.ensureDesktopReady(keyed);
-    ok("…once: turned off again by the owner, it stays off", (await lib.getFeatures(d1)).shipping === false);
-    await lib.ensureDesktopReady(env);
-    await lib.ensureDesktopReady(keyed);
-    ok("…and a key removed and added again turns it on again", (await lib.getFeatures(d1)).shipping === true);
-    await lib.setFeatures(d1, { shipping: false });
+    ok("adding a key only unlocks Shipping: the owner turns it on, with the ship-from address", (await lib.getFeatures(d1)).shipping === false);
 
     // Local sale → Ship this order (the form is shared, so a cloud install gets it too).
     const sale = (e, extra, hostname) => post(e, { action: "createLocalSale", key: "x", org: "shop", paymentMethod: "Cash", customerName: "Pat",
@@ -370,7 +367,7 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   ok("…and Global settings' notes speak of the business, not a site and its emails", /packing slips, labels, invoices and reports/.test(adminJs) && /dates and times on orders and reports/.test(adminJs));
   const shippo = w.desktopShippoSectionHtml_(false, false);
   ok("Global settings explains carrier shipping by hand and with a Shippo key, and takes the key in a password field", /Ship this order/.test(shippo) && /No Shippo key yet/.test(shippo) && /type="password" id="gShippoKey"/.test(shippo) && !/gShippoRemove/.test(shippo));
-  ok("…with a key set it offers to remove it, and never shows the key", /A Shippo key is set — turn on Shipping/.test(w.desktopShippoSectionHtml_(true, false)) && /gShippoRemove/.test(w.desktopShippoSectionHtml_(true, true)));
+  ok("…with a key set it offers to remove it, and never shows the key", /A Shippo key is set — to use it, tick Shipping/.test(w.desktopShippoSectionHtml_(true, false)) && /gShippoRemove/.test(w.desktopShippoSectionHtml_(true, true)));
   ok("a tracking number on an order sent by FedEx links to FedEx", /fedex\.com\/fedextrack\/\?trknbr=7712/.test(w.trackingCell({ orgId: "shop" }, { orderId: "F1", trackingNumber: "7712", shippingMethod: "FedEx Ground", items: [{}], labels: [] })));
   ok("Local sale has a Ship this order section with the address, carrier and charge", ["lsShip", "lsShipLine1", "lsShipCity", "lsShipZip", "lsShipCarrier", "lsShipService", "lsShipCost"].every(id => adminJs.includes(`id="${id}"`)) && !adminJs.includes('id="lsAddress"'));
   w.eval('siteEdition = ""');

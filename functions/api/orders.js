@@ -48,7 +48,7 @@ import {
   getAllOrgs, getOrgById, createOrg, updateOrg, cleanDeliveryOptions, setOrgDeliveryOptions, defaultDeliveryOptions, cleanShippingAddress, stagePrereqError, getSystemIssues,
   getProductsByOrg, productShipWeightOz, createProduct, updateProduct, setProductVisible,
   getGlobalSettings, setGlobalSettings, getMachineSettings, setMachineSettings,
-  getShipFromAddress, setShipFromAddress, getBusinessProfile, setBusinessProfile, getLocaleSettings, setLocaleSettings, FEATURES, getFeatures, setFeatures, resolveTimeZone, setOrdersCompleted, getShippedAwaitingDelivery,
+  getShipFromAddress, setShipFromAddress, shipFromMissing, getBusinessProfile, setBusinessProfile, getLocaleSettings, setLocaleSettings, FEATURES, getFeatures, setFeatures, resolveTimeZone, setOrdersCompleted, getShippedAwaitingDelivery,
   getBoxPresets, setBoxPresets,
   addShippingPaidAmount, setShippingPaidAmount,
   getAllInventory, createInventoryItem, updateInventoryItem, deleteInventoryItem,
@@ -311,8 +311,10 @@ const FEATURE_ACTIONS = {
     "listExpenseCategories", "saveExpenseCategory", "deleteExpenseCategory",
     "listExpenses", "saveExpense", "deleteExpense", "getExpenseReport", "previewExpenseImport", "importExpenses",
   ],
+  // (Reading the ship-from address isn't behind the switch: Global settings shows it as soon as
+  // Shipping is ticked, before it's saved on.)
   shipping: [
-    "getShipFromAddress", "updateShipFromAddress", "getBoxPresets", "setBoxPresets",
+    "updateShipFromAddress", "getBoxPresets", "setBoxPresets",
     "getOrderForShipping", "checkDeliveries", "checkBlankShipments",
   ],
   designVerification: [
@@ -3095,8 +3097,10 @@ export async function onRequestPost(context) {
     // The desktop edition (hostConfig.js): the switches that need the internet are shown as locked
     // off, and turning one on is refused below — carrier shipping only until a Shippo key is set.
     const lockedFeatures_ = isDesktopEdition(env) ? desktopLockedFeatures(env) : [];
+    // shippoKey: whether this install has a Shippo key (never the key) — Shipping can't be on without
+    // one, and the Global settings page checks that before it saves anything.
     if (body.action === "getFeatures") {
-      return jsonResponse({ status: "ok", features: await getFeatures(env.DB), list: FEATURES, locked: lockedFeatures_ });
+      return jsonResponse({ status: "ok", features: await getFeatures(env.DB), list: FEATURES, locked: lockedFeatures_, shippoKey: !!env.SHIPPO_API_KEY });
     }
     if (body.action === "updateFeatures") {
       const before = await getFeatures(env.DB);
@@ -3109,6 +3113,29 @@ export async function onRequestPost(context) {
           : k === "designVerification" ? "Design approval needs email — set up your mailbox under Global settings → Email."
           : `${featureLabel_(k)} isn't part of the desktop version.` }, 400);
       }
+      // Shipping on (asked for in this request) needs what buying a label needs: a Shippo key and a
+      // complete ship-from address. The address can come with the request (Global settings sends
+      // it here, so the two are saved together), else the saved one is checked. Nothing is saved
+      // while either is missing. A request that doesn't mention Shipping isn't held up by it.
+      let shipFromToSave = null;
+      if (want.shipping === true) {
+        const { country } = await getLocaleSettings(env.DB);
+        const sent = body.shipFrom && typeof body.shipFrom === "object" ? body.shipFrom : null;
+        if (sent) { const bad = shipFromFormatError_(sent, country); if (bad) return jsonResponse({ status: "error", message: "Ship-from address: " + bad }, 400); }
+        const missing = shipFromMissing(sent || await getShipFromAddress(env.DB, env), country);
+        if (!env.SHIPPO_API_KEY || missing.length) {
+          const need = [!env.SHIPPO_API_KEY ? (isDesktopEdition(env) ? "a Shippo key (Global settings → Carrier shipping (Shippo))" : "a Shippo key (the SHIPPO_API_KEY secret — see docs/configuration.md)") : "",
+            missing.length ? "in the Ship-from address: " + missing.join(", ") : ""].filter(Boolean).join(", and ");
+          return jsonResponse({ status: "error", code: "shipping_setup", shippoKey: !!env.SHIPPO_API_KEY, missing,
+            message: `Shipping needs ${need}. Fill ${missing.length && env.SHIPPO_API_KEY ? "them" : "it"} in, or untick Shipping.` }, 400);
+        }
+        shipFromToSave = sent ? { a: sent, country } : null;
+      }
+      if (shipFromToSave) {
+        const before = await getShipFromAddress(env.DB, env);
+        const shipFrom = await setShipFromAddress(env.DB, shipFromToSave.a, shipFromToSave.country);
+        audit({ orgId: null, orderId: null, action: "settings.ship_from_set", detail: { from: before, to: shipFrom } });
+      }
       const changes = {};
       for (const f of FEATURES) if (typeof want[f.key] === "boolean" && want[f.key] !== before[f.key]) changes[f.key] = { from: before[f.key], to: want[f.key] };
       // Audited FIRST: switching a feature off takes pages and actions away, so there's always a record.
@@ -3119,7 +3146,7 @@ export async function onRequestPost(context) {
       const features = await setFeatures(env.DB, want);
       // Everything reads the switches from the cached catalog — refresh it.
       try { await bumpCatalogVersion(env.DB); invalidateCatalogVersionCache(); } catch (e) { console.error("catalog version bump failed:", e); }
-      return jsonResponse({ status: "ok", features, list: FEATURES, locked: lockedFeatures_ });
+      return jsonResponse({ status: "ok", features, list: FEATURES, locked: lockedFeatures_, shippoKey: !!env.SHIPPO_API_KEY });
     }
     if (body.action === "getShipFromAddress") {
       const shipFrom = await getShipFromAddress(env.DB, env);
@@ -3127,17 +3154,9 @@ export async function onRequestPost(context) {
     }
     if (body.action === "updateShipFromAddress") {
       const a = body.shipFrom || {};
-      // US formats only when the install is in the US (Region); elsewhere both are free text.
       const { country } = await getLocaleSettings(env.DB);
-      if (country === "US" && a.zip && !/^\d{5}(-\d{4})?$/.test(String(a.zip).trim())) {
-        return jsonResponse({ status: "error", message: "ZIP must be 5 digits (or ZIP+4)" }, 400);
-      }
-      if (country === "US" && a.state && !/^[A-Za-z]{2}$/.test(String(a.state).trim())) {
-        return jsonResponse({ status: "error", message: "State must be a 2-letter code" }, 400);
-      }
-      if (a.email && !/^\S+@\S+\.\S+$/.test(String(a.email).trim())) {
-        return jsonResponse({ status: "error", message: "That doesn't look like a valid email" }, 400);
-      }
+      const bad = shipFromFormatError_(a, country);
+      if (bad) return jsonResponse({ status: "error", message: bad }, 400);
       const before = await getShipFromAddress(env.DB, env);
       const shipFrom = await setShipFromAddress(env.DB, a, country);
       audit({ orgId: null, orderId: null, action: "settings.ship_from_set", detail: { from: before, to: shipFrom } });
@@ -5023,6 +5042,15 @@ export async function onRequestPost(context) {
         contentType: type, contentBase64: btoa(bin), cid: "proof" + (attachments.length + 1) });
     }
     return { attachments, linked };
+  }
+
+  // A ship-from address's format, by Region: US ZIP and 2-letter state only in the US (elsewhere both
+  // are free text), and an email that looks like one. "" when fine.
+  function shipFromFormatError_(a, country) {
+    if (country === "US" && a.zip && !/^\d{5}(-\d{4})?$/.test(String(a.zip).trim())) return "ZIP must be 5 digits (or ZIP+4)";
+    if (country === "US" && a.state && !/^[A-Za-z]{2}$/.test(String(a.state).trim())) return "State must be a 2-letter code";
+    if (a.email && !/^\S+@\S+\.\S+$/.test(String(a.email).trim())) return "That doesn't look like a valid email";
+    return "";
   }
 
   // ---- listDesignVerifications — latest verification per order for an org -----

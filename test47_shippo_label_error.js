@@ -77,10 +77,11 @@ async function migratedDb(){
 
   console.log("\n=== admin.js: Global Settings screen has a ship-from address form ===");
   const adminJs = read("public/admin.js");
-  console.log("form fields present and wired to updateShipFromAddress:",
+  // (Global settings sends the address with the Shipping switch, in updateFeatures — saved together or not at all.)
+  console.log("form fields present and wired to updateFeatures' shipFrom:",
     /id="gShipName"/.test(adminJs) && /id="gShipStreet1"/.test(adminJs) && /id="gShipCity"/.test(adminJs) &&
     /id="gShipState"/.test(adminJs) && /id="gShipZip"/.test(adminJs) && /id="gShipPhone"/.test(adminJs) && /id="gShipEmail"/.test(adminJs) &&
-    /action:\s*"updateShipFromAddress"/.test(adminJs) && /action:\s*"getShipFromAddress"/.test(adminJs));
+    /action: "updateFeatures", key: adminKey, features: want, \.\.\.\(shipFrom \? \{ shipFrom \} : \{\}\)/.test(adminJs) && /action:\s*"getShipFromAddress"/.test(adminJs));
   console.log("the old SHIP_FROM_* env vars are referenced ONLY by the temporary bridge in db.js (nowhere in the client or the API handlers):",
     !/SHIP_FROM_(NAME|STREET1|CITY|STATE|ZIP|PHONE|EMAIL)/.test(adminJs) &&
     !/SHIP_FROM_(NAME|STREET1|CITY|STATE|ZIP|PHONE|EMAIL)/.test(read("functions/api/shippo-label.js")) &&

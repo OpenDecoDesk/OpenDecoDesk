@@ -163,9 +163,11 @@ follow tracking. This needs the internet, and labels are paid to Shippo.
    the API token from Shippo (its Settings → API) and choose **Save key**. The program restarts for
    a moment. The key is kept with the program's other secrets in `desktop.json`, encrypted where
    the system has a keychain, and never in the database.
-2. **Shipping** under Features is turned on with the key (you can turn it off there; it stays off
-   until a key is added again). Fill in the **Ship-from address** that appears. Region's country
-   must be the US: carrier rates and labels are US-only, as on a cloud install.
+2. Tick **Shipping** under Features: the **Ship-from address** appears below it. Fill it all in
+   (everything but the name: what USPS needs to sell a label) and **Save global settings**.
+   Nothing is saved while the key or any of the address is missing; the page says what to fill in,
+   or you untick Shipping. Region's country must be the US: carrier rates and labels are US-only,
+   as on a cloud install.
 3. For a shop to offer it, add **Shipping** to the shop under Manage catalog → the shop's
    **Edit** → Delivery & pickup.
 4. An order with an address then has a **Ship** button: it gets the rates and buys the label.

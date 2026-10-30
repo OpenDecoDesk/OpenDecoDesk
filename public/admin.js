@@ -1184,7 +1184,7 @@ function desktopShippoSectionHtml_(keySet, shippingOn){
   return `<div id="gShippoSection">
         <h2 style="margin:22px 0 12px;">Carrier shipping (Shippo)</h2>
         <div class="admin-note" style="margin-bottom:10px;">Without this, shipping is by hand: tick <strong>Ship this order</strong> in Local sale for the address, carrier and charge, and type the tracking number on the order. With a key from your Shippo account, turn on <strong>Shipping</strong> under Features (below) for carrier rates, buying and printing labels from the order's <strong>Ship</strong> button, and tracking checks every two hours while this program is open. Those need the internet; labels are paid to Shippo.</div>
-        <div id="gShippoStatus" style="font-size:14px;margin-bottom:8px;">${keySet ? `A Shippo key is set${shippingOn ? ": Shipping is on. Add it to a shop under Manage catalog → the shop's Edit → Delivery &amp; pickup, and fill in the Ship-from address below." : " — turn on Shipping under Features to use it."}` : "No Shippo key yet."}</div>
+        <div id="gShippoStatus" style="font-size:14px;margin-bottom:8px;">${keySet ? `A Shippo key is set${shippingOn ? ": Shipping is on. Add it to a shop under Manage catalog → the shop's Edit → Delivery &amp; pickup." : " — to use it, tick Shipping under Features, fill in the Ship-from address that appears, and Save."}` : "No Shippo key yet."}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
           <input type="password" id="gShippoKey" maxlength="200" autocomplete="off" spellcheck="false" placeholder="${keySet ? "Paste a new key to replace it" : "shippo_live_… or shippo_test_…"}" style="max-width:320px;">
           <button class="admin-btn" type="button" id="gShippoSave">Save key</button>
@@ -7928,8 +7928,9 @@ async function renderGlobalSettings(app){
       const td = await tr.json();
       if(tr.ok && td.status === "ok") salesTax = td.salesTax;
     }catch(e){}
+    // Read whether Shipping is on or not: ticking it shows the section, with what's saved.
     let shipFrom = { name: "", street1: "", city: "", state: "", zip: "", phone: "", email: "" };
-    if(typeof featureOn_ !== "function" || featureOn_("shipping")) try{
+    try{
       const sr = await fetch("/api/orders", { method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({action: "getShipFromAddress", key: adminKey}) });
       const sd = await sr.json();
@@ -7961,6 +7962,7 @@ async function renderGlobalSettings(app){
       const fd = await fr.json();
       if(fr.ok && fd.status === "ok"){
         featureList = fd.list || []; features = fd.features || {}; lockedFeatures = Array.isArray(fd.locked) ? fd.locked : [];
+        window._gShippoKey = typeof fd.shippoKey === "boolean" ? fd.shippoKey : null;   // null: the server didn't say
         featureList.forEach(f => { FEATURE_LABELS_[f.key] = f.label; });
         if(typeof applyFeatures_ === "function") applyFeatures_(features);
       }
@@ -8075,7 +8077,7 @@ async function renderGlobalSettings(app){
 
         <div id="gShipFromSection"${shippingOn ? "" : ' style="display:none;"'}>
         <h2 style="margin:22px 0 12px;">Ship-from address</h2>
-        <div class="admin-note" style="margin-bottom:14px;">Printed on every shipping label as the sender, and used for shipping-rate quotes on the storefront. USPS requires all of these (except Name) to actually purchase a label — rate quotes still work with just the ZIP.</div>
+        <div class="admin-note" style="margin-bottom:14px;">Printed on every shipping label as the sender, and used for shipping-rate quotes${adminDesktop_() ? "" : " on the storefront"}. <strong>Required while Shipping is on:</strong> everything but Name — what USPS needs to sell a label. Settings aren't saved until it's complete.</div>
         <label>Name
           <input type="text" id="gShipName" maxlength="100" value="${escapeHtml(shipFrom.name || "")}">
         </label>
@@ -8143,6 +8145,7 @@ async function renderGlobalSettings(app){
       </div>
     `;
     loadVendorShippingSettings_();
+    wireGlobalShippingToggle_();
     wireDesktopEmailSection_();
     wireDesktopShippoSection_();
     wireDesktopSuppliersSection_();
@@ -8233,9 +8236,45 @@ function setupStatusHtml_(items){
 function globalSettingsNeedPublish_(){
   return ["gPayCard", "gPayVenmo", "gPayZelle", "gPayCheck"].some(id => { const e = document.getElementById(id); return !!e && e.checked !== e.defaultChecked; });
 }
+// Global settings → Features → Shipping: its Ship-from address shows as soon as the box is ticked
+// (it's filled in and saved in the same Save), and hides when it's unticked.
+function wireGlobalShippingToggle_(){
+  const box = document.querySelector('#gFeatures .gFeature[data-feature="shipping"]'), sec = document.getElementById("gShipFromSection");
+  if (!box || !sec) return;
+  box.addEventListener("change", () => { sec.style.display = box.checked ? "" : "none"; if (box.checked && sec.scrollIntoView) sec.scrollIntoView({ block: "nearest" }); });
+}
+// Shipping ticked needs a Shippo key and a complete ship-from address (functions/api/orders.js
+// updateFeatures refuses otherwise): checked before anything is sent, so nothing is half saved.
+// Returns "" or what's wrong, and outlines the fields to fill in.
+function globalShippingProblem_(){
+  const box = document.querySelector('#gFeatures .gFeature[data-feature="shipping"]');
+  const fields = ["gShipStreet1", "gShipCity", "gShipState", "gShipZip", "gShipPhone", "gShipEmail"];
+  fields.forEach(id => { const e = document.getElementById(id); if (e) e.style.outline = ""; });
+  if (!box || !box.checked || box.disabled) return "";
+  const us = (((document.getElementById("gLocaleCountry") || {}).value) || (adminIsUS_() ? "US" : "OTHER")) !== "OTHER";
+  const val = (id) => ((document.getElementById(id) || {}).value || "").trim();
+  const label = { gShipStreet1: "Street address", gShipCity: "City", gShipState: us ? "State" : "State / region", gShipZip: us ? "ZIP" : "Postal code", gShipPhone: "Phone", gShipEmail: "Email" };
+  const missing = fields.filter(id => !val(id));
+  const bad = [];
+  if (us && val("gShipZip") && !/^\d{5}(-\d{4})?$/.test(val("gShipZip"))) bad.push(["gShipZip", "the ZIP must be 5 digits (or ZIP+4)"]);
+  if (us && val("gShipState") && !/^[A-Za-z]{2}$/.test(val("gShipState"))) bad.push(["gShipState", "the state must be a 2-letter code"]);
+  if (val("gShipEmail") && !/^\S+@\S+\.\S+$/.test(val("gShipEmail"))) bad.push(["gShipEmail", "the email doesn't look like one"]);
+  const noKey = window._gShippoKey === false;
+  if (!noKey && !missing.length && !bad.length) return "";
+  [...missing, ...bad.map(b => b[0])].forEach(id => { const e = document.getElementById(id); if (e) e.style.outline = "2px solid #b03a2e"; });
+  const sec = document.getElementById("gShipFromSection");
+  if (sec && (missing.length || bad.length)) { sec.style.display = ""; if (sec.scrollIntoView) sec.scrollIntoView({ block: "center" }); }
+  const parts = [noKey ? (adminDesktop_() ? "a Shippo key (Carrier shipping (Shippo), above)" : "a Shippo key (the SHIPPO_API_KEY secret — see docs/configuration.md)") : "",
+    missing.length ? "in the Ship-from address: " + missing.map(id => label[id]).join(", ") : "",
+    bad.length ? "in the Ship-from address, " + bad.map(b => b[1]).join("; ") : ""].filter(Boolean);
+  return `Nothing was saved. Shipping needs ${parts.join(", and ")}. Fill ${parts.length > 1 || missing.length > 1 ? "them" : "it"} in, or untick Shipping.`;
+}
+
 async function submitGlobalSettings(){
   const errEl = document.getElementById("globalSettingsError");
   if(errEl) errEl.textContent = "";
+  const problem = globalShippingProblem_();
+  if(problem){ if(errEl) errEl.textContent = problem; showToast(problem, true); return; }   // the page has scrolled to the fields: say it there too
   const needPublish = globalSettingsNeedPublish_();
   const body = {
     action: "updateGlobalSettings",
@@ -8250,40 +8289,7 @@ async function submitGlobalSettings(){
     }
   };
   try{
-    const res = await fetch("/api/orders", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(body)
-    });
-    const data = await res.json();
-    if(!res.ok || data.status === "error"){
-      if(errEl) errEl.textContent = (data && data.message) || "Something went wrong.";
-      return;
-    }
-    // Features: saved before the sections below, which are only sent for a feature that is (still) on.
-    // The ship-from address and the Machine Files setting are saved only if their section was shown
-    // when the page loaded — a feature switched on in this same save has its settings on the next visit.
-    const shipShown = (document.getElementById("gShipFromSection") || {style: {}}).style.display !== "none";
-    const machShown = (document.getElementById("gMachineSection") || {style: {}}).style.display !== "none";
-    let savedFeatures = null;
-    const featBoxes = [...document.querySelectorAll("#gFeatures .gFeature")];
-    if(featBoxes.length){
-      const want = {}; featBoxes.forEach(b => { want[b.dataset.feature] = b.checked; });
-      const featRes = await fetch("/api/orders", {
-        method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ action: "updateFeatures", key: adminKey, features: want })
-      });
-      const featData = await featRes.json();
-      if(!featRes.ok || featData.status === "error"){
-        if(errEl) errEl.textContent = (featData && featData.message) || "Could not save the features.";
-        return;
-      }
-      savedFeatures = featData.features || want;
-      if(typeof applyFeatures_ === "function") applyFeatures_(savedFeatures);   // the menu follows at once
-      _accountsCache = null;
-      renderAdminNav();
-    }
-    const stillOn = (k) => !savedFeatures || savedFeatures[k] !== false;
-    // Region first: the country decides how the tax state and the ship-from address below are checked.
+    // Region first: the country decides how the ship-from address, and the tax state below, are checked.
     if(document.getElementById("gLocaleCountry")){
       const locRes = await fetch("/api/orders", {
         method: "POST", headers: {"Content-Type": "application/json"},
@@ -8297,6 +8303,41 @@ async function submitGlobalSettings(){
         return;
       }
       if(typeof applyCountry_ === "function") applyCountry_(locData.locale && locData.locale.country);
+    }
+    // Features next, with Shipping's ship-from address in the same request when Shipping is ticked:
+    // the server saves the two together, or neither (orders.js updateFeatures). The Machine Files
+    // setting is saved only if its section was shown when the page loaded.
+    const machShown = (document.getElementById("gMachineSection") || {style: {}}).style.display !== "none";
+    let savedFeatures = null;
+    const featBoxes = [...document.querySelectorAll("#gFeatures .gFeature")];
+    if(featBoxes.length){
+      const want = {}; featBoxes.forEach(b => { want[b.dataset.feature] = b.checked; });
+      const sv = (id) => ((document.getElementById(id) || {}).value || "").trim();
+      const shipFrom = want.shipping && document.getElementById("gShipStreet1") ? { name: sv("gShipName"), street1: sv("gShipStreet1"), city: sv("gShipCity"),
+        state: sv("gShipState"), zip: sv("gShipZip"), phone: sv("gShipPhone"), email: sv("gShipEmail") } : null;
+      const featRes = await fetch("/api/orders", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ action: "updateFeatures", key: adminKey, features: want, ...(shipFrom ? { shipFrom } : {}) })
+      });
+      const featData = await featRes.json();
+      if(!featRes.ok || featData.status === "error"){
+        if(errEl) errEl.textContent = (featData && featData.message) || "Could not save the features.";
+        return;
+      }
+      savedFeatures = featData.features || want;
+      if(typeof applyFeatures_ === "function") applyFeatures_(savedFeatures);   // the menu follows at once
+      _accountsCache = null;
+      renderAdminNav();
+    }
+    const stillOn = (k) => !savedFeatures || savedFeatures[k] !== false;
+    const res = await fetch("/api/orders", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if(!res.ok || data.status === "error"){
+      if(errEl) errEl.textContent = (data && data.message) || "Something went wrong.";
+      return;
     }
     const taxRes = await fetch("/api/orders", {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -8325,26 +8366,6 @@ async function submitGlobalSettings(){
         return;
       }
       applyBusiness_(bizData.business);   // the header and page titles follow at once
-    }
-    if(shipShown && stillOn("shipping")){
-    const shipRes = await fetch("/api/orders", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ action: "updateShipFromAddress", key: adminKey,
-        shipFrom: {
-          name: document.getElementById("gShipName").value.trim(),
-          street1: document.getElementById("gShipStreet1").value.trim(),
-          city: document.getElementById("gShipCity").value.trim(),
-          state: document.getElementById("gShipState").value.trim(),
-          zip: document.getElementById("gShipZip").value.trim(),
-          phone: document.getElementById("gShipPhone").value.trim(),
-          email: document.getElementById("gShipEmail").value.trim(),
-        } })
-    });
-    const shipData = await shipRes.json();
-    if(!shipRes.ok || shipData.status === "error"){
-      if(errEl) errEl.textContent = (shipData && shipData.message) || "Could not save the ship-from address.";
-      return;
-    }
     }
     if(machShown && stillOn("production")){
     const machRes = await fetch("/api/orders", {

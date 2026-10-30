@@ -332,7 +332,7 @@ const ok = (d, c) => { console.log(d + ":", !!c); c ? pass++ : fail++; };
     const order2 = calls.map(c2 => c2.action);
     const sent = calls.find(c2 => c2.action === "updateLocaleSettings");
     ok("Save sends the region with the rest", !!sent && sent.locale.timeZone === "Europe/London" && sent.locale.country === "OTHER");
-    ok("…before the tax state and the ship-from address, which are checked against the country", order2.indexOf("updateLocaleSettings") >= 0 && order2.indexOf("updateLocaleSettings") < order2.indexOf("updateSalesTaxSettings") && order2.indexOf("updateLocaleSettings") < order2.indexOf("updateShipFromAddress"));
+    ok("…first, before the tax state and the ship-from address (sent with the features), which are checked against the country", order2[0] === "updateLocaleSettings" && order2.indexOf("updateLocaleSettings") < order2.indexOf("updateSalesTaxSettings"));
     ok("the admin's own forms follow at once", w2.eval("adminIsUS_()") === false);
     doc.body.insertAdjacentHTML("beforeend", '<div id="orgFormDelivery"></div>');
     w2.setOrgDeliveryList_([{ type: "pickup" }, { type: "shipping" }]);
