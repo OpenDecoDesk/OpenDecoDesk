@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld("oddDesktop", {
   // email off (null). Saving restarts the program's server and reloads the page.
   emailSettings: () => ipcRenderer.invoke("odd:email-settings"),
   setEmail: (settings, password) => ipcRenderer.invoke("odd:set-email", settings, password),
+  // Orders → Save invoice PDF…: the invoice page from the server (orders.js getInvoiceDocument),
+  // made into a PDF and saved where the owner chooses. { ok, path } or { ok: false, canceled | message }.
+  saveInvoicePdf: (doc) => ipcRenderer.invoke("odd:save-invoice-pdf", doc),
   // The backup reminder: { createdAt, lastBackupAt } (ISO times or null), and File → Back up….
   backupStatus: () => ipcRenderer.invoke("odd:backup-status"),
   backUp: () => ipcRenderer.invoke("odd:back-up"),

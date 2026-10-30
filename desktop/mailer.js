@@ -77,12 +77,24 @@ function explain(e, settings) {
   return said && !what.includes(said) ? what + " (" + said + ")" : what;
 }
 
+// A PDF to make from a page and attach (the invoice — email.js invoiceDocument): { filename, html,
+// pageSize }, or null when it isn't one.
+const MAX_PDF_HTML = 1024 * 1024;   // well inside what a data: address can carry (main.js renderPdf)
+function cleanPdf(pdf) {
+  if (!pdf || typeof pdf !== "object" || typeof pdf.html !== "string" || !pdf.html || pdf.html.length > MAX_PDF_HTML) return null;
+  const filename = (String(pdf.filename || "document.pdf").replace(/[^A-Za-z0-9 ._-]/g, "_").slice(0, 80).replace(/\.pdf$/i, "") || "document") + ".pdf";
+  return { filename, html: pdf.html, pageSize: pdf.pageSize === "A4" ? "A4" : "Letter" };
+}
+
 class Mailer {
   // `transport` is for tests: anything with sendMail(message) and verify().
-  constructor(settings, password, { log = () => {}, transport } = {}) {
+  // `renderPdf(html, pageSize)` → a Buffer: the program's own (main.js, Electron's printing). Without
+  // it (node desktop/server.js) an email that asks for a PDF goes without one.
+  constructor(settings, password, { log = () => {}, transport, renderPdf } = {}) {
     this.settings = cleanSmtpSettings(settings);
     this.transport = transport || transportFor(this.settings, password);
     this.log = log;
+    this.renderPdf = renderPdf || null;
   }
 
   // Signs in to the server without sending anything. { ok, message }.
@@ -93,11 +105,20 @@ class Mailer {
 
   // One message, from the mailbox's own address (a mailbox rewrites or refuses any other) under
   // the business's name. { ok, message }.
-  async send({ to, fromName, replyTo, bcc, subject, html, text, attachments } = {}) {
+  async send({ to, fromName, replyTo, bcc, subject, html, text, attachments, pdf } = {}) {
     to = String(to || "").trim();
     if (!EMAIL_RE.test(to)) return { ok: false, message: "That isn't an email address: " + to.slice(0, 100) };
     const att = cleanAttachments(attachments);
     if (att.error) return { ok: false, message: att.error };
+    // The PDF, made here. The email carries everything in its own text too, so one that can't be
+    // made doesn't stop it: the log says so.
+    const doc = cleanPdf(pdf);
+    if (doc) {
+      try {
+        if (!this.renderPdf) throw new Error("this copy of the program can't make PDFs");
+        att.attachments.push({ filename: doc.filename, contentType: "application/pdf", content: await this.renderPdf(doc.html, doc.pageSize) });
+      } catch (e) { this.log("PDF not attached to: " + String(subject || "").slice(0, 120) + " — " + String((e && e.message) || e).slice(0, 200)); }
+    }
     const name = String(fromName || "").replace(/[<>"\r\n]/g, "").trim().slice(0, 100);
     const bccList = (Array.isArray(bcc) ? bcc : bcc ? [bcc] : []).map(String).filter(a => EMAIL_RE.test(a));
     const reply = EMAIL_RE.test(String(replyTo || "")) && String(replyTo).toLowerCase() !== this.settings.from.toLowerCase() ? String(replyTo) : undefined;
@@ -130,4 +151,4 @@ class Mailer {
   }
 }
 
-module.exports = { Mailer, cleanSmtpSettings };
+module.exports = { Mailer, cleanSmtpSettings, cleanPdf };

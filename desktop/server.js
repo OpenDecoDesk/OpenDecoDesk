@@ -110,7 +110,9 @@ const stamp = () => new Date().toISOString().replace(/[:.]/g, "-").replace("T", 
 //   log           called with each message of the program's own (start-up, updates, copies)
 //   onOutput      called with what the Worker prints (its console.log / console.error), as text;
 //                 without it, Miniflare prints it to the terminal
-async function startServer({ dataDir, port, protect, unprotect, log = () => {}, onOutput } = {}) {
+//   renderPdf     (html, pageSize) → a PDF Buffer, for invoices emailed with their PDF (main.js);
+//                 without it they go without one
+async function startServer({ dataDir, port, protect, unprotect, log = () => {}, onOutput, renderPdf } = {}) {
   const { Miniflare } = require("miniflare");
   const root = appRoot();
   fs.mkdirSync(dataDir, { recursive: true });
@@ -139,7 +141,7 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {}, 
   const bucket = (name) => ({ scriptName: "files", bindings: { BUCKET: name } });
   // Email through the owner's mailbox (Global settings → Email), once it is set up: the Worker's
   // MAILER binding is answered here by mailer.js, which alone holds the password.
-  const mailer = cfg.smtp && secrets.SMTP_PASSWORD ? new Mailer(cfg.smtp, secrets.SMTP_PASSWORD, { log }) : null;
+  const mailer = cfg.smtp && secrets.SMTP_PASSWORD ? new Mailer(cfg.smtp, secrets.SMTP_PASSWORD, { log, renderPdf }) : null;
   const options = (p) => ({
     host: "127.0.0.1",
     port: p,

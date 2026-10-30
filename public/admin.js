@@ -3316,8 +3316,28 @@ function invoiceCell_(org, o){
   // (The desktop program's invoice is the email itself, with no page to open: no "opened" to report.)
   const status = inv ? `<div class="mono invoice-status" style="font-size:11px;color:var(--ink-soft);margin-top:4px;line-height:1.35;">Invoice sent ${escapeHtml(day(inv.sentAt))}` +
     `${adminDesktop_() ? "" : inv.viewedAt ? " · opened" : " · not opened yet"}${inv.deliveryChosenAt ? " · delivery chosen" : ""}</div>` : "";
-  const btn = owes && !adminDesktopNoEmail_() ? `<button class="admin-btn" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="showSendInvoiceModal(this.dataset.org, this.dataset.order)" title="${adminDesktop_() ? "Email the customer the invoice and how to pay" : "Email the customer a link to choose delivery and pay online"}" style="margin-top:4px;">${inv ? "Resend invoice…" : "Send invoice…"}</button>` : "";
-  return btn + status;
+  const btn = owes && !adminDesktopNoEmail_() ? `<button class="admin-btn" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="showSendInvoiceModal(this.dataset.org, this.dataset.order)" title="${adminDesktop_() ? "Email the customer the invoice (with a PDF of it) and how to pay" : "Email the customer a link to choose delivery and pay online"}" style="margin-top:4px;">${inv ? "Resend invoice…" : "Send invoice…"}</button>` : "";
+  // The desktop program can save the invoice as a PDF (to print, or hand over) — email or not, and
+  // for a paid order too (it then says "Paid in full").
+  const pdfBtn = adminDesktop_() && !o.voidedAt && window.oddDesktop && typeof window.oddDesktop.saveInvoicePdf === "function"
+    ? `<button class="admin-btn admin-btn-secondary" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="saveInvoicePdf_(this.dataset.org, this.dataset.order)" title="Save this order's invoice as a PDF, to print or send yourself" style="margin-top:4px;">Save invoice PDF…</button>` : "";
+  return btn + pdfBtn + status;
+}
+
+// Orders → Save invoice PDF… (desktop): the server makes the invoice page, the program makes it a
+// PDF and asks where to save it.
+async function saveInvoicePdf_(orgId, orderId){
+  if (!adminKey) adminKey = (await adminLogin()) || "";
+  if (!adminKey) return;
+  try {
+    const res = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "getInvoiceDocument", org: orgId, orderId, key: adminKey }) });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") { showToast((data && data.message) || "Couldn't make the invoice.", true); return; }
+    const r = await window.oddDesktop.saveInvoicePdf(data.document);
+    if (r && r.ok) showToast("Saved " + String(r.path || "").split(/[\\/]/).pop() + ".");
+    else if (r && !r.canceled) showToast(r.message || "Couldn't save the PDF.", true);
+  } catch (e) { showToast("Couldn't save the PDF.", true); }
 }
 
 // Orders → Send invoice…: who it goes to, an optional note, and whether the customer may choose how
@@ -3330,7 +3350,7 @@ function showSendInvoiceModal(orgId, orderId){
   const inp = "font-size:14px;padding:7px 9px;border:1px solid #ccc;border-radius:4px;width:100%;box-sizing:border-box;";
   const { ov, close } = inventoryModal_(o.invoice ? "Resend invoice" : "Send invoice", `
     <div style="font-size:13px;color:#555;margin-bottom:12px;">${adminDesktop_()
-      ? `Emails ${escapeHtml(o.customerName && o.customerName !== "Local Sale" ? o.customerName : "the customer")} the invoice for order <b>${escapeHtml(o.orderId)}</b>: what's owed (<b>$${Number(o.balanceDue).toFixed(2)}</b>) and how to pay, from your Business profile (Venmo, Zelle, a check by mail).`
+      ? `Emails ${escapeHtml(o.customerName && o.customerName !== "Local Sale" ? o.customerName : "the customer")} the invoice for order <b>${escapeHtml(o.orderId)}</b>, with a PDF of it attached: what's owed (<b>$${Number(o.balanceDue).toFixed(2)}</b>) and how to pay, from your Business profile (Venmo, Zelle, a check by mail).`
       : `Emails ${escapeHtml(o.customerName && o.customerName !== "Local Sale" ? o.customerName : "the customer")} a link to a page showing order <b>${escapeHtml(o.orderId)}</b> and what's owed (<b>$${Number(o.balanceDue).toFixed(2)}</b>), where they can pay online.`}</div>
     <label style="font-size:12px;font-weight:600;display:block;margin-bottom:10px;">Send to<br><input id="siEmail" type="email" value="${escapeHtml(o.contact && o.contact.includes("@") ? o.contact : "")}" placeholder="customer@example.com" style="${inp}"></label>
     <label style="font-size:12px;font-weight:600;display:block;margin-bottom:10px;">Note to the customer <span style="font-weight:400;color:#666;">(optional)</span><br><textarea id="siMessage" rows="3" maxlength="3000" style="${inp}font-family:inherit;resize:vertical;"></textarea></label>

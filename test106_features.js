@@ -415,7 +415,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
     "listOrgs", "getOrders", "getOrdersAllShops", "getOpenOrders", "getPendingCommunications", "sendTestEmail", "setOrderCompleted", "useBlanksFromStock", "markPaidManual", "resendEmail",
     "addPayment", "recordRefund", "setRefundShipping", "backfillStripeFees", "setPaymentDate", "deletePayment", "voidPayment", "setDiscount", "deleteOrder", "voidOrder",
     "updateCustomerInfo", "createLocalSale", "createTestTransaction", "setFulfillmentStage", "bulkSetFulfillmentStage", "cancelLineItem", "bulkCancelLineItems", "setLineItemRefund", "editOrder",
-    "recordTracking", "bulkRecordTracking", "setShippingInfo", "setShippingPaidAmount", "createShippingPaymentLink", "sendInvoice", "updateOrderDate", "setOrderDueDate", "bulkSetDueDate",
+    "recordTracking", "bulkRecordTracking", "setShippingInfo", "setShippingPaidAmount", "createShippingPaymentLink", "sendInvoice", "getInvoiceDocument", "updateOrderDate", "setOrderDueDate", "bulkSetDueDate",
     "addBlankShipment", "updateBlankShipment", "deleteBlankShipment", "getBlankShipments", "getOrderItemFiles", "saveOrderItemFile", "deleteOrderItemFile",
     // Reports that aren't bookkeeping
     "getAuditLog", "getRevenueReport", "getSalesTaxReport", "getInventoryReport",

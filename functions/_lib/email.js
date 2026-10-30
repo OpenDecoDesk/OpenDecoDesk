@@ -1,4 +1,4 @@
-import { addOwnerNotice, recordSystemIssue, getBusinessProfile, resolveTimeZone } from "./db.js";
+import { addOwnerNotice, recordSystemIssue, getBusinessProfile, resolveTimeZone, getLocaleSettings } from "./db.js";
 
 /**
  * Transactional email, sent through Cloudflare Email Service. Sends from EMAIL_FROM (default
@@ -90,13 +90,13 @@ async function send_(env, msg) {
 // The desktop program's mailbox (desktop/mailer.js, over its MAILER binding): the program sends from
 // the mailbox's own address (EMAIL_FROM) under the business's name. Returns true or false; `report`
 // as for Resend, with the mail server's answer.
-async function sendViaMailer_(env, { to, subject, html, text, attachments }, id, report) {
+async function sendViaMailer_(env, { to, subject, html, text, attachments, pdf }, id, report) {
   const bcc = id.bcc && id.bcc.toLowerCase() !== String(to).trim().toLowerCase() ? [id.bcc] : [];
   try {
     const res = await env.MAILER.fetch("https://mailer.desktop.invalid/send", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ to, fromName: id.name, replyTo: id.owner, bcc, subject, html: html || undefined, text: text || "(no plain-text body)",
-        ...((attachments || []).length ? { attachments } : {}) }),
+        ...((attachments || []).length ? { attachments } : {}), ...(pdf ? { pdf } : {}) }),
     });
     const data = await res.json().catch(() => ({}));
     if (report) Object.assign(report, { httpStatus: res.status, providerMessage: String(data.message || "").slice(0, 500) });
@@ -826,9 +826,11 @@ export async function sendInvoiceEmail(env, { order, orgName, invoiceUrl, messag
   const note = String(message || "").trim();
   const items = (order.items || []).filter(it => !it.cancelDate);
   const due = Number(order.balanceDue) || 0;
+  // …and a PDF of it, which the desktop program makes (desktop/mailer.js) and attaches.
+  const pdf = invoiceUrl ? null : await invoiceDocument(env, order, { orgName, message: note });
   const html = `<div style="font-family:sans-serif;max-width:600px;margin:auto">
     <h2 style="color:#1d4ed8">Invoice${orgName ? " — " + escHtml(orgName) : ""}</h2>
-    <p>${escHtml(hello)} ${escHtml(lead)}</p>
+    <p>${escHtml(hello)} ${escHtml(lead)}${pdf ? " It's also attached as a PDF." : ""}</p>
     ${note ? `<p style="background:#f8fafc;border-left:3px solid #1d4ed8;padding:10px 14px;white-space:pre-wrap">${escHtml(note)}</p>` : ""}
     <p><strong>Order ID:</strong> ${escHtml(order.orderId)}</p>
     ${itemsTable(items)}
@@ -841,15 +843,83 @@ export async function sendInvoiceEmail(env, { order, orgName, invoiceUrl, messag
     <hr/>
     <p style="font-size:12px;color:#666">%%BUSINESS%% — %%SITE%%</p>
   </div>`;
-  const text = `Invoice for order ${order.orderId}\n\n${hello} ${lead}\n${note ? "\n" + note + "\n" : ""}\n${receiptTotalsText_(order)}\n` +
+  const text = `Invoice for order ${order.orderId}\n\n${hello} ${lead}${pdf ? " It's also attached as a PDF." : ""}\n${note ? "\n" + note + "\n" : ""}\n${receiptTotalsText_(order)}\n` +
     (Number(order.amountReceived) > 0 ? `Paid so far: ${fmt$(order.amountReceived)} · Balance due: ${fmt$(due)}\n` : "") +
     (invoiceUrl ? `\nView and pay: ${invoiceUrl}\n\n%%BUSINESS%%` : `\n${pay.text}\n\n%%BUSINESS%%`);
-  return send_(env, { to: order.contact, subject, html, text });
+  return send_(env, { to: order.contact, subject, html, text, ...(pdf ? { pdf } : {}) });
+}
+
+// An order's invoice as a printable page, for the desktop program to make into a PDF (attached to
+// the invoice email, or saved from the admin — orders.js getInvoiceDocument). Self-contained: its own
+// styles, system fonts, nothing loaded from anywhere. Who it's from comes from the Business profile;
+// the paper is Letter in the US and A4 elsewhere (Global settings → Region).
+// Returns { filename, html, pageSize }.
+export async function invoiceDocument(env, order, { orgName = "", message = "" } = {}) {
+  let p = {}, country = "US";
+  try { p = (await getBusinessProfile(env && env.DB)) || {}; } catch (e) { p = {}; }
+  try { country = ((await getLocaleSettings(env && env.DB)) || {}).country === "OTHER" ? "OTHER" : "US"; } catch (e) { country = "US"; }
+  const tz = await timeZone_(env);
+  const day = (d) => { const t = new Date(d || Date.now()); return isNaN(t) ? "" : t.toLocaleDateString("en-US", { timeZone: tz, month: "long", day: "numeric", year: "numeric" }); };
+  const items = (order.items || []).filter(it => !it.cancelDate);
+  const due = Math.max(0, Number(order.balanceDue) || 0), received = Number(order.amountReceived) || 0;
+  const pay = due > 0 ? await howToPay_(env, order, { inEmail: false }) : null;
+  const lines = (v) => escHtml(String(v || "").trim()).replace(/\s*\n\s*/g, "<br>");
+  const name = String(order.customerName || "").trim();
+  const customer = name && name !== "Local Sale" ? name : "";
+  const contact = String(order.contact || "").includes("@") ? String(order.contact) : "";
+  const a = order.shippingAddress && order.shippingAddress.line1 ? order.shippingAddress : null;
+  const shipTo = a ? [a.name, a.line1, a.line2, [a.city, a.state].filter(Boolean).join(", ") + (a.zip ? " " + a.zip : "")].filter(s => String(s || "").trim()) : [];
+  const business = p.name || "Our shop";
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Invoice ${escHtml(order.orderId)}</title>
+<style>
+  body{font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#1c2430;font-size:13px;line-height:1.45;margin:0}
+  .head{display:flex;justify-content:space-between;gap:24px;border-bottom:3px solid #1f5f8b;padding-bottom:14px;margin-bottom:18px}
+  .biz{font-size:20px;font-weight:700;margin:0 0 4px}
+  .muted{color:#5a6573}
+  .title{font-size:28px;font-weight:700;letter-spacing:.06em;color:#1f5f8b;margin:0;text-align:right}
+  .meta td{padding:1px 0 1px 14px;text-align:right}
+  .parties{display:flex;gap:40px;margin-bottom:18px}
+  .label{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#5a6573;margin:0 0 4px}
+  .due{margin:18px 0 0;padding:12px 14px;border:2px solid #1f5f8b;border-radius:6px;display:flex;justify-content:space-between;font-size:16px}
+  .paid{margin:18px 0 0;padding:12px 14px;border:2px solid #15803d;border-radius:6px;color:#15803d;font-size:16px;font-weight:700;text-align:center}
+  .note{margin:16px 0 0;padding:10px 14px;background:#f7f6f2;border-left:3px solid #1f5f8b;white-space:pre-wrap}
+  .foot{margin-top:28px;padding-top:10px;border-top:1px solid #e1ddd3;font-size:11px;color:#5a6573}
+  table{page-break-inside:auto} tr{page-break-inside:avoid}
+</style></head><body>
+  <div class="head">
+    <div>
+      <p class="biz">${escHtml(business)}</p>
+      ${p.legalName && p.legalName !== business ? `<div class="muted">${escHtml(p.legalName)}</div>` : ""}
+      ${p.mailingAddress ? `<div>${lines(p.mailingAddress)}</div>` : ""}
+      ${p.supportEmail ? `<div>${escHtml(p.supportEmail)}</div>` : ""}
+    </div>
+    <div>
+      <p class="title">INVOICE</p>
+      <table class="meta"><tr><td class="muted">Invoice no.</td><td>${escHtml(order.orderId)}</td></tr>
+        <tr><td class="muted">Date</td><td>${escHtml(day())}</td></tr>
+        ${order.placedAt ? `<tr><td class="muted">Order date</td><td>${escHtml(day(order.placedAt))}</td></tr>` : ""}
+        ${orgName ? `<tr><td class="muted">Shop</td><td>${escHtml(orgName)}</td></tr>` : ""}</table>
+    </div>
+  </div>
+  <div class="parties">
+    ${customer || contact ? `<div><p class="label">Bill to</p>${customer ? `<div>${escHtml(customer)}</div>` : ""}${contact ? `<div>${escHtml(contact)}</div>` : ""}</div>` : ""}
+    ${shipTo.length ? `<div><p class="label">Ship to</p>${shipTo.map(s => `<div>${escHtml(s)}</div>`).join("")}</div>` : ""}
+  </div>
+  ${itemsTable(items)}
+  ${receiptTotalsHtml_(order)}
+  ${received > 0 ? `<table style="width:100%;font-size:14px;margin-top:4px"><tr><td>Paid so far</td><td style="text-align:right">−${fmt$(received)}</td></tr></table>` : ""}
+  ${due > 0 ? `<div class="due"><strong>Balance due</strong><strong>${fmt$(due)}</strong></div>` : `<div class="paid">Paid in full — thank you</div>`}
+  ${message ? `<div class="note">${escHtml(message)}</div>` : ""}
+  ${pay ? pay.html : ""}
+  <div class="foot">${[p.footer, business + (p.supportEmail ? " · " + p.supportEmail : "")].filter(Boolean).map(escHtml).join("<br>")}</div>
+</body></html>`;
+  return { filename: `Invoice ${order.orderId}.pdf`, html, pageSize: country === "US" ? "Letter" : "A4" };
 }
 
 // How to pay an invoice that has no page to pay on (the desktop program's): the ways the Business
 // profile lists — Venmo (a link with the amount), Zelle, a cheque by mail — and replying to the email.
-async function howToPay_(env, order) {
+// `inEmail` false (the PDF): questions go to the support email, not "reply to this email".
+async function howToPay_(env, order, { inEmail = true } = {}) {
   let p = {};
   try { p = (await getBusinessProfile(env && env.DB)) || {}; } catch (e) { p = {}; }
   const due = Number(order.balanceDue) || 0;
@@ -857,11 +927,11 @@ async function howToPay_(env, order) {
   if (p.venmo) ways.push({ text: `Venmo: @${p.venmo}`, href: `https://venmo.com/u/${encodeURIComponent(p.venmo)}?txn=pay&amount=${due.toFixed(2)}&note=${encodeURIComponent("Order " + order.orderId)}` });
   if (p.zelle) ways.push({ text: `Zelle: ${p.zelle}` });
   if (p.mailingAddress) ways.push({ text: `A check made out to ${p.legalName || p.name || "us"}, mailed to ${String(p.mailingAddress).replace(/\s*\n\s*/g, ", ")}` });
-  const close = "Questions? Reply to this email.";
+  const close = inEmail ? "Questions? Reply to this email." : p.supportEmail ? `Questions? Email ${p.supportEmail}.` : "";
   return {
     html: `<h3 style="margin:20px 0 6px;font-size:16px">How to pay${due > 0 ? " " + fmt$(due) : ""}</h3>` +
       (ways.length ? `<ul style="margin:0 0 8px;padding-left:20px">${ways.map(w => `<li>${w.href ? `<a href="${escHtml(w.href)}">${escHtml(w.text)}</a>` : escHtml(w.text)}</li>`).join("")}</ul>` : "") +
-      `<p style="font-size:13px;color:#555">Please put the order number, ${escHtml(order.orderId)}, with your payment. ${close}</p>`,
+      `<p style="font-size:13px;color:#555">Please put the order number, ${escHtml(order.orderId)}, with your payment. ${escHtml(close)}</p>`,
     text: `How to pay${due > 0 ? " " + fmt$(due) : ""}:\n` + ways.map(w => "  " + w.text + (w.href ? "\n    " + w.href : "")).join("\n") +
       `\nPlease put the order number, ${order.orderId}, with your payment. ${close}`,
   };

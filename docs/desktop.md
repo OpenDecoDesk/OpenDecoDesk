@@ -107,8 +107,11 @@ that doesn't, set a Receipts inbox under Business profile to get a copy of every
 What's different from a cloud install:
 
 - **Invoices are the email itself**: the order, what's owed, and how to pay from your Business
-  profile (Venmo, with a link for the amount; Zelle; a check by mail). There's no page to pay on, so
-  no "View & pay" button and no choosing delivery.
+  profile (Venmo, with a link for the amount; Zelle; a check by mail), with the same invoice
+  attached as a PDF (Letter paper in the US, A4 elsewhere). There's no page to pay on, so no
+  "View & pay" button and no choosing delivery. The program makes the PDF itself with the window's
+  own printing, from a page that runs nothing and loads nothing; if it ever can't, the email goes
+  without it and the log says so.
 - **The morning roll-up** goes out at the first check on or after 6 AM while the program is open
   (a minute after it opens, then every two hours), once a day. On a day the program isn't opened,
   there is none; the next one covers everything since.
@@ -119,6 +122,11 @@ What's different from a cloud install:
 - Gmail sends at most about 500 emails a day (Google Workspace 2,000).
 
 **Turn off email** sends nothing more and forgets the password, and switches Design approval off.
+
+### Invoices on paper
+
+Every order (not voided) has **Save invoice PDF…** on the Orders screen, with or without email: the
+same PDF, saved where you choose, to print or send yourself. A paid order's says *Paid in full*.
 
 ### Design approval
 

@@ -11,7 +11,7 @@ const { app, BrowserWindow, Menu, dialog, shell, ipcMain, safeStorage, session, 
 const fs = require("fs");
 const path = require("path");
 const { startServer, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, setSmtp, savedSmtpPassword, recordBackup, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
-const { Mailer, cleanSmtpSettings } = require("./mailer.js");
+const { Mailer, cleanSmtpSettings, cleanPdf } = require("./mailer.js");
 const { createLog } = require("./log.js");
 
 const SOURCE_URL = "https://github.com/opendecodesk/opendecodesk";
@@ -45,8 +45,26 @@ const crypt = () => safeStorage.isEncryptionAvailable() ? {
   unprotect: (s) => safeStorage.decryptString(Buffer.from(s, "base64")),
 } : {};
 
+// A page made into a PDF (the invoice: email.js invoiceDocument) with Chromium's own printing. The
+// page is drawn in a hidden window of its own, on a session of its own kept in memory, with
+// JavaScript off and every request but the page itself refused: it can't run anything or reach
+// anything, on this computer or off it. Returns the PDF as a Buffer.
+let pdfSession = null;
+async function renderPdf(html, pageSize) {
+  if (!pdfSession) {
+    pdfSession = session.fromPartition("odd-pdf");
+    pdfSession.webRequest.onBeforeRequest((details, cb) => cb({ cancel: !details.url.startsWith("data:text/html") }));
+    pdfSession.setPermissionRequestHandler((wc, permission, cb) => cb(false));
+  }
+  const page = new BrowserWindow({ show: false, webPreferences: { partition: "odd-pdf", javascript: false, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  try {
+    await page.loadURL("data:text/html;charset=utf-8;base64," + Buffer.from(String(html)).toString("base64"));
+    return await page.webContents.printToPDF({ pageSize: pageSize === "A4" ? "A4" : "Letter", printBackground: true, margins: { top: 0.6, bottom: 0.6, left: 0.6, right: 0.6 } });
+  } finally { page.destroy(); }
+}
+
 async function start() {
-  server = await startServer({ dataDir, port: 47830, ...crypt(), log, onOutput: (t) => logFile.write(t, "worker") });
+  server = await startServer({ dataDir, port: 47830, ...crypt(), log, onOutput: (t) => logFile.write(t, "worker"), renderPdf });
   log("Server ready on " + server.url + (server.migrations.isNew ? " (new database)" : server.migrations.applied.length ? " (database updated: " + server.migrations.applied.join(", ") + ")" : ""));
   return server;
 }
@@ -242,6 +260,24 @@ ipcMain.handle("odd:set-email", async (e, settings, password) => {
   const ok = await whileStopped(async () => { setSmtp(dataDir, clean, String(password || ""), crypt()); }, "settings");
   if (ok) log("Email set up: " + clean.host + ":" + clean.port);
   return { ok, message: ok ? tried.message : "Not saved." };
+});
+
+// Orders → Save invoice PDF…: the invoice page the admin got from the server (orders.js
+// getInvoiceDocument) made into a PDF, saved where the owner chooses. { ok, path } or { ok: false }.
+ipcMain.handle("odd:save-invoice-pdf", async (e, doc) => {
+  if (!isOurs(e.senderFrame && e.senderFrame.url)) return { ok: false, message: "Not allowed." };
+  const d = cleanPdf(doc);
+  if (!d) return { ok: false, message: "That isn't an invoice." };
+  const r = await dialog.showSaveDialog(win, { title: "Save the invoice", buttonLabel: "Save", defaultPath: path.join(app.getPath("documents"), d.filename), filters: [{ name: "PDF", extensions: ["pdf"] }] });
+  if (r.canceled || !r.filePath) return { ok: false, canceled: true };
+  try {
+    fs.writeFileSync(r.filePath, await renderPdf(d.html, d.pageSize));
+    log("Saved " + d.filename);
+    return { ok: true, path: r.filePath };
+  } catch (err) {
+    log("Couldn't save " + d.filename + ": " + ((err && err.message) || err));
+    return { ok: false, message: "Couldn't save the PDF: " + ((err && err.message) || err) };
+  }
 });
 
 // The backup reminder in the admin (admin.js adminDesktopBackupNudge_): when this data folder was first

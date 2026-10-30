@@ -15,6 +15,7 @@ const server = require("./desktop/server.js");
 //      itself; with no mailbox nothing is sent and nothing is reported as a failure.
 //   D. The morning roll-up, from the program's scheduled run.
 //   D2. Design approval: the proof emailed with its pictures attached, approved by reply.
+//   D3. The invoice as a PDF: attached to the invoice email, and Save invoice PDF….
 //   E. The admin: Global settings → Email, the buttons and Communications.
 // The mail server itself is stood in for here; the real program was tried against a local SMTP
 // server (desktop/mailer.js with nodemailer).
@@ -67,6 +68,22 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   r = await mailer.send({ to: "c@d.co", subject: "x", attachments: [{ filename: "a.exe", contentType: "application/x-msdownload", contentBase64: "TVo=" }] });
   const tooMany = await mailer.send({ to: "c@d.co", subject: "x", attachments: Array.from({ length: 6 }, () => ({ filename: "p.png", contentType: "image/png", contentBase64: png.toString("base64") })) });
   ok("…but only pictures, and at most five", !r.ok && /Only pictures/.test(r.message) && !tooMany.ok && /At most 5/.test(tooMany.message) && sent.length === before);
+  const rendered = [], pdfBytes = Buffer.from("%PDF-1.4 fake");
+  const pdfMailer = new Mailer(gmail, "pw", { transport, log: (t) => logged.push(t), renderPdf: async (html, size) => { rendered.push({ html, size }); return pdfBytes; } });
+  r = await pdfMailer.send({ to: "c@d.co", subject: "Invoice for your order — X9", text: "t", pdf: { filename: "Invoice X9.pdf", html: "<p>Invoice</p>", pageSize: "A4" } });
+  const pdfAtt = (sent[sent.length - 1].attachments || []).find(a => a.contentType === "application/pdf") || {};
+  ok("an email that asks for a PDF gets one, made by the program from the page", r.ok && rendered.length === 1 && rendered[0].html === "<p>Invoice</p>" && rendered[0].size === "A4" &&
+    pdfAtt.filename === "Invoice X9.pdf" && pdfAtt.content === pdfBytes);
+  logged.length = 0;
+  r = await mailer.send({ to: "c@d.co", subject: "Invoice for your order — X10", text: "t", pdf: { filename: "Invoice X10.pdf", html: "<p>x</p>" } });
+  ok("without the program's renderer (node desktop/server.js) the email still goes, and the log says the PDF couldn't be made", r.ok && !(sent[sent.length - 1].attachments || []).length &&
+    /PDF not attached to: Invoice for your order — X10/.test(logged.join("\n")));
+  const badPdf = new Mailer(gmail, "pw", { transport, log: (t) => logged.push(t), renderPdf: async () => { throw new Error("printing failed"); } });
+  r = await badPdf.send({ to: "c@d.co", subject: "Invoice X11", text: "t", pdf: { filename: "../../evil.exe", html: "<p>x</p>" } });
+  ok("…and so does one whose PDF fails to print", r.ok && /printing failed/.test(logged.join("\n")));
+  const { cleanPdf } = require("./desktop/mailer.js");
+  ok("a PDF's name is kept to plain characters and ends .pdf; Letter unless A4; no page, or a huge one, is no PDF", cleanPdf({ filename: "../../evil.exe", html: "x" }).filename === ".._.._evil.exe.pdf" &&
+    cleanPdf({ html: "x", pageSize: "Tabloid" }).pageSize === "Letter" && cleanPdf({ filename: "a.pdf" }) === null && cleanPdf({ html: "x".repeat(1024 * 1024 + 1) }) === null);
   const mailerSrc = read("desktop/mailer.js");
   ok("it never sends without encryption: TLS from the start on 465, else STARTTLS required", /secure: settings\.security === "tls"/.test(mailerSrc) && /requireTLS: settings\.security !== "tls"/.test(mailerSrc));
 
@@ -146,6 +163,43 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   ok("an invoice is sent with no link (there is no page to open), and no delivery choice", r.status === 200 && r.body.emailSent && r.body.url === "" && !/View &amp; pay|https?:\/\/[^"\s]*invoice/.test(inv.html) && r.body.invoice && r.body.invoice.allowDelivery !== true);
   ok("…it is the invoice itself: the lines, the total, and how to pay from the Business profile", /Here is your invoice/.test(inv.html) && /Cap/.test(inv.html) && /How to pay \$30\.00/.test(inv.html) &&
     /venmo\.com\/u\/stitchco\?txn=pay&amp;amount=30\.00/.test(inv.html) && /A check made out to Stitch Co, mailed to 1 Main St, Columbus OH 43215/.test(inv.html) && /How to pay \$30\.00:/.test(inv.text) && new RegExp(owing).test(inv.text));
+  ok("…and asks the program to attach it as a PDF, saying so in the email", inv.pdf && inv.pdf.filename === `Invoice ${owing}.pdf` && inv.pdf.pageSize === "Letter" &&
+    /It's also attached as a PDF/.test(inv.html + inv.text) && /<!doctype html>/.test(inv.pdf.html));
+
+  console.log("\n=== D3. The invoice as a PDF ===");
+  {
+    const doc = inv.pdf.html;
+    ok("the PDF's page: who it's from, INVOICE with its number and dates", /class="biz">Stitch Co</.test(doc) && /1 Main St<br>Columbus OH 43215/.test(doc) && />INVOICE</.test(doc) &&
+      new RegExp(`Invoice no\\.</td><td>${owing}<`).test(doc) && /Order date/.test(doc));
+    ok("…who it's to, the lines and totals, the balance due and how to pay", /Bill to/.test(doc) && /<div>Sam<\/div>/.test(doc) && /sam@example\.net/.test(doc) && /Cap/.test(doc) &&
+      /Balance due<\/strong><strong>\$30\.00/.test(doc) && /How to pay \$30\.00/.test(doc) && /venmo\.com\/u\/stitchco/.test(doc) && /Thanks!/.test(doc));
+    ok("…in words that suit paper (no 'reply to this email'), loading nothing from anywhere", !/Reply to this email/.test(doc) && !/<(img|link|script)\b|src=|url\(/i.test(doc) && !/%%/.test(doc));
+    ok("a cloud install's invoice email has no PDF (it links to its page)", /const pdf = invoiceUrl \? null : await invoiceDocument/.test(read("functions/_lib/email.js")));
+    r = await post(on, { action: "getInvoiceDocument", key: "x", org: "shop", orderId: owing });
+    ok("Save invoice PDF… gets the same page from the server", r.status === 200 && r.body.document.filename === `Invoice ${owing}.pdf` && /Balance due/.test(r.body.document.html));
+    r = await post(on, { action: "getInvoiceDocument", key: "x", org: "shop", orderId });
+    ok("…and for a paid order it says Paid in full, with no how-to-pay", r.status === 200 && /Paid in full — thank you/.test(r.body.document.html) && !/How to pay/.test(r.body.document.html));
+    r = await post(on, { action: "createLocalSale", key: "x", org: "shop", paymentMethod: "Cash", customerName: "<b>Bold</b> & Co", contact: "",
+      items: [{ productId: "__custom__", name: "Tee <script>", qty: 1, customUnitPrice: 10, type: "shirt" }] });
+    const odd = r.body.orderId;
+    r = await post(on, { action: "getInvoiceDocument", key: "x", org: "shop", orderId: odd });
+    ok("names and lines are escaped", r.status === 200 && /&lt;b&gt;Bold&lt;\/b&gt; &amp; Co/.test(r.body.document.html) && /Tee &lt;script&gt;/.test(r.body.document.html) && !/<script>|<b>Bold/.test(r.body.document.html));
+    d1._raw.run("INSERT OR REPLACE INTO global_settings (key, value) VALUES ('locale', ?)", [JSON.stringify({ country: "OTHER" })]);
+    r = await post(on, { action: "getInvoiceDocument", key: "x", org: "shop", orderId: odd });
+    ok("outside the US the paper is A4", r.body.document.pageSize === "A4");
+    d1._raw.run("DELETE FROM global_settings WHERE key = 'locale'");
+    r = await post(on, { action: "voidOrder", key: "x", org: "shop", orderId: odd, reason: "test" });
+    r = await post(on, { action: "getInvoiceDocument", key: "x", org: "shop", orderId: odd });
+    ok("a voided order has no invoice", r.status === 400 && /voided/.test(r.body.message));
+    r = await post({ DB: d1 }, { action: "getInvoiceDocument", key: "x", org: "shop", orderId: owing });
+    ok("a cloud install doesn't offer it", r.status !== 200);
+    const main = read("desktop/main.js");
+    ok("the program draws the page with JavaScript off, on a session of its own, refusing every request but the page", /partition: "odd-pdf", javascript: false, sandbox: true/.test(main) &&
+      /onBeforeRequest\(\(details, cb\) => cb\(\{ cancel: !details\.url\.startsWith\("data:text\/html"\) \}\)\)/.test(main) && /printToPDF\(/.test(main) && /page\.destroy\(\)/.test(main));
+    ok("…and hands it to the mailer and to Save invoice PDF… (asking where to save)", /logFile\.write\(t, "worker"\), renderPdf \}\)/.test(main) && /odd:save-invoice-pdf/.test(main) && /showSaveDialog/.test(main) &&
+      /saveInvoicePdf: \(doc\) => ipcRenderer\.invoke\("odd:save-invoice-pdf", doc\)/.test(read("desktop/preload.js")));
+  }
+
   mailerAnswer = { ok: false, message: "The mailbox refused the sign-in. (535 bad)" };
   mail.length = 0;
   r = await post(on, { action: "sendTestEmail", key: "x", to: "pat@gmail.com" });
@@ -228,15 +282,17 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
     if (url.includes("/admin.js")) return Promise.resolve(Buffer.from(adminJs));
     const local = new URL(url).pathname.match(/^\/vendor\/fonts\/[a-z0-9.-]+$/);
     return local ? Promise.resolve(fs.readFileSync(__dirname + "/public" + local[0])) : super.fetch(url, o); } }
-  const saved = [];
+  const saved = [], asked = [], pdfSaves = [];
   const dom = new JSDOM(read("public/index.html"), { runScripts: "dangerously", resources: new L(), url: "http://localhost:47830/", pretendToBeVisual: true,
     beforeParse(win){
-      win.fetch = async (url) => {
+      win.fetch = async (url, opts) => {
         if (String(url).includes("/api/catalog")) { const body = await adminAnswer(on); return { ok: true, status: 200, json: async () => body }; }
+        if (String(url).includes("/api/orders") && opts && /getInvoiceDocument/.test(opts.body)) { asked.push(JSON.parse(opts.body)); return { ok: true, status: 200, json: async () => ({ status: "ok", document: { filename: "Invoice X1.pdf", html: "<p>x</p>", pageSize: "Letter" } }) }; }
         return { ok: true, status: 200, json: async () => ({ status: "error", message: "n/a" }) };
       };
       win.oddDesktop = { edition: "desktop", firstRunKey: async () => null,
-        setEmail: async (settings, password) => { saved.push({ settings, password }); return password === "wrong" ? { ok: false, message: "The mailbox refused the sign-in." } : { ok: true }; } };
+        setEmail: async (settings, password) => { saved.push({ settings, password }); return password === "wrong" ? { ok: false, message: "The mailbox refused the sign-in." } : { ok: true }; },
+        saveInvoicePdf: async (doc) => { pdfSaves.push(doc); return { ok: true, path: "/Users/pat/Documents/Invoice X1.pdf" }; } };
       win.confirm = () => true;
     } });
   const w = dom.window, doc = w.document;
@@ -247,7 +303,7 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   ok("the page learns email is set up", w.eval("siteDesktopEmail") === true && w.adminDesktopEmail_() === true);
   ok("…so Communications is back (its test send, the roll-up preview, failed emails)", w.adminDesktopHides_("comms") === false && w.adminDesktopHides_("vendors") === true);
   const cell = w.adminActionCell({ orgId: "shop" }, { orderId: "X1", paid: false, items: [{}], balanceDue: 20 });
-  ok("…and the order buttons that send email", /resendEmail/.test(cell) && /showSendInvoiceModal/.test(cell) && /Email the customer the invoice and how to pay/.test(cell));
+  ok("…and the order buttons that send email", /resendEmail/.test(cell) && /showSendInvoiceModal/.test(cell) && /Email the customer the invoice \(with a PDF of it\) and how to pay/.test(cell));
   ok("a sent invoice says when, not whether it was opened (there is no page to open)", !/opened/.test(w.invoiceCell_({ orgId: "shop" }, { orderId: "X1", balanceDue: 20, invoice: { sentAt: "2026-11-02T10:00:00Z" } })));
   w.eval("siteDesktopEmail = false");
   ok("without email, Communications and those buttons are gone", w.adminDesktopHides_("comms") === true && !/resendEmail|showSendInvoiceModal/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X1", paid: false, items: [{}], balanceDue: 20 })));
@@ -273,6 +329,12 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   await $("gEmailSave").onclick();
   ok("saving hands the settings and password to the program, and shows why it wasn't saved", saved.length === 1 && saved[0].settings.host === "mail.stitch.example" && saved[0].settings.port === 465 &&
     saved[0].settings.security === "tls" && saved[0].settings.user === "orders@stitch.example" && /refused the sign-in/.test($("gEmailError").textContent));
+  ok("an order has Save invoice PDF… — paid or not, but not once voided", /saveInvoicePdf_/.test(w.invoiceCell_({ orgId: "shop" }, { orderId: "X1", balanceDue: 20 })) &&
+    /Save invoice PDF/.test(w.invoiceCell_({ orgId: "shop" }, { orderId: "X1", balanceDue: 0, paid: true })) && !/Save invoice PDF/.test(w.invoiceCell_({ orgId: "shop" }, { orderId: "X1", balanceDue: 0, voidedAt: "2026-11-01" })));
+  w.eval('adminKey = "x"');
+  await w.saveInvoicePdf_("shop", "X1");
+  ok("…which gets the invoice page from the server and has the program save it as a PDF", asked.length === 1 && asked[0].orderId === "X1" && pdfSaves.length === 1 && pdfSaves[0].filename === "Invoice X1.pdf" &&
+    /Saved Invoice X1\.pdf/.test(doc.body.textContent));
   const proofModal = w.showDesignVerifModal();
   await tick(20);
   ok("the proof window says the pictures are attached and the customer replies", /attached to the email, and the customer replies/.test(doc.body.textContent) && /Design approved/.test(doc.body.textContent));

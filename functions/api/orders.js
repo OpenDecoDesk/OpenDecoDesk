@@ -118,7 +118,7 @@ import {
 import {
   sendOrderReceivedEmail,
   sendPaymentConfirmedEmail, sendCancellationEmail, sendShippedEmail,
-  sendDesignVerificationEmail, sendShippingPaymentEmail, sendInvoiceEmail, sendTestEmail,
+  sendDesignVerificationEmail, sendShippingPaymentEmail, sendInvoiceEmail, sendTestEmail, invoiceDocument,
 } from "../_lib/email.js";
 import { verifyQuote, canonicalItems } from "../_lib/quoteToken.js";
 import { selectBox } from "../_lib/boxSize.js";
@@ -273,7 +273,7 @@ const STAFF_ACTIONS = [
   "setDiscount", "deleteOrder", "voidOrder", "updateCustomerInfo", "createLocalSale", "setFulfillmentStage", "useBlanksFromStock", "addBlankShipment",
   "updateBlankShipment", "deleteBlankShipment", "getBlankShipments", "bulkSetFulfillmentStage", "cancelLineItem", "bulkCancelLineItems",
   "setLineItemRefund", "editOrder", "recordTracking", "bulkRecordTracking", "getOrderForShipping", "sendDesignVerification",
-  "listDesignVerifications", "setShippingInfo", "setShippingPaidAmount", "createShippingPaymentLink", "sendInvoice", "updateOrderDate", "setOrderDueDate",
+  "listDesignVerifications", "setShippingInfo", "setShippingPaidAmount", "createShippingPaymentLink", "sendInvoice", "getInvoiceDocument", "updateOrderDate", "setOrderDueDate",
   "bulkSetDueDate", "listClosedPeriods",
 ];
 const ACTION_ROLE = Object.create(null);   // no prototype: "constructor" is not an action
@@ -5193,6 +5193,22 @@ export async function onRequestPost(context) {
   // owed, lets the customer choose how they'll get the order (unless `allowDelivery` is false) and
   // pay the balance. Sending again reuses the order's token, so an earlier email's link still works.
   // If the email can't be sent the invoice still exists — the answer carries the link to pass on.
+  // ---- getInvoiceDocument — the desktop program's "Save invoice PDF…": the invoice as a printable
+  // page (email.js invoiceDocument), which the program makes into a PDF and saves where it's asked.
+  if (body.action === "getInvoiceDocument") {
+    const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
+    if (denied) return denied;
+    if (!isDesktopEdition(env)) return jsonResponse({ status: "error", message: "Saving an invoice as a PDF is part of the desktop program." }, 400);
+    const orderId = String(body.orderId || "").trim();
+    if (!ORDER_ID_RE.test(orderId)) return jsonResponse({ status: "error", message: "Invalid order ID" }, 400);
+    const order = await getOrderById(env.DB, orderId);
+    if (!order || (body.org && order.orgId !== body.org)) return jsonResponse({ status: "error", message: "Order not found" }, 404);
+    if (order.voidedAt) return jsonResponse({ status: "error", message: "This order was voided — there's nothing to invoice" }, 400);
+    if (!(order.items || []).some(it => !it.cancelDate)) return jsonResponse({ status: "error", message: "Every item on this order is cancelled — there's nothing to invoice" }, 400);
+    const org = await getOrgById(env.DB, order.orgId);
+    return jsonResponse({ status: "ok", document: await invoiceDocument(env, order, { orgName: (org && org.name) || "" }) });
+  }
+
   if (body.action === "sendInvoice") {
     const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
     if (denied) return denied;
