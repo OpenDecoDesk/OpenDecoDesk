@@ -189,8 +189,10 @@ export async function onRequestGet(context){
     // orders.js (action: "listOrgs"), so hitting this subdomain alone
     // can't be used to scrape the client list.
     // edition: "desktop" tells the admin it runs inside the desktop program (hostConfig.js), so it
-    // leaves out what needs the internet.
-    return jsonResponse({status:"admin", business: catalogData.business || {}, country, features, ...(host.desktop ? {edition:"desktop"} : {})});
+    // leaves out what needs the internet; desktopSuppliers: the owner turned supplier connections on
+    // there (hostConfig.js desktopSuppliersOn, repeated here to keep this file's one import).
+    return jsonResponse({status:"admin", business: catalogData.business || {}, country, features,
+      ...(host.desktop ? {edition:"desktop", ...(String(env.DESKTOP_SUPPLIERS || "") === "on" ? {desktopSuppliers:true} : {})} : {})});
   } else {
     // Unknown hostname — refuse rather than treating it like a known host.
     return jsonResponse({status:"error", message:"Unrecognized host", business: catalogData.business || {}, country, features}, 404);

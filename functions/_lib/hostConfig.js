@@ -33,6 +33,12 @@ export function desktopLockedFeatures(env){
 export function isDesktopEdition(env){
   return String((env && env.EDITION) || "").trim().toLowerCase() === "desktop";
 }
+// Supplier connections (Vendor integrations: PromoStandards product data, ordering, shipment
+// tracking) need the internet, so the desktop version has them only once the owner turns them on in
+// the program (Global settings → Supplier connections), which then sets DESKTOP_SUPPLIERS=on.
+export function desktopSuppliersOn(env){
+  return isDesktopEdition(env) && String((env && env.DESKTOP_SUPPLIERS) || "") === "on";
+}
 
 export function rootDomain(env){
   return String((env && env.ROOT_DOMAIN) || DEFAULT_ROOT_DOMAIN).trim().toLowerCase().replace(/\.$/, "").replace(/^www\./, "");

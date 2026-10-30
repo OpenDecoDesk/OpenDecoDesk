@@ -12,4 +12,8 @@ contextBridge.exposeInMainWorld("oddDesktop", {
   // saving or removing it (null). Saving restarts the program's server and reloads the page.
   hasShippoKey: () => ipcRenderer.invoke("odd:has-shippo-key"),
   setShippoKey: (key) => ipcRenderer.invoke("odd:set-shippo-key", key),
+  // Global settings → Supplier connections: whether they are on, and turning them on or off (which
+  // restarts the program's server and reloads the page).
+  suppliersOn: () => ipcRenderer.invoke("odd:suppliers-on"),
+  setSuppliersOn: (on) => ipcRenderer.invoke("odd:set-suppliers-on", !!on),
 });

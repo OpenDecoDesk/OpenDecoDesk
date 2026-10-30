@@ -18,7 +18,7 @@ Miniflare, Cloudflare's own local runtime (the one `wrangler dev` uses), inside 
 window.
 The database is SQLite and the files (pictures, receipts, design files) are kept on disk, both in
 your user folder. Nothing is sent anywhere, unless you add a Shippo key for carrier shipping
-([Shipping](#shipping)).
+([Shipping](#shipping)) or turn on [supplier connections](#supplier-connections).
 
 | | Cloud install | Desktop version |
 |---|---|---|
@@ -32,7 +32,7 @@ your user folder. Nothing is sent anywhere, unless you add a Shippo key for carr
 | Pictures, receipts, design files | R2 buckets | files in the data folder |
 | Several people signing in | yes | yes, on that one computer |
 | Supplier files (CSV, PDF invoices, product files) | yes | yes |
-| A supplier's live connection (PromoStandards), ordering from it | yes | **none** |
+| A supplier's live connection (PromoStandards), ordering from it, its shipment notices | yes | optional, once turned on (needs the internet) |
 | Sending designs to machines | the send-agent | the send-agent on the same computer; no relay from a phone |
 
 There is **one default shop**, "My shop", made on the first start; rename it under Manage catalog →
@@ -50,7 +50,8 @@ With it:
   is carrier shipping while the program has no Shippo key (`functions/_lib/desktop.js`,
   `desktopLockedFeatures` in `hostConfig.js`, `updateFeatures` in `functions/api/orders.js`).
 - Actions that need the internet are refused (`DESKTOP_REFUSED_ACTIONS` in `orders.js`), and the
-  admin leaves out their pages and buttons.
+  admin leaves out their pages and buttons. Supplier connections (`DESKTOP_SUPPLIER_ACTIONS`) are
+  refused only until the owner turns them on, which sets `DESKTOP_SUPPLIERS=on`.
 - Global settings → Setup status lists only the business profile, sales tax and time zone.
 
 A cloud install never sets `EDITION`, so none of this changes it.
@@ -105,6 +106,25 @@ delivered ones delivered. **Check tracking now** on the Orders page does it at o
 to the customer from the desktop version.
 
 **Remove key** puts shipping back to by hand. Labels already bought stay on their orders.
+
+## Supplier connections
+
+Importing a supplier's files always works: S&S or SanMar product files, CSV, and vendor PDF
+invoices (Blanks → Import from PDF). Product photos that a file only links to aren't copied in
+unless supplier connections are on.
+
+**Vendor integrations** go further: a supplier's live product data and prices (PromoStandards),
+ordering blanks from it from Blanks to order, and its shipment notices. They need the internet,
+so they are off until you turn them on: **Settings → Global settings and carrier shipping…**, then
+**Turn on supplier connections** under *Supplier connections*. The program restarts for a moment,
+and Vendor integrations appear under Settings in the menu, where you add each supplier's login
+as on a cloud install. The logins are saved in the database, encrypted with a key only this
+program holds (`desktop.json`).
+
+While the program is open, suppliers' shipment notices are checked a minute after it opens and
+every two hours. Turning supplier connections off hides Vendor integrations again and stops
+anything going to your suppliers. Saved connections and orders already placed are kept for when
+it's turned back on.
 
 ## Where your data is
 

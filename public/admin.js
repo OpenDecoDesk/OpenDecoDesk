@@ -1156,7 +1156,12 @@ function adminPageOn_(hash){ const f = adminPageFeature_(hash); return !adminDes
 // DESKTOP_REFUSED_ACTIONS). Everything else is the same screen as a cloud install's.
 function adminDesktop_(){ return typeof siteEdition !== "undefined" && siteEdition === "desktop"; }
 const ADMIN_DESKTOP_HIDDEN_PAGES = ["vendors", "comms"];
-function adminDesktopHides_(hash){ return adminDesktop_() && ADMIN_DESKTOP_HIDDEN_PAGES.includes(String(hash || "").replace(/^#\/?/, "").split("/")[0]); }
+// Vendor integrations is back once the owner turns supplier connections on (Global settings).
+function adminDesktopSuppliers_(){ return adminDesktop_() && typeof siteDesktopSuppliers !== "undefined" && siteDesktopSuppliers === true; }
+function adminDesktopHides_(hash){
+  const page = String(hash || "").replace(/^#\/?/, "").split("/")[0];
+  return adminDesktop_() && ADMIN_DESKTOP_HIDDEN_PAGES.includes(page) && !(page === "vendors" && adminDesktopSuppliers_());
+}
 // The passphrase for the program's own first sign-in, or null (a normal start, or not the program).
 async function adminDesktopFirstRunKey_(){
   if(!adminDesktop_() || !window.oddDesktop || typeof window.oddDesktop.firstRunKey !== "function") return null;
@@ -1208,6 +1213,34 @@ function wireDesktopShippoSection_(){
   };
 }
 
+// Global settings → Supplier connections, in the desktop version only: Vendor integrations
+// (a supplier's live product data and prices, ordering blanks from it, its shipment notices) need the
+// internet, so they are off until turned on here. Importing a supplier's files works either way.
+// The program keeps the setting (desktop/server.js); turning it on or off restarts its server.
+function desktopSuppliersSectionHtml_(on){
+  return `<div id="gSuppliersSection">
+        <h2 style="margin:22px 0 12px;">Supplier connections</h2>
+        <div class="admin-note" style="margin-bottom:10px;">Importing a supplier's files (product files, CSV, PDF invoices) always works. Turn this on to use <strong>Vendor integrations</strong> as well: a supplier's live product data and prices (PromoStandards), ordering blanks from it, its shipment notices (checked every two hours while this program is open), and copying its product photos. These need the internet; your logins with each supplier are saved encrypted on this computer.</div>
+        <div id="gSuppliersStatus" style="font-size:14px;margin-bottom:8px;">${on ? `Supplier connections are on — set them up under <a href="#vendors">Vendor integrations</a>.` : "Supplier connections are off."}</div>
+        <button class="admin-btn${on ? " admin-btn-secondary" : ""}" type="button" id="gSuppliersToggle" data-on="${on ? "1" : "0"}">${on ? "Turn off supplier connections" : "Turn on supplier connections"}</button>
+        <div id="gSuppliersError" class="admin-error"></div>
+      </div>`;
+}
+function wireDesktopSuppliersSection_(){
+  const btn = document.getElementById("gSuppliersToggle");
+  if(!btn) return;
+  btn.onclick = async () => {
+    const turnOn = btn.dataset.on !== "1", errEl = document.getElementById("gSuppliersError");
+    if(!turnOn && !await askConfirm_("Turn off supplier connections?\n\nVendor integrations leave the menu and nothing is sent to your suppliers. Saved connections and orders already placed are kept, and come back when you turn it on again.")) return;
+    if(errEl) errEl.textContent = "";
+    showToast("Saving — the program restarts for a moment…");
+    try{
+      const r = await window.oddDesktop.setSuppliersOn(turnOn);
+      if(r && r.ok === false && errEl) errEl.textContent = r.message || "Could not save.";
+    }catch(e){ if(errEl) errEl.textContent = "Could not save."; }
+  };
+}
+
 function renderDesktopOff_(app, hash){
   adminSetHash(hash);
   document.title = adminTitle_("Not in the desktop version");
@@ -1217,7 +1250,9 @@ function renderDesktopOff_(app, hash){
       <div class="stitch stitch-thick"></div>
     </div>
     <div class="admin-panel" style="--org-accent:var(--accent);" id="desktopOffPanel">
-      <div class="admin-empty">This page needs the internet (email, or a supplier's live connection), so it isn't part of the desktop version.</div>
+      <div class="admin-empty">${String(hash || "").split("/")[0] === "vendors"
+        ? "Vendor integrations need the internet. Turn them on under Global settings → Supplier connections."
+        : "This page needs the internet (email), so it isn't part of the desktop version."}</div>
       <div class="admin-actions" style="margin-top:14px;"><button class="admin-btn" onclick="location.hash='#orders'">Back to Orders</button></div>
     </div>`;
 }
@@ -7724,6 +7759,7 @@ async function renderGlobalSettings(app){
       <div class="admin-form">
         ${setupStatusHtml_(setupItems)}
         ${shippoKeySet === null ? "" : desktopShippoSectionHtml_(shippoKeySet, features.shipping !== false)}
+        ${shippoKeySet === null ? "" : desktopSuppliersSectionHtml_(adminDesktopSuppliers_())}
         <h2 style="margin-bottom:12px;">Business profile</h2>
         <div class="admin-note" style="margin-bottom:14px;">Who runs this site. The name appears on the storefront, in every email, on labels and in the browser tab; the rest tells customers how to reach you and how to pay. Leave anything you don't use blank.</div>
         ${bizField("gBizName", "name", "Business name", "", 'maxlength="120" placeholder="e.g. Northside Stitch Co."')}
@@ -7866,6 +7902,7 @@ async function renderGlobalSettings(app){
     `;
     loadVendorShippingSettings_();
     wireDesktopShippoSection_();
+    wireDesktopSuppliersSection_();
   }catch(e){
     document.getElementById("adminPanel").innerHTML = `<div class="admin-empty">Could not reach the server.</div>`;
   }

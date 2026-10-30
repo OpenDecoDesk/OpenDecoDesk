@@ -10,7 +10,7 @@
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain, safeStorage, session, net } = require("electron");
 const fs = require("fs");
 const path = require("path");
-const { startServer, copyState, restoreState, resetSignIn, setShippoKey, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
+const { startServer, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
 
 const SOURCE_URL = "https://github.com/opendecodesk/opendecodesk";
 const argData = process.argv.find(a => a.startsWith("--data-dir="));
@@ -111,14 +111,14 @@ async function whileStopped(work, hash) {
   } finally { busy = false; }
 }
 
-// Tracking checks (carrier shipping with a Shippo key): there is no cron on this computer, so the
-// Worker's scheduled handler — which here only checks tracking (src/worker.js) — runs a minute after
-// the program opens and every two hours while it stays open. It does nothing without a key or with
-// Shipping switched off.
+// Tracking checks (carrier shipping with a Shippo key; suppliers' shipment notices with supplier
+// connections on): there is no cron on this computer, so the Worker's scheduled handler — which here
+// only checks tracking (src/worker.js) — runs a minute after the program opens and every two hours
+// while it stays open. Without either one turned on it isn't called.
 const TRACKING_EVERY_MS = 2 * 60 * 60 * 1000;
 function startTrackingChecks() {
   const run = async () => {
-    if (!server || busy || !server.hasShippoKey()) return;
+    if (!server || busy || !(server.hasShippoKey() || server.suppliersOn())) return;
     try { await server.runScheduled(); }
     catch (e) { console.error("Tracking check failed:", e); }
   };
@@ -192,6 +192,15 @@ ipcMain.handle("odd:set-shippo-key", async (e, key) => {
   const k = key == null ? null : String(key).trim();
   if (k !== null && (!k || k.length > 200 || /\s/.test(k))) return { ok: false, message: "That doesn't look like a Shippo API token." };
   const ok = await whileStopped(async () => { setShippoKey(dataDir, k, crypt()); }, "settings");
+  return { ok };
+});
+
+// Global settings → Supplier connections: on or off. Saved in desktop.json; the server restarts to
+// read it and the page reloads on Global settings.
+ipcMain.handle("odd:suppliers-on", async (e) => !!(isOurs(e.senderFrame && e.senderFrame.url) && server && server.suppliersOn()));
+ipcMain.handle("odd:set-suppliers-on", async (e, on) => {
+  if (!isOurs(e.senderFrame && e.senderFrame.url)) return { ok: false, message: "Not allowed." };
+  const ok = await whileStopped(async () => { setSupplierConnections(dataDir, !!on, crypt()); }, "settings");
   return { ok };
 });
 

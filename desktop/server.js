@@ -147,7 +147,9 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {} }
     r2Persist: paths.r2,
     durableObjectsPersist: paths.durableObjects,
     cachePersist: false,
-    bindings: { EDITION: "desktop", R2_PUBLIC_BASE: IMAGES_BASE, ...secrets },
+    // DESKTOP_SUPPLIERS: the owner turned on supplier connections (Global settings), which need the
+    // internet — hostConfig.js desktopSuppliersOn.
+    bindings: { EDITION: "desktop", R2_PUBLIC_BASE: IMAGES_BASE, ...secrets, ...(cfg.supplierConnections ? { DESKTOP_SUPPLIERS: "on" } : {}) },
   });
   let mf = null, used = null;
   for (const p of [...new Set([port, cfg.port].filter(n => Number.isInteger(n) && n > 0)), 0]) {
@@ -185,6 +187,8 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {} }
     },
     // Whether a Shippo key is set (carrier shipping, Global settings → Carrier shipping), never the key.
     hasShippoKey: () => !!secrets.SHIPPO_API_KEY,
+    // Whether supplier connections (PromoStandards) are turned on.
+    suppliersOn: () => !!cfg.supplierConnections,
     // The Worker's scheduled handler, which in the desktop version only checks tracking (src/worker.js):
     // run by main.js while the program is open, since there is no cron here.
     async runScheduled() {
@@ -216,6 +220,18 @@ function setShippoKey(dataDir, key, { protect, unprotect } = {}) {
   saveConfig(dataDir, cfg, next, { protect });
 }
 
+// Supplier connections (Vendor integrations: a supplier's live product data, ordering from it, its
+// shipment tracking) on or off — not a secret, so kept in desktop.json beside the port. The
+// suppliers' own logins are saved in the database, encrypted with VENDOR_CREDENTIALS_KEY. Only while
+// stopped, like setShippoKey.
+function setSupplierConnections(dataDir, on, { unprotect, protect } = {}) {
+  const { cfg, secrets } = loadConfig(dataDir, { unprotect });
+  if (!secrets) throw new Error("The saved secrets couldn't be read, so the setting can't be saved with them.");
+  const next = { ...cfg };
+  if (on) next.supplierConnections = true; else delete next.supplierConnections;
+  saveConfig(dataDir, next, secrets, { protect });
+}
+
 // Puts a copy made by copyState back, after moving the current state aside (never deleting it).
 function restoreState(dataDir, from) {
   const { state } = statePaths(dataDir);
@@ -230,7 +246,7 @@ function restoreState(dataDir, from) {
   return { aside };
 }
 
-module.exports = { startServer, adminHasUsablePassword, copyState, restoreState, resetSignIn, setShippoKey, stamp, statePaths, IMAGES_HOST, IMAGES_BASE, desktopCsp };
+module.exports = { startServer, adminHasUsablePassword, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, stamp, statePaths, IMAGES_HOST, IMAGES_BASE, desktopCsp };
 
 if (require.main === module) {
   const dataDir = path.resolve(process.argv[2] || path.join(process.cwd(), "desktop-data"));

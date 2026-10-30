@@ -951,8 +951,8 @@ function applyFeatures_(f){ siteFeatures = (f && typeof f === "object") ? f : {}
 function featureOn_(key){ return siteFeatures[key] !== false; }
 // "desktop" when the admin runs inside the desktop program (desktop/, /api/catalog's edition): the
 // admin then leaves out what needs the internet. Only the admin answer carries it.
-let siteEdition = "";
-function applyEdition_(e){ siteEdition = e === "desktop" ? "desktop" : ""; }
+let siteEdition = "", siteDesktopSuppliers = false;
+function applyEdition_(e, suppliers){ siteEdition = e === "desktop" ? "desktop" : ""; siteDesktopSuppliers = siteEdition === "desktop" && suppliers === true; }
 function applyBusiness_(b){
   if(b && typeof b === "object") business = Object.assign({}, business, b);
   VENMO_USERNAME = business.venmo || "";
@@ -1183,7 +1183,7 @@ async function resolveCurrentOrg(){
     applyBusiness_(data.business);
     applyCountry_(data.country);
     applyFeatures_(data.features);
-    if(data.status === "admin"){ applyEdition_(data.edition); return {admin:true}; }
+    if(data.status === "admin"){ applyEdition_(data.edition, data.desktopSuppliers); return {admin:true}; }
     // Global settings → Features → Storefront is off: no shop is served here (see catalog.js).
     if(data.status === "closed") return {closed:true};
     if(data.status !== "ok") return null;

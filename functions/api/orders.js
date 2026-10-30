@@ -11,7 +11,7 @@
  *   - Prices are recalculated server-side from D1 (priceItem()), never trusted from client
  */
 
-import { classifyHost, rootDomain, adminSubdomains, isDesktopEdition, desktopLockedFeatures } from "../_lib/hostConfig.js";
+import { classifyHost, rootDomain, adminSubdomains, isDesktopEdition, desktopLockedFeatures, desktopSuppliersOn } from "../_lib/hostConfig.js";
 import { getCatalogData, invalidateCatalogVersionCache } from "../_lib/catalogCache.js";
 import { validateOrgFields, validateProductImages, cleanImageUrl, PRODUCT_ID_RE } from "../_lib/catalogValidation.js";
 import { requireAdmin, adminActor, adminUser } from "../_lib/adminAuth.js";
@@ -322,17 +322,22 @@ const FEATURE_ACTIONS = {
 const ACTION_FEATURE = {};
 for (const [feature, actions] of Object.entries(FEATURE_ACTIONS)) for (const a of actions) ACTION_FEATURE[a] = feature;
 // The desktop edition (hostConfig.js isDesktopEdition): actions that only work by reaching a service
-// on the internet — sending email, Stripe, attaching a shop's web address, a supplier's live
-// connection (PromoStandards) and fetching a picture from a web address. The desktop program
-// leaves them out of its pages; these are refused (403) in case anything still asks. Importing a
-// supplier's files (CSV, PDF invoices, product files) stays: that is reading a file on this computer.
+// on the internet — sending email, Stripe, attaching a shop's web address. The desktop program
+// leaves them out of its pages; these are refused (403) in case anything still asks.
 const DESKTOP_REFUSED_ACTIONS = new Set([
   "sendTestEmail", "resendEmail", "sendInvoice", "createShippingPaymentLink", "backfillStripeFees",
-  "setupOrgDomain", "getOrgDomainStatus", "getPreviewLink", "copyVendorImage",
-  "vendorDirectorySearch", "vendorDirectoryEndpoints", "saveVendorConnection", "testVendorConnection", "linkVendorConnectionBlanks", "fetchVendorProducts",
-  "previewSupplierOrder", "placeSupplierOrder", "checkSupplierOrderShipments",
+  "setupOrgDomain", "getOrgDomainStatus", "getPreviewLink",
 ]);
 const DESKTOP_REFUSED_MSG = "This needs the internet, so it isn't part of the desktop version.";
+// …and supplier connections (PromoStandards: the directory, a supplier's live product data, ordering,
+// shipment tracking) and fetching a supplier's pictures from the web: refused until the owner turns
+// supplier connections on in the program (hostConfig.js desktopSuppliersOn). Importing a supplier's
+// files (CSV, PDF invoices, product files) is always there: that reads a file on this computer.
+const DESKTOP_SUPPLIER_ACTIONS = new Set([
+  "copyVendorImage", "vendorDirectorySearch", "vendorDirectoryEndpoints", "saveVendorConnection", "testVendorConnection",
+  "linkVendorConnectionBlanks", "fetchVendorProducts", "previewSupplierOrder", "placeSupplierOrder", "checkSupplierOrderShipments",
+]);
+const DESKTOP_SUPPLIERS_OFF_MSG = "Supplier connections need the internet — turn them on under Global settings → Supplier connections.";
 const featureLabel_ = (key) => (FEATURES.find(f => f.key === key) || { label: key }).label;
 const NO_SHIPPING_FEATURE_MSG = "Carrier shipping is turned off (Global settings → Features → Shipping). Use Local pickup or a custom delivery option with a flat fee instead.";
 
@@ -529,10 +534,10 @@ export async function onRequestPost(context) {
     if (denied) return denied;
     return featureOffResponse(ACTION_FEATURE[body.action], featureLabel_(ACTION_FEATURE[body.action]));
   }
-  if (DESKTOP_REFUSED_ACTIONS.has(body.action) && isDesktopEdition(env)) {
+  if (isDesktopEdition(env) && (DESKTOP_REFUSED_ACTIONS.has(body.action) || (DESKTOP_SUPPLIER_ACTIONS.has(body.action) && !desktopSuppliersOn(env)))) {
     const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
     if (denied) return denied;
-    return jsonResponse({ status: "error", code: "desktop", message: DESKTOP_REFUSED_MSG }, 403);
+    return jsonResponse({ status: "error", code: "desktop", message: DESKTOP_REFUSED_ACTIONS.has(body.action) ? DESKTOP_REFUSED_MSG : DESKTOP_SUPPLIERS_OFF_MSG }, 403);
   }
 
   // ---- listOrgs — admin org picker -------------------------------------------

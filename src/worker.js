@@ -35,10 +35,11 @@ import * as upload from "../functions/api/upload.js";
 import * as verify from "../functions/api/verify.js";
 import { recordSystemIssue, resolveTimeZone } from "../functions/_lib/db.js";
 import { isDigestHour } from "../functions/_lib/schedule.js";
-import { isDesktopEdition } from "../functions/_lib/hostConfig.js";
+import { isDesktopEdition, desktopSuppliersOn } from "../functions/_lib/hostConfig.js";
 import { ensureDesktopReady } from "../functions/_lib/desktop.js";
 import { fillMissingCardFees } from "../functions/_lib/stripeFees.js";
 import { checkShippedDeliveries, checkBlankShipments } from "../functions/_lib/deliveryCheck.js";
+import { checkSupplierShipments } from "../functions/_lib/supplierOrders.js";
 
 // The send-agent relay's mailbox is a Durable Object (one globally consistent instance); the class must be
 // exported from the Worker entry for the AGENT_MAILBOX binding in wrangler.toml.
@@ -115,15 +116,23 @@ export async function handleRequest(request, env, ctx) {
 // time zone is the install's one zone: Global settings → Region, else TIMEZONE, else UTC.
 export async function handleScheduled(event, env) {
   // The desktop program has no cron: desktop/main.js calls this while it is open. Of the jobs below
-  // only the tracking checks apply there (no Stripe, no customer uploads, no email), and only with
-  // a Shippo key — both check functions also skip themselves while Shipping is switched off.
+  // only the tracking checks apply there (no Stripe, no customer uploads, no email): carrier tracking
+  // with a Shippo key (both check functions also skip themselves while Shipping is switched off), and
+  // suppliers' shipment notices once supplier connections are turned on.
   if (isDesktopEdition(env)) {
-    if (!env.SHIPPO_API_KEY) return { ran: false, reason: "desktop edition, no Shippo key" };
+    const suppliers = desktopSuppliersOn(env);
+    if (!env.SHIPPO_API_KEY && !suppliers) return { ran: false, reason: "desktop edition, nothing online turned on" };
     const out = { ran: true, desktop: true };
-    try { out.deliveries = await checkShippedDeliveries(env); }
-    catch (e) { console.error("Tracking check failed:", e); out.deliveries = { error: String(e && e.message) }; }
-    try { out.blankShipments = await checkBlankShipments(env); }
-    catch (e) { console.error("Blank shipment check failed:", e); out.blankShipments = { error: String(e && e.message) }; }
+    if (env.SHIPPO_API_KEY) {
+      try { out.deliveries = await checkShippedDeliveries(env); }
+      catch (e) { console.error("Tracking check failed:", e); out.deliveries = { error: String(e && e.message) }; }
+      try { out.blankShipments = await checkBlankShipments(env); }
+      catch (e) { console.error("Blank shipment check failed:", e); out.blankShipments = { error: String(e && e.message) }; }
+    }
+    if (suppliers) {
+      try { out.supplierShipments = await checkSupplierShipments(env, { limit: 10 }); }
+      catch (e) { console.error("Supplier shipment check failed:", e); out.supplierShipments = { error: String(e && e.message) }; }
+    }
     return out;
   }
   const when = new Date(event && event.scheduledTime ? event.scheduledTime : Date.now());

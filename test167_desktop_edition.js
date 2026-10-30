@@ -66,7 +66,7 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   }
 
   console.log("\n=== B. localhost is the admin panel ===");
-  const host = new Function(strip(read("functions/_lib/hostConfig.js")) + "\nreturn { classifyHost, isDesktopEdition, desktopLockedFeatures };")();
+  const host = new Function(strip(read("functions/_lib/hostConfig.js")) + "\nreturn { classifyHost, isDesktopEdition, desktopLockedFeatures, desktopSuppliersOn };")();
   const DESK = { EDITION: "desktop" };
   ok("in the desktop edition, localhost and 127.0.0.1 are the admin", host.classifyHost("localhost", {}, DESK).kind === "admin" && host.classifyHost("127.0.0.1", {}, DESK).kind === "admin");
   ok("…and any other name is refused (a page pointing its own name at this computer gets nothing)", host.classifyHost("evil.example.net", {}, DESK).kind === "unknown" && host.classifyHost("shop.example.com", { shop: "shop" }, { ...DESK, ROOT_DOMAIN: "example.com" }).kind === "unknown");
@@ -132,9 +132,27 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   r = await post(env, { action: "listOrgs", key: "x" });
   ok("the back office itself answers", r.status === 200 && r.body.orgs.length === 1);
   const ordersSrc = read("functions/api/orders.js");
-  const refused = (ordersSrc.match(/const DESKTOP_REFUSED_ACTIONS = new Set\(\[([\s\S]*?)\]\)/) || [])[1] || "";
-  const names = refused.match(/"([A-Za-z]+)"/g).map(n => n.slice(1, -1));
-  ok("every refused action is a real admin action", names.length > 10 && names.every(n => ordersSrc.includes(`body.action === "${n}"`)));
+  const listed = (name) => (((ordersSrc.match(new RegExp("const " + name + " = new Set\\(\\[([\\s\\S]*?)\\]\\)")) || [])[1] || "").match(/"([A-Za-z]+)"/g) || []).map(n => n.slice(1, -1));
+  const names = [...listed("DESKTOP_REFUSED_ACTIONS"), ...listed("DESKTOP_SUPPLIER_ACTIONS")];
+  ok("every refused action is a real admin action", listed("DESKTOP_REFUSED_ACTIONS").length >= 8 && listed("DESKTOP_SUPPLIER_ACTIONS").length >= 10 && names.every(n => ordersSrc.includes(`body.action === "${n}"`)));
+
+  console.log("\n=== D2. Supplier connections: off until turned on in the program ===");
+  ok("they are on only in the desktop edition with DESKTOP_SUPPLIERS=on", host.desktopSuppliersOn({ EDITION: "desktop", DESKTOP_SUPPLIERS: "on" }) && !host.desktopSuppliersOn({ EDITION: "desktop" }) && !host.desktopSuppliersOn({ DESKTOP_SUPPLIERS: "on" }));
+  r = await post(env, { action: "vendorDirectorySearch", key: "x", q: "sanmar" });
+  ok("off: a supplier action is refused, saying where to turn them on", r.status === 403 && r.body.code === "desktop" && /Global settings → Supplier connections/.test(r.body.message));
+  const suppliersEnv = { ...env, DESKTOP_SUPPLIERS: "on" };
+  let leaked = [];
+  const fetch0 = global.fetch;
+  global.fetch = async (u) => { leaked.push(String(u)); return { ok: false, status: 500, json: async () => ({}), text: async () => "" }; };
+  r = await post(suppliersEnv, { action: "saveVendorConnection", key: "x" });
+  ok("on: supplier actions get through to their own checks", !(r.status === 403 && r.body.code === "desktop"));
+  r = await post(suppliersEnv, { action: "sendTestEmail", key: "x" });
+  ok("…while email stays refused", r.status === 403 && /isn't part of the desktop version/.test(r.body.message));
+  global.fetch = fetch0;
+  const catalogFor = async (e) => { const fn = new Function(strip(read("functions/_lib/hostConfig.js")) + "\n" + strip(read("functions/_lib/http.js")) + "\n" + strip(read("functions/_lib/db.js")) + "\n" +
+    "const getCatalogData = async (env) => ({ subdomainMap: {}, ...(await getPublicCatalogData(env.DB)) });\n" + strip(read("functions/api/catalog.js")) + "\nreturn onRequestGet;")();
+    return JSON.parse(await (await fn({ request: { url: "http://localhost:47830/api/catalog" }, env: e })).text()); };
+  ok("the admin page is told when they are on (and not otherwise)", (await catalogFor(suppliersEnv)).desktopSuppliers === true && (await catalogFor(env)).desktopSuppliers === undefined);
 
   console.log("\n=== E. Setup status ===");
   const { setupStatus } = new Function(strip(read("functions/_lib/setupStatus.js")) + "\nreturn { setupStatus };")();
@@ -225,7 +243,10 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
     out = await worker.handleScheduled({ scheduledTime: Date.now() }, { ...keyed });
     ok("with Shipping on, it checks the tracking (with the carrier the order's method names) and marks the order delivered", out.deliveries.delivered.some(x => x.orderId === shipped) &&
       looked.some(u => /\/tracks\/ups\/1Z999AA10123456784$/.test(u)) && !!d1.q("SELECT deliveredAt d FROM orders WHERE orderId = ?", shipped)[0].d);
-    ok("…and nothing else: no roll-up, no Stripe, no email (only Shippo was asked)", looked.every(u => /api\.goshippo\.com/.test(u)) && out.desktop === true);
+    ok("…and nothing else: no roll-up, no Stripe, no email (only Shippo was asked)", looked.every(u => /api\.goshippo\.com/.test(u)) && out.desktop === true && out.supplierShipments === undefined);
+    looked.length = 0;
+    out = await worker.handleScheduled({ scheduledTime: Date.now() }, { ...env, DESKTOP_SUPPLIERS: "on" });
+    ok("with supplier connections on (and no Shippo key), it checks suppliers' shipment notices only", out.ran === true && out.supplierShipments && out.supplierShipments.checked === 0 && out.deliveries === undefined && looked.length === 0);
     global.fetch = realFetch;
     await lib.setFeatures(d1, { shipping: false });
   }
@@ -276,6 +297,11 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   ok("an order has no Send received / Resend email or Send invoice button", /Mark as paid/.test(cell) && !/resendEmail|showSendInvoiceModal/.test(cell));
   ok("a paid one has no email button either", !/resendEmail/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X2", paid: true, items: [{}], shippingAddress: { line1: "1 Main" } })));
   ok("there is nothing to publish", w.publishStateHtml_({ state: "never" }) === "");
+  ok("Global settings offers to turn supplier connections on, and says file imports work either way", /Turn on supplier connections/.test(w.desktopSuppliersSectionHtml_(false)) && /Importing a supplier's files/.test(w.desktopSuppliersSectionHtml_(false)) && /Turn off supplier connections/.test(w.desktopSuppliersSectionHtml_(true)));
+  ok("Vendor integrations stay hidden while they are off", w.adminDesktopHides_("vendors") === true);
+  w.eval("siteDesktopSuppliers = true");
+  ok("…and come back once they are on (Communications stays hidden)", w.adminDesktopHides_("vendors") === false && w.adminDesktopHides_("comms") === true);
+  w.eval("siteDesktopSuppliers = false");
   const shippo = w.desktopShippoSectionHtml_(false, false);
   ok("Global settings explains carrier shipping by hand and with a Shippo key, and takes the key in a password field", /Ship this order/.test(shippo) && /No Shippo key yet/.test(shippo) && /type="password" id="gShippoKey"/.test(shippo) && !/gShippoRemove/.test(shippo));
   ok("…with a key set it offers to remove it, and never shows the key", /A Shippo key is set — turn on Shipping/.test(w.desktopShippoSectionHtml_(true, false)) && /gShippoRemove/.test(w.desktopShippoSectionHtml_(true, true)));
