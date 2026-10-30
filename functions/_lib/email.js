@@ -6,7 +6,9 @@ import { addOwnerNotice, recordSystemIssue, getBusinessProfile, resolveTimeZone 
  * receipts inbox when one is set (EMAIL_BCC, or Business profile → Receipts inbox) so there's a copy
  * of everything sent. Who the business is comes from the Business profile setting (db.js).
  * An install on the free Workers plan (no Cloudflare email) can send through Resend instead: set
- * RESEND_API_KEY and that provider is used for everything (sendViaResend_). Cloudflare sending uses the `EMAIL` send_email binding if one is configured, otherwise the REST API
+ * RESEND_API_KEY and that provider is used for everything (sendViaResend_). The desktop program
+ * sends through the owner's own mailbox instead (SMTP, its MAILER binding: sendViaMailer_), once
+ * email is set up there; until then it sends nothing (desktopEmail_). Cloudflare sending uses the `EMAIL` send_email binding if one is configured, otherwise the REST API
  * with CF_EMAIL_API_TOKEN (encrypted; a token with Email Sending permission only) + CF_ACCOUNT_ID.
  *
  * There is no second transport: a send that fails (not configured, API error, network, or the
@@ -25,7 +27,14 @@ const SITE_ = "%%SITE%%";
 // The install's root domain and admin address (ROOT_DOMAIN / ADMIN_SUBDOMAIN — the same rule as
 // hostConfig.js, repeated here so this file has no import beyond db.js).
 const siteRoot_ = (env) => String((env && env.ROOT_DOMAIN) || "example.com").trim().toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
-const adminSiteUrl_ = (env) => "https://" + (String((env && env.ADMIN_SUBDOMAIN) || "admin").split(",")[0].trim() || "admin") + "." + siteRoot_(env);
+// The desktop program (EDITION=desktop, hostConfig.js) has no site and no admin address anyone else
+// can open: its emails name neither, and carry no links back to it.
+const isDesktop_ = (env) => String((env && env.EDITION) || "").trim().toLowerCase() === "desktop";
+const adminSiteUrl_ = (env) => isDesktop_(env) ? "" : "https://" + (String((env && env.ADMIN_SUBDOMAIN) || "admin").split(",")[0].trim() || "admin") + "." + siteRoot_(env);
+// The desktop program sends only once email is set up there (Global settings → Email: the owner's
+// mailbox, the MAILER binding). "off" until then: nothing is sent, and nothing is recorded as a
+// failure — no email is the desktop's normal state, not a problem.
+const desktopEmail_ = (env) => !isDesktop_(env) ? "" : (env.MAILER && typeof env.MAILER.fetch === "function" ? "on" : "off");
 
 // Who this install is, for one message: the saved Business profile with its fallbacks.
 //   owner inbox: the profile's, else OWNER_EMAIL, else owner@<root domain>
@@ -33,13 +42,15 @@ const adminSiteUrl_ = (env) => "https://" + (String((env && env.ADMIN_SUBDOMAIN)
 async function mailIdentity_(env) {
   let p = {};
   try { p = (await getBusinessProfile(env && env.DB)) || {}; } catch (e) { p = {}; }
-  const site = siteRoot_(env);
+  const site = isDesktop_(env) ? "" : siteRoot_(env);
   return { name: p.name || "Our shop", site,
-    owner: p.ownerEmail || String((env && env.OWNER_EMAIL) || "").trim() || ("owner@" + site),
+    owner: p.ownerEmail || String((env && env.OWNER_EMAIL) || "").trim() || (site ? "owner@" + site : String((env && env.EMAIL_FROM) || "").trim()),
     bcc: String((env && env.EMAIL_BCC) || "").trim() || p.receiptsEmail || "" };
 }
 function fillTemplate_(msg, id) {
-  const fill = (v, html) => v == null ? v : String(v).split("%%OWNER_EMAIL%%").join(id.owner).split("%%BUSINESS%%").join(html ? escHtml(id.name) : id.name).split("%%SITE%%").join(id.site);
+  // No site (the desktop program): "Business — site" footers end at the business's name.
+  const noSite = (v) => id.site ? v : v.split(" — %%SITE%%").join("").split(", %%SITE%%").join("");
+  const fill = (v, html) => v == null ? v : noSite(String(v)).split("%%OWNER_EMAIL%%").join(id.owner).split("%%BUSINESS%%").join(html ? escHtml(id.name) : id.name).split("%%SITE%%").join(id.site);
   return { ...msg, to: fill(msg.to), subject: fill(msg.subject), html: fill(msg.html, true), text: fill(msg.text) };
 }
 
@@ -57,6 +68,7 @@ async function queueOwnerNotice_(env, notice, fallbackEmail) {
 
 async function send_(env, msg) {
   if (!msg || !msg.to) return false;
+  if (desktopEmail_(env) === "off") return false;
   const id = await mailIdentity_(env);
   msg = fillTemplate_(msg, id);
   if (!String(msg.to).includes("@")) return false;
@@ -64,14 +76,36 @@ async function send_(env, msg) {
   // can't be mistaken for the real site's when both send to the same inboxes. Unset by default.
   const tag = env && env.EMAIL_SUBJECT_TAG ? String(env.EMAIL_SUBJECT_TAG).trim().slice(0, 30) : "";
   if (tag && !String(msg.subject || "").startsWith(tag)) msg = { ...msg, subject: `${tag} ${msg.subject || ""}`.trim() };
-  // One provider per install: Resend when RESEND_API_KEY is set, otherwise Cloudflare Email Service.
-  // Never both — a failed send is a failure, not a reason to try somewhere else.
-  const viaResend = !!(env && env.RESEND_API_KEY);
-  const r = viaResend ? await sendViaResend_(env, msg, id) : await sendViaCloudflare_(env, msg, id);
+  // One provider per install: the owner's mailbox in the desktop program, else Resend when
+  // RESEND_API_KEY is set, otherwise Cloudflare Email Service. Never two — a failed send is a
+  // failure, not a reason to try somewhere else.
+  const via = desktopEmail_(env) === "on" ? "mailbox" : env && env.RESEND_API_KEY ? "resend" : "cloudflare";
+  const r = via === "mailbox" ? await sendViaMailer_(env, msg, id) : via === "resend" ? await sendViaResend_(env, msg, id) : await sendViaCloudflare_(env, msg, id);
   if (r === true) return true;
-  if (r !== "bounced") console.error((viaResend ? "Resend" : "Cloudflare Email Service") + " send failed for:", msg.subject);
+  if (r !== "bounced") console.error({ mailbox: "Mailbox (SMTP)", resend: "Resend", cloudflare: "Cloudflare Email Service" }[via] + " send failed for:", msg.subject);
   await recordSystemIssue(env && env.DB, "email_failed", msg.subject);
   return false;
+}
+
+// The desktop program's mailbox (desktop/mailer.js, over its MAILER binding): the program sends from
+// the mailbox's own address (EMAIL_FROM) under the business's name. Returns true or false; `report`
+// as for Resend, with the mail server's answer.
+async function sendViaMailer_(env, { to, subject, html, text }, id, report) {
+  const bcc = id.bcc && id.bcc.toLowerCase() !== String(to).trim().toLowerCase() ? [id.bcc] : [];
+  try {
+    const res = await env.MAILER.fetch("https://mailer.desktop.invalid/send", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to, fromName: id.name, replyTo: id.owner, bcc, subject, html: html || undefined, text: text || "(no plain-text body)" }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (report) Object.assign(report, { httpStatus: res.status, providerMessage: String(data.message || "").slice(0, 500) });
+    if (!res.ok || !data.ok) { console.error("Mailbox send failed:", String(data.message || res.status).slice(0, 300)); return false; }
+    return true;
+  } catch (e) {
+    console.error("Mailbox send error:", e);
+    if (report) report.providerMessage = "Couldn't reach the program's mail sender: " + String((e && e.message) || e).slice(0, 300);
+    return false;
+  }
 }
 
 // Resend (https://resend.com) — an alternative for an install that can't use Cloudflare's email
@@ -163,8 +197,9 @@ async function sendViaCloudflare_(env, { to, subject, html, text }, id, report) 
 export async function sendTestEmail(env, to) {
   const id = await mailIdentity_(env);
   const from = String((env && env.EMAIL_FROM) || ("orders@" + siteRoot_(env))).trim();
-  const key = env && env.RESEND_API_KEY != null ? String(env.RESEND_API_KEY) : "";
-  const provider = key ? "resend" : (env && env.EMAIL && typeof env.EMAIL.send === "function") ? "cloudflare-binding"
+  const desktop = desktopEmail_(env);
+  const key = !desktop && env && env.RESEND_API_KEY != null ? String(env.RESEND_API_KEY) : "";
+  const provider = desktop === "on" ? "mailbox" : desktop === "off" ? "none" : key ? "resend" : (env && env.EMAIL && typeof env.EMAIL.send === "function") ? "cloudflare-binding"
     : (env && env.CF_EMAIL_API_TOKEN && env.CF_ACCOUNT_ID) ? "cloudflare-api" : "none";
   const report = { provider, from, fromDomain: from.split("@")[1] || "", to: String(to || ""), replyTo: id.owner, bcc: id.bcc || "",
     businessName: id.name, rootDomain: siteRoot_(env), subjectTag: env && env.EMAIL_SUBJECT_TAG ? String(env.EMAIL_SUBJECT_TAG).trim() : "",
@@ -172,16 +207,17 @@ export async function sendTestEmail(env, to) {
     httpStatus: null, providerMessage: "", providerId: "", ok: false, hints: [] };
   const hint = (t) => report.hints.push(t);
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(report.to)) { hint("Enter an email address to send the test to."); return report; }
-  if (report.fromDomain === "example.com") hint("ROOT_DOMAIN isn't set, so emails would come from an example.com address. Set ROOT_DOMAIN (or EMAIL_FROM) to your own domain.");
+  if (report.fromDomain === "example.com" && !desktop) hint("ROOT_DOMAIN isn't set, so emails would come from an example.com address. Set ROOT_DOMAIN (or EMAIL_FROM) to your own domain.");
   if (key && report.key.spaceInside) hint("RESEND_API_KEY has a space or line break in the middle — copy it again (wrangler secret put RESEND_API_KEY) and redeploy.");
   else if (key && report.key.paddedEnds) hint("RESEND_API_KEY was saved with a space or line break at the end. Emails now ignore it, but it's worth setting the key again cleanly.");
   else if (key && !report.key.looksLikeResend) hint("RESEND_API_KEY doesn't look like a Resend key (they start with re_). Check you pasted the API key itself.");
-  if (provider === "none") { hint("No email provider is set up. Set RESEND_API_KEY (a secret), or Cloudflare Email Service — see docs/email.md."); return report; }
+  if (provider === "none") { hint(desktop ? "Email isn't set up. Add your mailbox under Global settings → Email." : "No email provider is set up. Set RESEND_API_KEY (a secret), or Cloudflare Email Service — see docs/email.md."); return report; }
   const tag = report.subjectTag;
+  const where = desktop ? "the OpenDecoDesk program" : report.rootDomain;
   const msg = { to: report.to, subject: (tag ? tag + " " : "") + "Test email from " + id.name,
-    html: `<div style="font-family:sans-serif"><p>This is a test email from <strong>${escHtml(id.name)}</strong> (${escHtml(report.rootDomain)}), sent from Tools → Communications.</p><p>If you can read this, email is working.</p></div>`,
-    text: `This is a test email from ${id.name} (${report.rootDomain}), sent from Tools → Communications.\n\nIf you can read this, email is working.` };
-  const r = provider === "resend" ? await sendViaResend_(env, msg, id, report) : await sendViaCloudflare_(env, msg, id, report);
+    html: `<div style="font-family:sans-serif"><p>This is a test email from <strong>${escHtml(id.name)}</strong> (${escHtml(where)}), sent from Tools → Communications.</p><p>If you can read this, email is working.</p></div>`,
+    text: `This is a test email from ${id.name} (${where}), sent from Tools → Communications.\n\nIf you can read this, email is working.` };
+  const r = provider === "mailbox" ? await sendViaMailer_(env, msg, id, report) : provider === "resend" ? await sendViaResend_(env, msg, id, report) : await sendViaCloudflare_(env, msg, id, report);
   report.ok = r === true;
   if (r === "bounced") hint("That address permanently bounced — try another one.");
   if (!report.ok && provider === "resend") {
@@ -193,7 +229,8 @@ export async function sendTestEmail(env, to) {
     if (st === 429) hint("Resend's rate limit — wait a minute and try again.");
     if (!report.hints.length || report.hints.every(h => /ROOT_DOMAIN/.test(h))) hint("See Resend's message above; the Logs page in your Resend account shows the same attempt.");
   }
-  if (report.ok) hint(provider === "resend"
+  if (!report.ok && provider === "mailbox") hint("See the mail server's answer above. Global settings → Email has the mailbox's settings.");
+  if (report.ok) hint(provider === "mailbox" ? "Your mail server accepted it. If it doesn't arrive, check spam; it is also in the mailbox's Sent folder with Gmail, iCloud and most others." : provider === "resend"
     ? "Resend accepted it. If it doesn't arrive, check spam, and the Logs page in your Resend account for this email's id (above)."
     : "Accepted for sending. If it doesn't arrive, check spam.");
   return report;
@@ -377,11 +414,11 @@ export async function sendDigestHeartbeatEmail(env, { lastSentAt = "", inTransit
     `The morning check ran at ${when(new Date().toISOString())} and found nothing new ${since}: no new orders, payments, refunds, deliveries or problems.`,
     watching.length ? `Still being watched: ${watching.join(", ")}.` : "",
     maintenanceDue.length ? `Machine maintenance due: ${maintenanceText_(maintenanceDue).join("; ")}.` : "",
-    `Details: ${adminUrl}/#comms`,
+    adminUrl ? `Details: ${adminUrl}/#comms` : "Details: Tools → Communications in the program.",
   ].filter(Boolean);
   const html = `<div style="font-family:system-ui,sans-serif;font-size:14px;color:#222;line-height:1.5;">` +
     lines.slice(0, -1).map(l => `<p style="margin:0 0 8px;">${escHtml(l)}</p>`).join("") +
-    `<p style="margin:0;"><a href="${escHtml(adminUrl)}/#comms">Open Communications</a></p></div>`;
+    (adminUrl ? `<p style="margin:0;"><a href="${escHtml(adminUrl)}/#comms">Open Communications</a></p>` : `<p style="margin:0;">${escHtml(lines[lines.length - 1])}</p>`) + `</div>`;
   return send_(env, { to: ORDER_NOTIFICATION_EMAIL, subject: "Daily roll-up — nothing new", html, text: lines.join("\n\n") });
 }
 
@@ -457,7 +494,7 @@ export async function sendDailyDigestEmail(env, { orders = [], notices = [], org
 
   const html = `<div style="font-family:sans-serif;max-width:760px;margin:auto">
     <h2 style="margin:0 0 4px">Daily roll-up</h2>
-    <p style="color:#555;margin:0 0 16px">Everything since the last roll-up. <a href="${escHtml(adminUrl)}">Open the admin panel</a></p>
+    <p style="color:#555;margin:0 0 16px">Everything since the last roll-up.${adminUrl ? ` <a href="${escHtml(adminUrl)}">Open the admin panel</a>` : ""}</p>
     ${sec ? `<div style="border:2px solid #b45309;border-radius:6px;padding:10px 12px;margin-bottom:18px;background:#fffbeb">
       <h3 style="margin:0 0 6px;color:#92400e;font-size:16px">🔒 ${plural(sec.count, "failed admin sign-in")}</h3>
       <p style="margin:0;font-size:14px">${Number(sec.passphrase || 0)} wrong password, ${Number(sec.code || 0)} wrong 2FA code, between ${escHtml(when(sec.first))} and ${escHtml(when(sec.last))}, from ${escHtml((sec.ips || []).join(", ") || "unknown IPs")}.
@@ -467,7 +504,7 @@ export async function sendDailyDigestEmail(env, { orders = [], notices = [], org
       <ul style="margin:0;padding-left:18px;font-size:14px">${issues.map(x => `<li><strong>${escHtml(x.label)}: ${Number(x.count)}</strong>
         <span style="color:#666;font-size:12px">(${escHtml(when(x.first))}${x.count > 1 ? " – " + escHtml(when(x.last)) : ""})</span>
         ${(x.samples || []).length ? `<br><span style="color:#555;font-size:12px">e.g. ${x.samples.map(escHtml).join(" · ")}</span>` : ""}</li>`).join("")}</ul>
-      <p style="margin:6px 0 0;font-size:12px;color:#555">Details are in the Cloudflare logs for those times.</p></div>` : ""}
+      <p style="margin:6px 0 0;font-size:12px;color:#555">Details are in ${isDesktop_(env) ? "the program's log (Help → Open the log)" : "the Cloudflare logs"} for those times.</p></div>` : ""}
     ${urgent.length ? `<div style="border:2px solid #b91c1c;border-radius:6px;padding:10px 12px;margin-bottom:18px;background:#fef2f2">
       <h3 style="margin:0 0 6px;color:#b91c1c;font-size:16px">⚠️ Needs attention</h3>${noticeTable(urgent)}</div>` : ""}
     ${n ? `<h3 style="margin:0 0 4px;font-size:17px">${plural(n, "new order")} — ${fmt$(total)}</h3>` + groups.map(g => `
@@ -514,7 +551,7 @@ export async function sendDailyDigestEmail(env, { orders = [], notices = [], org
     <ul style="margin:0;padding-left:18px;font-size:14px">${belowTarget.map(p => `<li><strong>${escHtml(p.name)}</strong> <span style="color:#666">(${escHtml(orgName(p.orgId))})</span><br><span style="font-size:13px;color:#555">${(p.problems || []).map(escHtml).join("<br>")}</span></li>`).join("")}</ul>` : ""}
     ${maintenanceDue.length ? `<h3 style="margin:22px 0 6px;font-size:17px">🔧 Machine maintenance due — ${maintenanceDue.length}</h3>
     <ul style="margin:0;padding-left:18px;font-size:14px">${maintenanceText_(maintenanceDue).map(x => `<li>${escHtml(x)}</li>`).join("")}</ul>
-    <p style="margin:6px 0 0;font-size:13px"><a href="${escHtml(adminUrl)}/#maintenance">Machine maintenance</a></p>` : ""}
+    ${adminUrl ? `<p style="margin:6px 0 0;font-size:13px"><a href="${escHtml(adminUrl)}/#maintenance">Machine maintenance</a></p>` : ""}` : ""}
     <hr/><p style="font-size:12px;color:#666">%%BUSINESS%% — daily roll-up</p>
   </div>`;
   const noticeText = (x) => `  ${when(x.createdAt)}  ${KIND[x.kind] || x.kind}  ${x.orderId} (${orgName(x.orgId)})  ${x.summary}${x.detail ? " — " + x.detail : ""}`;
@@ -760,7 +797,10 @@ export async function sendInvoiceEmail(env, { order, orgName, invoiceUrl, messag
   const subject = `Invoice for your order — ${order.orderId}`;
   const name = String(order.customerName || "").trim();
   const hello = name && name !== "Local Sale" ? `Hi ${name},` : "Hello,";
-  const lead = allowDelivery
+  // No invoice page to link to (the desktop program: it isn't on the web): the email is the invoice,
+  // with how to pay from the Business profile.
+  const pay = invoiceUrl ? null : await howToPay_(env, order);
+  const lead = !invoiceUrl ? "Here is your invoice." : allowDelivery
     ? "Your invoice is ready. Use the button below to choose how you'd like to get your order and to pay online."
     : "Your invoice is ready. Use the button below to see the details and pay online.";
   const note = String(message || "").trim();
@@ -774,17 +814,37 @@ export async function sendInvoiceEmail(env, { order, orgName, invoiceUrl, messag
     ${itemsTable(items)}
     ${receiptTotalsHtml_(order)}
     ${Number(order.amountReceived) > 0 ? `<p style="font-size:14px">Paid so far: ${fmt$(order.amountReceived)} &nbsp;·&nbsp; <strong>Balance due: ${fmt$(due)}</strong></p>` : ""}
-    <div style="margin:24px 0;text-align:center">
+    ${invoiceUrl ? `<div style="margin:24px 0;text-align:center">
       <a href="${escHtml(invoiceUrl)}" style="display:inline-block;background:#1d4ed8;color:#fff;font-size:16px;font-weight:bold;padding:14px 32px;border-radius:6px;text-decoration:none">View &amp; pay invoice &rarr;</a>
     </div>
-    <p style="font-size:13px;color:#555">If the button doesn't work, copy this link: ${escHtml(invoiceUrl)}</p>
+    <p style="font-size:13px;color:#555">If the button doesn't work, copy this link: ${escHtml(invoiceUrl)}</p>` : pay.html}
     <hr/>
     <p style="font-size:12px;color:#666">%%BUSINESS%% — %%SITE%%</p>
   </div>`;
   const text = `Invoice for order ${order.orderId}\n\n${hello} ${lead}\n${note ? "\n" + note + "\n" : ""}\n${receiptTotalsText_(order)}\n` +
     (Number(order.amountReceived) > 0 ? `Paid so far: ${fmt$(order.amountReceived)} · Balance due: ${fmt$(due)}\n` : "") +
-    `\nView and pay: ${invoiceUrl}\n\n%%BUSINESS%%`;
+    (invoiceUrl ? `\nView and pay: ${invoiceUrl}\n\n%%BUSINESS%%` : `\n${pay.text}\n\n%%BUSINESS%%`);
   return send_(env, { to: order.contact, subject, html, text });
+}
+
+// How to pay an invoice that has no page to pay on (the desktop program's): the ways the Business
+// profile lists — Venmo (a link with the amount), Zelle, a cheque by mail — and replying to the email.
+async function howToPay_(env, order) {
+  let p = {};
+  try { p = (await getBusinessProfile(env && env.DB)) || {}; } catch (e) { p = {}; }
+  const due = Number(order.balanceDue) || 0;
+  const ways = [];
+  if (p.venmo) ways.push({ text: `Venmo: @${p.venmo}`, href: `https://venmo.com/u/${encodeURIComponent(p.venmo)}?txn=pay&amount=${due.toFixed(2)}&note=${encodeURIComponent("Order " + order.orderId)}` });
+  if (p.zelle) ways.push({ text: `Zelle: ${p.zelle}` });
+  if (p.mailingAddress) ways.push({ text: `A check made out to ${p.legalName || p.name || "us"}, mailed to ${String(p.mailingAddress).replace(/\s*\n\s*/g, ", ")}` });
+  const close = "Questions? Reply to this email.";
+  return {
+    html: `<h3 style="margin:20px 0 6px;font-size:16px">How to pay${due > 0 ? " " + fmt$(due) : ""}</h3>` +
+      (ways.length ? `<ul style="margin:0 0 8px;padding-left:20px">${ways.map(w => `<li>${w.href ? `<a href="${escHtml(w.href)}">${escHtml(w.text)}</a>` : escHtml(w.text)}</li>`).join("")}</ul>` : "") +
+      `<p style="font-size:13px;color:#555">Please put the order number, ${escHtml(order.orderId)}, with your payment. ${close}</p>`,
+    text: `How to pay${due > 0 ? " " + fmt$(due) : ""}:\n` + ways.map(w => "  " + w.text + (w.href ? "\n    " + w.href : "")).join("\n") +
+      `\nPlease put the order number, ${order.orderId}, with your payment. ${close}`,
+  };
 }
 
 // Queued for the owner's 6 AM roll-up when a customer chooses how they'll get their order on its

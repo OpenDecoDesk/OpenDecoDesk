@@ -16,6 +16,11 @@ contextBridge.exposeInMainWorld("oddDesktop", {
   // restarts the program's server and reloads the page).
   suppliersOn: () => ipcRenderer.invoke("odd:suppliers-on"),
   setSuppliersOn: (on) => ipcRenderer.invoke("odd:set-suppliers-on", !!on),
+  // Global settings → Email: the mailbox's settings ({ host, port, security, user, from }, never the
+  // password; null while email is off), and saving them (tried first; { ok, message }) or turning
+  // email off (null). Saving restarts the program's server and reloads the page.
+  emailSettings: () => ipcRenderer.invoke("odd:email-settings"),
+  setEmail: (settings, password) => ipcRenderer.invoke("odd:set-email", settings, password),
   // The backup reminder: { createdAt, lastBackupAt } (ISO times or null), and File → Back up….
   backupStatus: () => ipcRenderer.invoke("odd:backup-status"),
   backUp: () => ipcRenderer.invoke("odd:back-up"),

@@ -88,7 +88,8 @@ and the tax and shipping features are built around a US business (see [Region](#
 ## The desktop version
 
 For a shop that doesn't sell online: the back office as a program on one computer, for Windows and
-Mac, with no Cloudflare account, no domain, no web shop and no email. It is the same code, run by
+Mac, with no Cloudflare account, no domain and no web shop. Email is optional, through your own
+mailbox (Gmail, iCloud, your web host's mail). It is the same code, run by
 Cloudflare's local runtime inside a desktop window, with the database and files in your user
 folder. On first start it asks for your account, then opens Global settings for your business's
 details; a default shop is there for the orders you enter. Backups, restoring one and getting back

@@ -13,6 +13,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { readSources, migrate } = require("./migrate.js");
 const { FileStore, copyFromR2 } = require("./files.js");
+const { Mailer, cleanSmtpSettings } = require("./mailer.js");
 
 // Pictures are stored with this address (R2_PUBLIC_BASE), whatever port the server is on, so they
 // keep working when the port changes. ".invalid" can never be a real address (RFC 2606); the
@@ -136,6 +137,9 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {}, 
   // The Worker's buckets (IMAGES, RECEIPTS, DESIGNS) are files in state/files: each is a "wrapped
   // binding" made by desktop/r2-files-binding.mjs, whose requests the store answers here in Node.
   const bucket = (name) => ({ scriptName: "files", bindings: { BUCKET: name } });
+  // Email through the owner's mailbox (Global settings → Email), once it is set up: the Worker's
+  // MAILER binding is answered here by mailer.js, which alone holds the password.
+  const mailer = cfg.smtp && secrets.SMTP_PASSWORD ? new Mailer(cfg.smtp, secrets.SMTP_PASSWORD, { log }) : null;
   const options = (p) => ({
     host: "127.0.0.1",
     port: p,
@@ -164,8 +168,11 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {}, 
       wrappedBindings: { IMAGES: bucket("images"), RECEIPTS: bucket("receipts"), DESIGNS: bucket("designs") },
       durableObjects: { AGENT_MAILBOX: "AgentMailbox" },
       // DESKTOP_SUPPLIERS: the owner turned on supplier connections (Global settings), which need the
-      // internet — hostConfig.js desktopSuppliersOn.
-      bindings: { EDITION: "desktop", R2_PUBLIC_BASE: IMAGES_BASE, ...secrets, ...(cfg.supplierConnections ? { DESKTOP_SUPPLIERS: "on" } : {}) },
+      // internet — hostConfig.js desktopSuppliersOn. DESKTOP_EMAIL: email is set up (desktopEmailOn),
+      // sent from EMAIL_FROM, the mailbox's address. The mailbox password isn't the Worker's.
+      bindings: { EDITION: "desktop", R2_PUBLIC_BASE: IMAGES_BASE, ...withoutMailbox_(secrets), ...(cfg.supplierConnections ? { DESKTOP_SUPPLIERS: "on" } : {}),
+        ...(mailer ? { DESKTOP_EMAIL: "on", EMAIL_FROM: mailer.settings.from } : {}) },
+      ...(mailer ? { serviceBindings: { MAILER: (request) => mailer.handle(request) } } : {}),
     }, {
       name: "files",
       modules: true,
@@ -212,6 +219,8 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {}, 
     hasShippoKey: () => !!secrets.SHIPPO_API_KEY,
     // Whether supplier connections (PromoStandards) are turned on.
     suppliersOn: () => !!cfg.supplierConnections,
+    // Email (Global settings → Email): the mailbox's settings, never its password; null when off.
+    emailSettings: () => (mailer ? { ...mailer.settings } : null),
     // When this data folder was first used and last backed up (File → Back up…), for the reminder.
     backupStatus: () => ({ createdAt: cfg.createdAt || null, lastBackupAt: cfg.lastBackupAt || null }),
     // The Worker's scheduled handler, which in the desktop version only checks tracking (src/worker.js):
@@ -263,6 +272,42 @@ function setShippoKey(dataDir, key, { protect, unprotect } = {}) {
   saveConfig(dataDir, cfg, next, { protect });
 }
 
+// The secrets the Worker gets: all but the mailbox password, which only mailer.js uses.
+function withoutMailbox_(secrets) {
+  const out = { ...secrets };
+  delete out.SMTP_PASSWORD;
+  return out;
+}
+
+// Email through the owner's mailbox: the server settings in desktop.json, the password with the
+// secrets (encrypted where the system has a keychain). `password` empty keeps the saved one (changing
+// the server, not the password); null settings turn email off and forget both. Returns the settings
+// saved. Only while stopped, like setShippoKey.
+function setSmtp(dataDir, settings, password, { protect, unprotect } = {}) {
+  const { cfg, secrets } = loadConfig(dataDir, { unprotect });
+  if (!secrets) throw new Error("The saved secrets couldn't be read, so the password can't be saved with them.");
+  const nextCfg = { ...cfg }, nextSecrets = { ...secrets };
+  if (settings == null) {
+    delete nextCfg.smtp; delete nextSecrets.SMTP_PASSWORD;
+    saveConfig(dataDir, nextCfg, nextSecrets, { protect });
+    return null;
+  }
+  const clean = cleanSmtpSettings(settings);
+  const pass = password == null ? "" : String(password);
+  if (pass) nextSecrets.SMTP_PASSWORD = pass;
+  if (!nextSecrets.SMTP_PASSWORD) throw new Error("Enter the mailbox's password (or app password).");
+  nextCfg.smtp = clean;
+  saveConfig(dataDir, nextCfg, nextSecrets, { protect });
+  return clean;
+}
+
+// The saved mailbox password, for checking new settings before they are saved (main.js) when the
+// owner changes the server but not the password. Never given to the page.
+function savedSmtpPassword(dataDir, { unprotect } = {}) {
+  const { secrets } = loadConfig(dataDir, { unprotect });
+  return (secrets && secrets.SMTP_PASSWORD) || "";
+}
+
 // Supplier connections (Vendor integrations: a supplier's live product data, ordering from it, its
 // shipment tracking) on or off — not a secret, so kept in desktop.json beside the port. The
 // suppliers' own logins are saved in the database, encrypted with VENDOR_CREDENTIALS_KEY. Only while
@@ -296,7 +341,7 @@ function restoreState(dataDir, from) {
   return { aside };
 }
 
-module.exports = { startServer, adminHasUsablePassword, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, recordBackup, stamp, statePaths, IMAGES_HOST, IMAGES_BASE, desktopCsp };
+module.exports = { startServer, adminHasUsablePassword, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, setSmtp, savedSmtpPassword, recordBackup, stamp, statePaths, IMAGES_HOST, IMAGES_BASE, desktopCsp };
 
 if (require.main === module) {
   const dataDir = path.resolve(process.argv[2] || path.join(process.cwd(), "desktop-data"));

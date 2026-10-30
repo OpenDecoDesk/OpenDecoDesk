@@ -1,0 +1,230 @@
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+const { JSDOM, ResourceLoader } = require("jsdom");
+const { createD1 } = require("./testlib/d1-shim.js");
+const { readSources, migrate } = require("./desktop/migrate.js");
+const { Mailer, cleanSmtpSettings } = require("./desktop/mailer.js");
+const server = require("./desktop/server.js");
+
+// Email in the desktop version, through the owner's own mailbox (SMTP) — off until they set it up
+// under Global settings → Email:
+//   A. desktop/mailer.js: the settings it accepts, the message it sends, what it says when it can't.
+//   B. desktop/server.js: where the settings and the password are kept (never in the Worker's env).
+//   C. email.js and orders.js: the email actions come back with a mailbox; invoices are the email
+//      itself; with no mailbox nothing is sent and nothing is reported as a failure.
+//   D. The morning roll-up, from the program's scheduled run.
+//   E. The admin: Global settings → Email, the buttons and Communications.
+// The mail server itself is stood in for here; the real program was tried against a local SMTP
+// server (desktop/mailer.js with nodemailer).
+const read = (p) => fs.readFileSync(__dirname + "/" + p, "utf8");
+const strip = (src) => src.replace(/import\s*\{[\s\S]*?\}\s*from\s*["'][^"']+["'];?\n?/g, "").replace(/export (async function|function|const)/g, "$1");
+const ok = (d, c) => { console.log(d + ":", !!c); };
+
+(async () => {
+  console.log("=== A. desktop/mailer.js ===");
+  const gmail = { host: "smtp.gmail.com", port: 587, security: "starttls", from: "pat@gmail.com" };
+  const clean = cleanSmtpSettings({ ...gmail, host: " SMTP.Gmail.com " });
+  ok("settings are tidied, and the username is the address unless given", clean.host === "smtp.gmail.com" && clean.user === "pat@gmail.com" && clean.security === "starttls");
+  const refuses = (s, re) => { try { cleanSmtpSettings(s); return false; } catch (e) { return re.test(e.message); } };
+  ok("a server name that isn't one, port 25, or no address is refused, saying what to fix", refuses({ ...gmail, host: "smtp gmail" }, /mail server's name/) &&
+    refuses({ ...gmail, port: 25 }, /Use 587 or 465/) && refuses({ ...gmail, port: 70000 }, /usually 587 or 465/) && refuses({ ...gmail, from: "pat" }, /email address/));
+  const sent = [], logged = [];
+  let fail = null;
+  const transport = { sendMail: async (m) => { if (fail) throw fail; sent.push(m); return { response: "250 2.0.0 OK queued" }; }, verify: async () => { if (fail) throw fail; return true; } };
+  const mailer = new Mailer(gmail, "app password here", { transport, log: (t) => logged.push(t) });
+  let r = await mailer.send({ to: "cust@example.net", fromName: "Stitch <Co>", replyTo: "owner@stitch.example", bcc: ["books@stitch.example", "not an address"], subject: "Your order\r\nBcc: x@y.z", html: "<p>Hi</p>", text: "Hi" });
+  const m = sent[0] || {};
+  ok("a message goes from the mailbox's own address, under the business's name", r.ok && m.from && m.from.address === "pat@gmail.com" && m.from.name === "Stitch Co");
+  ok("…to the customer, with the receipts copy and replies to the owner", m.to === "cust@example.net" && m.bcc.join() === "books@stitch.example" && m.replyTo === "owner@stitch.example");
+  ok("…and a subject that can't add headers", m.subject === "Your order Bcc: x@y.z" && m.html === "<p>Hi</p>" && m.text === "Hi");
+  await mailer.send({ to: "cust@example.net", replyTo: "PAT@gmail.com", subject: "s" });
+  ok("replies go to the mailbox itself without a Reply-To of its own address", !("replyTo" in sent[1]) && sent[1].text === "(no plain-text body)");
+  r = await mailer.send({ to: "not-an-address", subject: "s" });
+  ok("a message to something that isn't an address isn't sent", !r.ok && sent.length === 2);
+  fail = Object.assign(new Error("Invalid login: 535-5.7.8 Username and Password not accepted"), { code: "EAUTH", response: "535-5.7.8 Username and Password not accepted" });
+  r = await mailer.send({ to: "cust@example.net", subject: "Payment confirmed — X1" });
+  ok("a refused sign-in says to use an app password, with the server's own answer", !r.ok && /app password/.test(r.message) && /535-5\.7\.8/.test(r.message));
+  const v = await mailer.verify();
+  ok("…and so does checking the settings before they are saved", !v.ok && /app password/.test(v.message));
+  fail = Object.assign(new Error("getaddrinfo ENOTFOUND smtp.gmial.com"), { code: "EDNS" });
+  ok("a server that doesn't exist is named", /no mail server called smtp\.gmail\.com/.test((await mailer.send({ to: "a@b.co", subject: "s" })).message));
+  fail = Object.assign(new Error("Connection timeout"), { code: "ETIMEDOUT" });
+  ok("…and one that doesn't answer says to check the server, port and connection", /Couldn't connect to smtp\.gmail\.com:587/.test((await mailer.send({ to: "a@b.co", subject: "s" })).message));
+  ok("the log has the subjects and the server's answers, never an address or the password", logged.length === 5 && /^Email sent: Your order/.test(logged[0]) && /250 2\.0\.0 OK/.test(logged[0]) &&
+    /Email not sent: Payment confirmed — X1/.test(logged[2]) && !logged.join("\n").includes("cust@example.net") && !logged.join("\n").includes("app password here"));
+  fail = null;
+  let res = await mailer.handle(new Request("https://mailer.desktop.invalid/send", { method: "POST", body: JSON.stringify({ to: "c@d.co", subject: "Hello", text: "t" }) }));
+  ok("the Worker's MAILER binding: a JSON message in, { ok, message } out", res.status === 200 && (await res.json()).ok === true && sent[sent.length - 1].subject === "Hello");
+  res = await mailer.handle(new Request("https://mailer.desktop.invalid/send", { method: "POST", body: "nope" }));
+  ok("…and anything else is refused", res.status === 400);
+  const mailerSrc = read("desktop/mailer.js");
+  ok("it never sends without encryption: TLS from the start on 465, else STARTTLS required", /secure: settings\.security === "tls"/.test(mailerSrc) && /requireTLS: settings\.security !== "tls"/.test(mailerSrc));
+
+  console.log("\n=== B. Where the settings are kept (desktop/server.js) ===");
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "odd-email-"));
+  server.resetSignIn(tmp);   // a data folder with its secrets, as after a first start
+  const cfgOf = () => JSON.parse(fs.readFileSync(path.join(tmp, "desktop.json"), "utf8"));
+  let thrown = null;
+  try { server.setSmtp(tmp, gmail, ""); } catch (e) { thrown = e; }
+  ok("turning email on needs the password", thrown && /password/.test(thrown.message) && !cfgOf().smtp);
+  server.setSmtp(tmp, gmail, "secret app pw");
+  let cfg = cfgOf();
+  ok("the server settings are kept beside the port, the password with the secrets", cfg.smtp.host === "smtp.gmail.com" && cfg.smtp.from === "pat@gmail.com" && !("password" in cfg.smtp) &&
+    cfg.secrets.SMTP_PASSWORD === "secret app pw" && server.savedSmtpPassword(tmp) === "secret app pw");
+  server.setSmtp(tmp, { ...gmail, host: "smtp.mail.me.com" }, "");
+  ok("saving without a password keeps the saved one", cfgOf().smtp.host === "smtp.mail.me.com" && cfgOf().secrets.SMTP_PASSWORD === "secret app pw");
+  const protect = (t) => "P:" + Buffer.from(t).toString("base64"), unprotect = (t) => Buffer.from(t.slice(2), "base64").toString();
+  server.setSmtp(tmp, gmail, "secret app pw", { protect, unprotect });
+  ok("where the system has a keychain the password is encrypted with the other secrets", !JSON.stringify(cfgOf()).includes("secret app pw") && server.savedSmtpPassword(tmp, { unprotect }) === "secret app pw");
+  server.setSmtp(tmp, null, null, { protect, unprotect });
+  cfg = cfgOf();
+  ok("turning email off forgets both", !cfg.smtp && server.savedSmtpPassword(tmp, { unprotect }) === "");
+  fs.rmSync(tmp, { recursive: true, force: true });
+  const serverSrc = read("desktop/server.js");
+  ok("the Worker gets DESKTOP_EMAIL, the address and the MAILER binding — never the password", /\.\.\.withoutMailbox_\(secrets\)/.test(serverSrc) && /delete out\.SMTP_PASSWORD/.test(serverSrc) &&
+    /DESKTOP_EMAIL: "on", EMAIL_FROM: mailer\.settings\.from/.test(serverSrc) && /serviceBindings: \{ MAILER: \(request\) => mailer\.handle\(request\) \}/.test(serverSrc));
+  const mainSrc = read("desktop/main.js");
+  ok("the program signs in with new settings before saving them", /const tried = await new Mailer\(clean, pass\)\.verify\(\);\s*if \(!tried\.ok\)/.test(mainSrc) && /odd:email-settings/.test(mainSrc) && /odd:set-email/.test(mainSrc));
+  ok("…and its preload gives the page those two calls only", /emailSettings: \(\) => ipcRenderer\.invoke\("odd:email-settings"\)/.test(read("desktop/preload.js")) && /setEmail: \(settings, password\)/.test(read("desktop/preload.js")));
+  ok("the packaged program carries mailer.js and nodemailer", JSON.parse(read("desktop/package.json")).build.files.includes("mailer.js") && /^\d+\.\d+\.\d+$/.test(JSON.parse(read("desktop/package.json")).dependencies.nodemailer));
+
+  console.log("\n=== C. Sending from the back office ===");
+  const src = readSources(__dirname);
+  const d1 = await createD1();
+  await migrate(d1, src);
+  d1._raw.run("INSERT OR REPLACE INTO global_settings (key, value) VALUES ('business', ?)", [JSON.stringify({ name: "Stitch Co", ownerEmail: "owner@stitch.example", venmo: "stitchco", mailingAddress: "1 Main St\nColumbus OH 43215" })]);
+  const lib = new Function(strip(read("functions/_lib/db.js")) + "\n" + strip(read("functions/_lib/hostConfig.js")) + "\n" + strip(read("functions/_lib/desktop.js")) + "\nreturn { ensureDesktopReady, getSystemIssues };")();
+  await lib.ensureDesktopReady({ DB: d1 });
+  const api = new Function(strip(read("functions/_lib/hostConfig.js")) + "\n" + strip(read("functions/_lib/http.js")) + "\n" + strip(read("functions/_lib/catalogValidation.js")) + "\n" +
+    "const requireAdmin = async (env, host, key) => host.kind === 'admin' && key === 'x' ? null : jsonResponse({ status: 'error', message: 'Unauthorized' }, 401); const adminActor = () => 'test';\n" +
+    "const rateLimited = async () => ({ blocked: false }); const rateLimitResponse = () => null; const verifyTurnstile = async () => ({ ok: true });\n" +
+    "const invalidateCatalogVersionCache = () => {}; const getCatalogData = async (env) => ({ subdomainMap: {}, ...(await getPublicCatalogData(env.DB)) });\n" +
+    "const ensureOrgDomain = async () => ({}), getOrgDomainStatus = async () => ({});\n" +
+    strip(read("functions/_lib/db.js")) + "\n" + strip(read("functions/_lib/email.js")) + "\n" + strip(read("functions/api/orders.js")) + "\nreturn onRequestPost;")();
+  const pending = [];
+  const post = async (env, body) => {
+    const res = await api({ env, waitUntil: (p) => pending.push(Promise.resolve(p).catch(() => {})), request: { url: "http://localhost:47123/api/orders", json: async () => body, headers: { get: () => null } } });
+    await Promise.all(pending.splice(0));
+    return { status: res.status, body: JSON.parse(await res.text()) };
+  };
+  const mail = [];
+  let mailerAnswer = { ok: true, message: "250 OK" };
+  const MAILER = { fetch: async (url, init) => { mail.push(JSON.parse(init.body)); return new Response(JSON.stringify(mailerAnswer), { status: mailerAnswer.ok ? 200 : 502 }); } };
+  const off = { DB: d1, EDITION: "desktop" };
+  const on = { DB: d1, EDITION: "desktop", DESKTOP_EMAIL: "on", EMAIL_FROM: "pat@gmail.com", MAILER };
+  r = await post(off, { action: "createLocalSale", key: "x", org: "shop", paymentMethod: "Venmo", customerName: "Sam", contact: "sam@example.net",
+    items: [{ productId: "__custom__", name: "Club tee", qty: 2, customUnitPrice: 20, type: "shirt" }] });
+  const orderId = r.body.orderId;
+  r = await post(off, { action: "markPaidManual", key: "x", org: "shop", orderId });
+  const issuesOff = (await lib.getSystemIssues(d1).catch(() => [])) || [];
+  ok("with no mailbox, marking an order paid sends nothing and reports no failed email", r.status === 200 && mail.length === 0 && !issuesOff.some(x => /email/i.test(x.kind || x.label || "")));
+  r = await post(on, { action: "sendTestEmail", key: "x", to: "pat@gmail.com" });
+  const t = mail[0] || {};
+  ok("with one, the test email goes through the program's mailer, and the report says so", r.status === 200 && r.body.report.provider === "mailbox" && r.body.report.ok && r.body.report.from === "pat@gmail.com" && /Your mail server accepted it/.test(r.body.report.hints.join(" ")));
+  ok("…from the business, replies to the owner, naming no web address", t.fromName === "Stitch Co" && t.replyTo === "owner@stitch.example" && /the OpenDecoDesk program/.test(t.text) && !/example\.com/.test(t.text + t.html));
+  mail.length = 0;
+  r = await post(on, { action: "resendEmail", key: "x", org: "shop", orderId });
+  ok("Resend confirmation works, and the email ends at the business's name (no site)", r.status === 200 && r.body.resent === "confirmed" && mail.length === 1 &&
+    mail[0].to === "sam@example.net" && /Stitch Co<\/p>/.test(mail[0].html) && !/%%|example\.com/.test(mail[0].html + mail[0].text));
+  // An invoice: a second order that still owes.
+  r = await post(on, { action: "createLocalSale", key: "x", org: "shop", paymentMethod: "Venmo", customerName: "Sam", contact: "sam@example.net",
+    items: [{ productId: "__custom__", name: "Cap", qty: 1, customUnitPrice: 30, type: "cap" }] });
+  const owing = r.body.orderId;
+  mail.length = 0;
+  r = await post(on, { action: "sendInvoice", key: "x", org: "shop", orderId: owing, message: "Thanks!", allowDelivery: true });
+  const inv = mail[0] || {};
+  ok("an invoice is sent with no link (there is no page to open), and no delivery choice", r.status === 200 && r.body.emailSent && r.body.url === "" && !/View &amp; pay|https?:\/\/[^"\s]*invoice/.test(inv.html) && r.body.invoice && r.body.invoice.allowDelivery !== true);
+  ok("…it is the invoice itself: the lines, the total, and how to pay from the Business profile", /Here is your invoice/.test(inv.html) && /Cap/.test(inv.html) && /How to pay \$30\.00/.test(inv.html) &&
+    /venmo\.com\/u\/stitchco\?txn=pay&amp;amount=30\.00/.test(inv.html) && /A check made out to Stitch Co, mailed to 1 Main St, Columbus OH 43215/.test(inv.html) && /How to pay \$30\.00:/.test(inv.text) && new RegExp(owing).test(inv.text));
+  mailerAnswer = { ok: false, message: "The mailbox refused the sign-in. (535 bad)" };
+  mail.length = 0;
+  r = await post(on, { action: "sendTestEmail", key: "x", to: "pat@gmail.com" });
+  ok("a refused test email shows the mail server's answer", r.status === 200 && !r.body.report.ok && /535 bad/.test(r.body.report.providerMessage) && /Global settings → Email/.test(r.body.report.hints.join(" ")));
+  r = await post(on, { action: "resendEmail", key: "x", org: "shop", orderId });
+  const issuesOn = (await lib.getSystemIssues(d1).catch(() => [])) || [];
+  ok("…and with email on, a failed order email is a problem the roll-up reports", issuesOn.some(x => /email/i.test(JSON.stringify(x))));
+  mailerAnswer = { ok: true, message: "250 OK" };
+  const emailSrc = read("functions/_lib/email.js");
+  ok("one provider per install: the mailbox in the desktop program, before Resend or Cloudflare", /const via = desktopEmail_\(env\) === "on" \? "mailbox" : env && env\.RESEND_API_KEY \? "resend" : "cloudflare";/.test(emailSrc));
+
+  console.log("\n=== D. The morning roll-up ===");
+  const worker = await import("./src/worker.js");
+  const realFetch = global.fetch, looked = [];
+  global.fetch = async (u) => { looked.push(String(u)); throw new Error("no network in this test"); };
+  mail.length = 0;
+  // Times on today's date (UTC, the time zone with none set): the roll-up records when it ran by the clock.
+  const today = new Date().toISOString().slice(0, 10), tomorrow = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
+  const at = (day, hm) => ({ scheduledTime: Date.parse(`${day}T${hm}:00Z`) });
+  let out = await worker.handleScheduled(at(today, "05:30"), { ...on });
+  ok("before the roll-up's hour (6 AM in the business's time zone) nothing is sent", out.ran === true && !out.rollUp && mail.length === 0);
+  out = await worker.handleScheduled(at(today, "09:10"), { ...on });
+  ok("the first run on or after it sends the roll-up to the owner", out.rollUp && mail.length === 1 && mail[0].to === "owner@stitch.example" && /^Daily roll-up/.test(mail[0].subject));
+  ok("…with no link to an admin address nobody else can open", !/https?:\/\/admin\./.test(mail[0].html + mail[0].text) && !/%%/.test(mail[0].html));
+  out = await worker.handleScheduled(at(today, "11:10"), { ...on });
+  ok("later runs that day send no second one", !out.rollUp && mail.length === 1);
+  out = await worker.handleScheduled(at(tomorrow, "07:00"), { ...on });
+  ok("the next morning's first run sends again (a quiet day gets the short 'nothing new' note)", out.rollUp && mail.length === 2 && /nothing new/.test(mail[1].subject) && /Tools → Communications in the program/.test(mail[1].text));
+  ok("…and nothing went to a supplier or anywhere else (supplier connections are off)", looked.length === 0);
+  out = await worker.handleScheduled(at(tomorrow, "08:00"), { ...off });
+  ok("without email set up the desktop's scheduled run sends nothing", out.ran === false && mail.length === 2);
+  global.fetch = realFetch;
+
+  console.log("\n=== E. The admin ===");
+  const catalog = new Function(strip(read("functions/_lib/hostConfig.js")) + "\n" + strip(read("functions/_lib/http.js")) + "\n" + strip(read("functions/_lib/db.js")) + "\n" +
+    "const getCatalogData = async (env) => ({ subdomainMap: {}, ...(await getPublicCatalogData(env.DB)) });\n" + strip(read("functions/api/catalog.js")) + "\nreturn onRequestGet;")();
+  const adminAnswer = async (env) => JSON.parse(await (await catalog({ request: { url: "http://localhost:47830/api/catalog" }, env })).text());
+  ok("the admin is told when email is set up, and not otherwise", (await adminAnswer(on)).desktopEmail === true && !("desktopEmail" in (await adminAnswer(off))));
+  const adminJs = read("public/admin.js");
+  class L extends ResourceLoader { fetch(url, o){
+    if (url.includes("/admin.js")) return Promise.resolve(Buffer.from(adminJs));
+    const local = new URL(url).pathname.match(/^\/vendor\/fonts\/[a-z0-9.-]+$/);
+    return local ? Promise.resolve(fs.readFileSync(__dirname + "/public" + local[0])) : super.fetch(url, o); } }
+  const saved = [];
+  const dom = new JSDOM(read("public/index.html"), { runScripts: "dangerously", resources: new L(), url: "http://localhost:47830/", pretendToBeVisual: true,
+    beforeParse(win){
+      win.fetch = async (url) => {
+        if (String(url).includes("/api/catalog")) { const body = await adminAnswer(on); return { ok: true, status: 200, json: async () => body }; }
+        return { ok: true, status: 200, json: async () => ({ status: "error", message: "n/a" }) };
+      };
+      win.oddDesktop = { edition: "desktop", firstRunKey: async () => null,
+        setEmail: async (settings, password) => { saved.push({ settings, password }); return password === "wrong" ? { ok: false, message: "The mailbox refused the sign-in." } : { ok: true }; } };
+      win.confirm = () => true;
+    } });
+  const w = dom.window, doc = w.document;
+  const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
+  await tick(200);
+  await w.loadAdminScript();
+  await tick(100);
+  ok("the page learns email is set up", w.eval("siteDesktopEmail") === true && w.adminDesktopEmail_() === true);
+  ok("…so Communications is back (its test send, the roll-up preview, failed emails)", w.adminDesktopHides_("comms") === false && w.adminDesktopHides_("vendors") === true);
+  const cell = w.adminActionCell({ orgId: "shop" }, { orderId: "X1", paid: false, items: [{}], balanceDue: 20 });
+  ok("…and the order buttons that send email", /resendEmail/.test(cell) && /showSendInvoiceModal/.test(cell) && /Email the customer the invoice and how to pay/.test(cell));
+  ok("a sent invoice says when, not whether it was opened (there is no page to open)", !/opened/.test(w.invoiceCell_({ orgId: "shop" }, { orderId: "X1", balanceDue: 20, invoice: { sentAt: "2026-11-02T10:00:00Z" } })));
+  w.eval("siteDesktopEmail = false");
+  ok("without email, Communications and those buttons are gone", w.adminDesktopHides_("comms") === true && !/resendEmail|showSendInvoiceModal/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X1", paid: false, items: [{}], balanceDue: 20 })));
+  w.eval("siteDesktopEmail = true");
+  const offHtml = w.desktopEmailSectionHtml_(null);
+  ok("Global settings → Email, off: says so, offers Gmail first, password field hidden as typed", /Email is off: nothing is sent/.test(offHtml) && /<option value="gmail" selected>/.test(offHtml) &&
+    /type="password" id="gEmailPass"/.test(offHtml) && /Turn on email/.test(offHtml) && !/gEmailOff/.test(offHtml) && /Microsoft 365 and Outlook\.com mailboxes aren't supported yet/.test(offHtml));
+  const onHtml = w.desktopEmailSectionHtml_({ host: "smtp.fastmail.com", port: 465, security: "tls", user: "pat@fastmail.com", from: "pat@fastmail.com" });
+  ok("…on: which address and server, Turn off, and the password left out", /sending from <strong>pat@fastmail\.com<\/strong> through smtp\.fastmail\.com/.test(onHtml) && /gEmailOff/.test(onHtml) &&
+    /<option value="fastmail" selected>/.test(onHtml) && /Leave empty to keep the saved one/.test(onHtml) && /value="tls" selected/.test(onHtml));
+  const box = doc.createElement("div");
+  box.innerHTML = offHtml;
+  doc.body.appendChild(box);
+  w.wireDesktopEmailSection_();
+  const $ = (id) => doc.getElementById(id);
+  $("gEmailPreset").value = "icloud"; $("gEmailPreset").onchange();
+  ok("choosing a mailbox fills in its server and says what password it needs", $("gEmailHost").value === "smtp.mail.me.com" && $("gEmailPort").value === "587" && /app-specific password/.test($("gEmailPresetNote").textContent));
+  $("gEmailPreset").value = "other"; $("gEmailPreset").onchange();
+  $("gEmailFrom").value = "orders@stitch.example";
+  await $("gEmailSave").onclick();
+  ok("another provider needs its server typed in, and opens the server settings for it", $("gEmailServer").open && /outgoing \(SMTP\) server/.test($("gEmailError").textContent) && saved.length === 0);
+  $("gEmailHost").value = "mail.stitch.example"; $("gEmailPort").value = "465"; $("gEmailPort").onchange(); $("gEmailPass").value = "wrong";
+  await $("gEmailSave").onclick();
+  ok("saving hands the settings and password to the program, and shows why it wasn't saved", saved.length === 1 && saved[0].settings.host === "mail.stitch.example" && saved[0].settings.port === 465 &&
+    saved[0].settings.security === "tls" && saved[0].settings.user === "orders@stitch.example" && /refused the sign-in/.test($("gEmailError").textContent));
+  ok("Global settings shows the Email section first in the desktop version", /\$\{emailSettings === undefined \? "" : desktopEmailSectionHtml_\(emailSettings\)\}\s*\$\{shippoKeySet === null/.test(adminJs));
+  w.close();
+})().catch(e => { console.error(e); process.exit(1); });

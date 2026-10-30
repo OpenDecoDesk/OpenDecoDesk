@@ -33,9 +33,9 @@ import * as stripeWebhook from "../functions/api/stripe-webhook.js";
 import * as uploadVerify from "../functions/api/upload-verify.js";
 import * as upload from "../functions/api/upload.js";
 import * as verify from "../functions/api/verify.js";
-import { recordSystemIssue, resolveTimeZone } from "../functions/_lib/db.js";
-import { isDigestHour } from "../functions/_lib/schedule.js";
-import { isDesktopEdition, desktopSuppliersOn } from "../functions/_lib/hostConfig.js";
+import { recordSystemIssue, resolveTimeZone, getDigestRun } from "../functions/_lib/db.js";
+import { isDigestHour, localHour, digestHour } from "../functions/_lib/schedule.js";
+import { isDesktopEdition, desktopSuppliersOn, desktopEmailOn } from "../functions/_lib/hostConfig.js";
 import { ensureDesktopReady } from "../functions/_lib/desktop.js";
 import { fillMissingCardFees } from "../functions/_lib/stripeFees.js";
 import { checkShippedDeliveries, checkBlankShipments } from "../functions/_lib/deliveryCheck.js";
@@ -111,18 +111,44 @@ export async function handleRequest(request, env, ctx) {
   });
 }
 
+// The desktop program's roll-up is due when it is the roll-up's hour or later, in the business's time
+// zone, and no scheduled roll-up has run yet on this local day (the program may be closed at the hour
+// itself, so "on or after", not "at").
+async function desktopRollUpDue_(env, when) {
+  const tz = await resolveTimeZone(env);
+  if (localHour(when, tz) < digestHour(env)) return false;
+  const last = await getDigestRun(env.DB).catch(() => null);
+  if (!last || last.trigger !== "scheduled" || !last.at) return true;
+  const day = (d) => { try { return new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(d); } catch (e) { return d.toISOString().slice(0, 10); } };
+  return day(new Date(last.at)) !== day(when);
+}
+
 // The scheduled roll-up. The cron wakes the Worker every hour (UTC); only the tick that lands on the
 // configured local hour runs it, so it goes out once a day at the same local time all year. The
 // time zone is the install's one zone: Global settings → Region, else TIMEZONE, else UTC.
 export async function handleScheduled(event, env) {
-  // The desktop program has no cron: desktop/main.js calls this while it is open. Of the jobs below
-  // only the tracking checks apply there (no Stripe, no customer uploads, no email): carrier tracking
-  // with a Shippo key (both check functions also skip themselves while Shipping is switched off), and
-  // suppliers' shipment notices once supplier connections are turned on.
+  // The desktop program has no cron: desktop/main.js calls this while it is open (a minute after it
+  // opens, then every two hours). Of the jobs below only these apply there (no Stripe, no customer
+  // uploads): carrier tracking with a Shippo key (both check functions also skip themselves while
+  // Shipping is switched off), suppliers' shipment notices once supplier connections are turned on,
+  // and — with email set up — the morning roll-up, at the first run on or after its hour each day.
   if (isDesktopEdition(env)) {
     const suppliers = desktopSuppliersOn(env);
-    if (!env.SHIPPO_API_KEY && !suppliers) return { ran: false, reason: "desktop edition, nothing online turned on" };
+    if (!env.SHIPPO_API_KEY && !suppliers && !desktopEmailOn(env)) return { ran: false, reason: "desktop edition, nothing online turned on" };
     const out = { ran: true, desktop: true };
+    if (desktopEmailOn(env) && await desktopRollUpDue_(env, new Date(event && event.scheduledTime ? event.scheduledTime : Date.now()))) {
+      // The roll-up checks tracking and suppliers' shipment notices itself, before it writes.
+      try {
+        const res = await dailyDigest.runDailyDigest(env, "scheduled");
+        out.rollUp = await res.clone().json().catch(() => ({}));
+        if (!res.ok) await recordSystemIssue(env.DB, "digest_failed", out.rollUp.message || ("HTTP " + res.status));
+      } catch (e) {
+        console.error("Daily roll-up crashed:", e);
+        await recordSystemIssue(env.DB, "digest_failed", e && e.message);
+        out.rollUp = { error: String(e && e.message) };
+      }
+      return out;
+    }
     if (env.SHIPPO_API_KEY) {
       try { out.deliveries = await checkShippedDeliveries(env); }
       catch (e) { console.error("Tracking check failed:", e); out.deliveries = { error: String(e && e.message) }; }

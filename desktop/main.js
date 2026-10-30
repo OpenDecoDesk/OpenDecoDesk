@@ -10,7 +10,8 @@
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain, safeStorage, session, net } = require("electron");
 const fs = require("fs");
 const path = require("path");
-const { startServer, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, recordBackup, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
+const { startServer, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, setSmtp, savedSmtpPassword, recordBackup, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
+const { Mailer, cleanSmtpSettings } = require("./mailer.js");
 const { createLog } = require("./log.js");
 
 const SOURCE_URL = "https://github.com/opendecodesk/opendecodesk";
@@ -130,13 +131,13 @@ async function whileStopped(work, hash) {
 }
 
 // Tracking checks (carrier shipping with a Shippo key; suppliers' shipment notices with supplier
-// connections on): there is no cron on this computer, so the Worker's scheduled handler — which here
-// only checks tracking (src/worker.js) — runs a minute after the program opens and every two hours
-// while it stays open. Without either one turned on it isn't called.
+// connections on) and the morning roll-up email (with email set up): there is no cron on this
+// computer, so the Worker's scheduled handler (src/worker.js) runs a minute after the program opens
+// and every two hours while it stays open. With none of them turned on it isn't called.
 const TRACKING_EVERY_MS = 2 * 60 * 60 * 1000;
 function startTrackingChecks() {
   const run = async () => {
-    if (!server || busy || !(server.hasShippoKey() || server.suppliersOn())) return;
+    if (!server || busy || !(server.hasShippoKey() || server.suppliersOn() || server.emailSettings())) return;
     try { await server.runScheduled(); }
     catch (e) { log("Tracking check failed: " + ((e && e.stack) || e)); }
   };
@@ -190,8 +191,8 @@ function buildMenu() {
     { label: "View", submenu: [{ role: "reload" }, { role: "togglefullscreen" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { role: "toggleDevTools" }] },
     { role: "windowMenu" },
     { label: "Settings", submenu: [
-      // Global settings has the Carrier shipping (Shippo) section near the top in the desktop version.
-      { label: "Global settings and carrier shipping…", click: () => { if (win && server) win.loadURL(server.url + "#settings"); } },
+      // Global settings has the Email and Carrier shipping (Shippo) sections near the top in the desktop version.
+      { label: "Global settings, email and shipping…", click: () => { if (win && server) win.loadURL(server.url + "#settings"); } },
     ] },
     { role: "help", submenu: [
       { label: "Locked out? Reset sign-in…", click: resetSignInMenu },
@@ -222,6 +223,25 @@ ipcMain.handle("odd:set-suppliers-on", async (e, on) => {
   if (!isOurs(e.senderFrame && e.senderFrame.url)) return { ok: false, message: "Not allowed." };
   const ok = await whileStopped(async () => { setSupplierConnections(dataDir, !!on, crypt()); }, "settings");
   return { ok };
+});
+
+// Global settings → Email: the mailbox's settings (never the password), and saving or removing
+// them. New settings are tried first (signing in to the server, sending nothing), so a mistake is
+// reported before anything is saved; then the server restarts with email on and the page reloads.
+// An empty password keeps the saved one.
+ipcMain.handle("odd:email-settings", async (e) => (isOurs(e.senderFrame && e.senderFrame.url) && server ? server.emailSettings() : null));
+ipcMain.handle("odd:set-email", async (e, settings, password) => {
+  if (!isOurs(e.senderFrame && e.senderFrame.url)) return { ok: false, message: "Not allowed." };
+  if (settings == null) return { ok: await whileStopped(async () => { setSmtp(dataDir, null, null, crypt()); }, "settings") };
+  let clean;
+  try { clean = cleanSmtpSettings(settings); } catch (err) { return { ok: false, message: err.message }; }
+  const pass = String(password || "") || savedSmtpPassword(dataDir, crypt());
+  if (!pass) return { ok: false, message: "Enter the mailbox's password (or app password)." };
+  const tried = await new Mailer(clean, pass).verify();
+  if (!tried.ok) { log("Email settings not saved: " + tried.message); return tried; }
+  const ok = await whileStopped(async () => { setSmtp(dataDir, clean, String(password || ""), crypt()); }, "settings");
+  if (ok) log("Email set up: " + clean.host + ":" + clean.port);
+  return { ok, message: ok ? tried.message : "Not saved." };
 });
 
 // The backup reminder in the admin (admin.js adminDesktopBackupNudge_): when this data folder was first

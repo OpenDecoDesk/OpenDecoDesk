@@ -16,7 +16,8 @@
     "dist:mac": "electron-builder --mac zip --arm64 --x64"
   },
   "dependencies": {
-    "miniflare": "4.20260708.1"
+    "miniflare": "4.20260708.1",
+    "nodemailer": "10.1.0"
   },
   "devDependencies": {
     "electron": "44.10.0",
@@ -35,6 +36,7 @@
       "server.js",
       "migrate.js",
       "files.js",
+      "mailer.js",
       "r2-files-binding.mjs",
       "log.js",
       "icons/icon.png",

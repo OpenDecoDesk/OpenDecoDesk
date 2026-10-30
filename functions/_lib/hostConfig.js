@@ -39,6 +39,11 @@ export function isDesktopEdition(env){
 export function desktopSuppliersOn(env){
   return isDesktopEdition(env) && String((env && env.DESKTOP_SUPPLIERS) || "") === "on";
 }
+// Email: the desktop version sends only through the owner's own mailbox, once it is set up in the
+// program (Global settings → Email, desktop/mailer.js), which then sets DESKTOP_EMAIL=on.
+export function desktopEmailOn(env){
+  return isDesktopEdition(env) && String((env && env.DESKTOP_EMAIL) || "") === "on";
+}
 
 export function rootDomain(env){
   return String((env && env.ROOT_DOMAIN) || DEFAULT_ROOT_DOMAIN).trim().toLowerCase().replace(/\.$/, "").replace(/^www\./, "");

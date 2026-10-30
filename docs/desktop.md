@@ -1,7 +1,7 @@
 # The desktop version
 
-The back office as a program on one computer, for a shop that doesn't sell online and doesn't need
-email: no Cloudflare account, no domain, no web shop. You download it, open it, and it asks for your
+The back office as a program on one computer, for a shop that doesn't sell online: no Cloudflare
+account, no domain, no web shop. Email is optional, from your own mailbox ([Email](#email)). You download it, open it, and it asks for your
 name, email and a password, then your business's details. After that you have orders entered by
 hand, production, inventory and cost of goods, and the books.
 
@@ -17,13 +17,14 @@ The same Worker (`src/worker.js`) and the same pages (`public/`), run by
 Miniflare, Cloudflare's own local runtime (the one `wrangler dev` uses), inside an Electron
 window.
 The database is SQLite and the files (pictures, receipts, design files) are kept on disk, both in
-your user folder. Nothing is sent anywhere, unless you add a Shippo key for carrier shipping
-([Shipping](#shipping)) or turn on [supplier connections](#supplier-connections).
+your user folder. Nothing is sent anywhere, unless you set up [email](#email), add a Shippo key for
+carrier shipping ([Shipping](#shipping)) or turn on [supplier connections](#supplier-connections).
 
 | | Cloud install | Desktop version |
 |---|---|---|
 | Storefront (shops online) | optional | **off** (locked) |
-| Email: confirmations, invoices, payment links, design proofs, the morning roll-up | yes | **none** |
+| Email: order emails, invoices, the morning roll-up | Cloudflare or Resend | optional, from your own mailbox (SMTP) |
+| Email with a link to a page: payment links, design proofs, invoices to pay online | yes | **none** (no pages on the web) |
 | Card payments (Stripe) | optional | **none**: payments are recorded by hand |
 | Shipping an order: address, carrier, charge, tracking number | yes | yes, typed in (Local sale → Ship this order) |
 | Carrier rates, buying labels, tracking checks (Shippo) | optional | optional, with a Shippo key and the internet |
@@ -51,7 +52,8 @@ With it:
   `desktopLockedFeatures` in `hostConfig.js`, `updateFeatures` in `functions/api/orders.js`).
 - Actions that need the internet are refused (`DESKTOP_REFUSED_ACTIONS` in `orders.js`), and the
   admin leaves out their pages and buttons. Supplier connections (`DESKTOP_SUPPLIER_ACTIONS`) are
-  refused only until the owner turns them on, which sets `DESKTOP_SUPPLIERS=on`.
+  refused only until the owner turns them on, which sets `DESKTOP_SUPPLIERS=on`, and email
+  (`DESKTOP_EMAIL_ACTIONS`) until the owner sets up a mailbox, which sets `DESKTOP_EMAIL=on`.
 - Global settings → Setup status lists only the business profile, sales tax and time zone.
 
 A cloud install never sets `EDITION`, so none of this changes it.
@@ -79,6 +81,42 @@ certificate, both paid). Signing can be added to the workflow later without chan
 3. Add products under Manage catalog (or Shop setup, which builds them from blanks), then take
    orders with **+ Local sale** on the Orders page.
 
+## Email
+
+Off until you set it up; then the program sends from your own mailbox, as if you had sent the
+emails yourself: order received, payment confirmed, shipped (with the tracking link), cancelled,
+invoices, and your morning roll-up. It needs the internet.
+
+1. **Settings → Global settings, email and shipping…**, then *Email*. Choose your mailbox (Gmail or
+   Google Workspace, iCloud Mail, Fastmail, Zoho Mail, or another provider) and type its address and
+   password. Gmail, iCloud and Fastmail want an **app password**, made in the account's security
+   settings, not your normal one. For another provider (your web host's mail, say), open *Server
+   settings* and type its outgoing (SMTP) server, port and security from its help pages.
+2. **Turn on email**. The program signs in to the server first: a wrong password or server is
+   reported then, and nothing is saved. Once it signs in, the program restarts for a moment.
+3. **Tools → Communications → Send a test email** shows what your mail server answered.
+
+The password is kept with the program's other secrets in `desktop.json` (encrypted where the system
+has a keychain), never in the database, and the Worker never sees it: it hands each message to the
+program (`desktop/mailer.js`), which sends it over an encrypted connection (SSL/TLS, or STARTTLS;
+never unencrypted). Gmail, iCloud and most others put a copy in the mailbox's Sent folder; for one
+that doesn't, set a Receipts inbox under Business profile to get a copy of everything.
+
+What's different from a cloud install:
+
+- **Invoices are the email itself**: the order, what's owed, and how to pay from your Business
+  profile (Venmo, with a link for the amount; Zelle; a check by mail). There's no page to pay on, so
+  no "View & pay" button and no choosing delivery.
+- **The morning roll-up** goes out at the first check on or after 6 AM while the program is open
+  (a minute after it opens, then every two hours), once a day. On a day the program isn't opened,
+  there is none; the next one covers everything since.
+- Payment links, design proofs and anything else that sends the customer to a page are still not in
+  the desktop version.
+- Microsoft 365 and Outlook.com mailboxes need "Sign in with Microsoft", which isn't supported yet.
+- Gmail sends at most about 500 emails a day (Google Workspace 2,000).
+
+**Turn off email** sends nothing more and forgets the password.
+
 ## Shipping
 
 **By hand, offline.** In **+ Local sale**, tick **Ship this order**: the address, the carrier (USPS,
@@ -92,7 +130,7 @@ and delivered from the order's stage list. Mailing labels and packing slips prin
 With a key from your Shippo account, the program can get carrier rates, buy and print labels, and
 follow tracking. This needs the internet, and labels are paid to Shippo.
 
-1. **Settings → Global settings and carrier shipping…**, then *Carrier shipping (Shippo)*: paste
+1. **Settings → Global settings, email and shipping…**, then *Carrier shipping (Shippo)*: paste
    the API token from Shippo (its Settings → API) and choose **Save key**. The program restarts for
    a moment. The key is kept with the program's other secrets in `desktop.json`, encrypted where
    the system has a keychain, and never in the database.
@@ -115,7 +153,7 @@ unless supplier connections are on.
 
 **Vendor integrations** go further: a supplier's live product data and prices (PromoStandards),
 ordering blanks from it from Blanks to order, and its shipment notices. They need the internet,
-so they are off until you turn them on: **Settings → Global settings and carrier shipping…**, then
+so they are off until you turn them on: **Settings → Global settings, email and shipping…**, then
 **Turn on supplier connections** under *Supplier connections*. The program restarts for a moment,
 and Vendor integrations appear under Settings in the menu, where you add each supplier's login
 as on a cloud install. The logins are saved in the database, encrypted with a key only this
@@ -142,11 +180,12 @@ it's turned back on.
   (`desktop/files.js`, `desktop/r2-files-binding.mjs`); they don't depend on Miniflare.
 - `state/d1/`: the database, a SQLite file any SQLite tool can open.
 - `state/do/`: the send-agent's mailbox.
-- `desktop.json`: the port, the secrets the program signs links and passwords with, and the last
-  database update applied.
+- `desktop.json`: the port, the secrets the program signs links and passwords with (and the Shippo
+  key and mailbox password, if set), the mailbox's server settings, and the last database update
+  applied.
 - `logs/opendecodesk.log`: what the program and the Worker printed, each line with its time.
   **Help → Open the log** opens it. Send it along when reporting a problem. It never holds
-  passwords or keys. At 5 MB it becomes `opendecodesk.log.1` and a new one starts.
+  passwords or keys. For email it has each subject and the mail server's answer, not addresses. At 5 MB it becomes `opendecodesk.log.1` and a new one starts.
 - `backups/` and `electron/` (the window's own storage).
 
 Earlier test versions kept the files in Miniflare's own storage (`state/r2/`). The first start of

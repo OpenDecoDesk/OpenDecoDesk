@@ -125,16 +125,18 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
     r = await post(env, { action, key: "x", org: "shop" });
     if (!(r.status === 403 && r.body.code === "desktop")) ok(action + " is refused in the desktop edition", false);
   }
-  r = await post(env, { action: "sendTestEmail", key: "x" });
+  r = await post(env, { action: "createShippingPaymentLink", key: "x" });
   ok("actions that need the internet are refused (403), saying why", r.status === 403 && /needs the internet/.test(r.body.message));
+  r = await post(env, { action: "sendTestEmail", key: "x" });
+  ok("…and email, until a mailbox is set up, saying where", r.status === 403 && /Global settings → Email/.test(r.body.message));
   r = await post(env, { action: "sendTestEmail", key: "wrong" });
   ok("…after the sign-in check, so a stranger learns nothing", r.status === 401);
   r = await post(env, { action: "listOrgs", key: "x" });
   ok("the back office itself answers", r.status === 200 && r.body.orgs.length === 1);
   const ordersSrc = read("functions/api/orders.js");
   const listed = (name) => (((ordersSrc.match(new RegExp("const " + name + " = new Set\\(\\[([\\s\\S]*?)\\]\\)")) || [])[1] || "").match(/"([A-Za-z]+)"/g) || []).map(n => n.slice(1, -1));
-  const names = [...listed("DESKTOP_REFUSED_ACTIONS"), ...listed("DESKTOP_SUPPLIER_ACTIONS")];
-  ok("every refused action is a real admin action", listed("DESKTOP_REFUSED_ACTIONS").length >= 8 && listed("DESKTOP_SUPPLIER_ACTIONS").length >= 10 && names.every(n => ordersSrc.includes(`body.action === "${n}"`)));
+  const names = [...listed("DESKTOP_REFUSED_ACTIONS"), ...listed("DESKTOP_SUPPLIER_ACTIONS"), ...listed("DESKTOP_EMAIL_ACTIONS")];
+  ok("every refused action is a real admin action", listed("DESKTOP_REFUSED_ACTIONS").length >= 5 && listed("DESKTOP_SUPPLIER_ACTIONS").length >= 10 && listed("DESKTOP_EMAIL_ACTIONS").length === 3 && names.every(n => ordersSrc.includes(`body.action === "${n}"`)));
 
   console.log("\n=== D2. Supplier connections: off until turned on in the program ===");
   ok("they are on only in the desktop edition with DESKTOP_SUPPLIERS=on", host.desktopSuppliersOn({ EDITION: "desktop", DESKTOP_SUPPLIERS: "on" }) && !host.desktopSuppliersOn({ EDITION: "desktop" }) && !host.desktopSuppliersOn({ DESKTOP_SUPPLIERS: "on" }));
@@ -147,7 +149,7 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   r = await post(suppliersEnv, { action: "saveVendorConnection", key: "x" });
   ok("on: supplier actions get through to their own checks", !(r.status === 403 && r.body.code === "desktop"));
   r = await post(suppliersEnv, { action: "sendTestEmail", key: "x" });
-  ok("…while email stays refused", r.status === 403 && /isn't part of the desktop version/.test(r.body.message));
+  ok("…while email stays refused", r.status === 403 && /Email isn't set up/.test(r.body.message));
   global.fetch = fetch0;
   const catalogFor = async (e) => { const fn = new Function(strip(read("functions/_lib/hostConfig.js")) + "\n" + strip(read("functions/_lib/http.js")) + "\n" + strip(read("functions/_lib/db.js")) + "\n" +
     "const getCatalogData = async (env) => ({ subdomainMap: {}, ...(await getPublicCatalogData(env.DB)) });\n" + strip(read("functions/api/catalog.js")) + "\nreturn onRequestGet;")();

@@ -31,3 +31,6 @@ The desktop program (desktop/, docs/desktop.md) also bundles, in its downloads:
   Source: https://github.com/cloudflare/workerd
 - Miniflare's own dependencies (undici, ws, youch and others), each with its licence file in its
   folder under the program's node_modules (MIT, ISC, Apache-2.0 or CC0-1.0).
+- Nodemailer, which sends email through the owner's mailbox — Copyright (c) Andris Reinman.
+  MIT No Attribution (MIT-0); its LICENSE is in its folder under the program's node_modules.
+  Source: https://github.com/nodemailer/nodemailer

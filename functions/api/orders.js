@@ -11,7 +11,7 @@
  *   - Prices are recalculated server-side from D1 (priceItem()), never trusted from client
  */
 
-import { classifyHost, rootDomain, adminSubdomains, isDesktopEdition, desktopLockedFeatures, desktopSuppliersOn } from "../_lib/hostConfig.js";
+import { classifyHost, rootDomain, adminSubdomains, isDesktopEdition, desktopLockedFeatures, desktopSuppliersOn, desktopEmailOn } from "../_lib/hostConfig.js";
 import { getCatalogData, invalidateCatalogVersionCache } from "../_lib/catalogCache.js";
 import { validateOrgFields, validateProductImages, cleanImageUrl, PRODUCT_ID_RE } from "../_lib/catalogValidation.js";
 import { requireAdmin, adminActor, adminUser } from "../_lib/adminAuth.js";
@@ -325,10 +325,14 @@ for (const [feature, actions] of Object.entries(FEATURE_ACTIONS)) for (const a o
 // on the internet — sending email, Stripe, attaching a shop's web address. The desktop program
 // leaves them out of its pages; these are refused (403) in case anything still asks.
 const DESKTOP_REFUSED_ACTIONS = new Set([
-  "sendTestEmail", "resendEmail", "sendInvoice", "createShippingPaymentLink", "backfillStripeFees",
+  "createShippingPaymentLink", "backfillStripeFees",
   "setupOrgDomain", "getOrgDomainStatus", "getPreviewLink",
 ]);
 const DESKTOP_REFUSED_MSG = "This needs the internet, so it isn't part of the desktop version.";
+// …and sending email: refused until the owner sets up their mailbox in the program (hostConfig.js
+// desktopEmailOn). An invoice is then the email itself, with no page to pay on (sendInvoice below).
+const DESKTOP_EMAIL_ACTIONS = new Set(["sendTestEmail", "resendEmail", "sendInvoice"]);
+const DESKTOP_EMAIL_OFF_MSG = "Email isn't set up. Add your mailbox under Global settings → Email.";
 // …and supplier connections (PromoStandards: the directory, a supplier's live product data, ordering,
 // shipment tracking) and fetching a supplier's pictures from the web: refused until the owner turns
 // supplier connections on in the program (hostConfig.js desktopSuppliersOn). Importing a supplier's
@@ -534,10 +538,12 @@ export async function onRequestPost(context) {
     if (denied) return denied;
     return featureOffResponse(ACTION_FEATURE[body.action], featureLabel_(ACTION_FEATURE[body.action]));
   }
-  if (isDesktopEdition(env) && (DESKTOP_REFUSED_ACTIONS.has(body.action) || (DESKTOP_SUPPLIER_ACTIONS.has(body.action) && !desktopSuppliersOn(env)))) {
+  if (isDesktopEdition(env) && (DESKTOP_REFUSED_ACTIONS.has(body.action) || (DESKTOP_SUPPLIER_ACTIONS.has(body.action) && !desktopSuppliersOn(env))
+    || (DESKTOP_EMAIL_ACTIONS.has(body.action) && !desktopEmailOn(env)))) {
     const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
     if (denied) return denied;
-    return jsonResponse({ status: "error", code: "desktop", message: DESKTOP_REFUSED_ACTIONS.has(body.action) ? DESKTOP_REFUSED_MSG : DESKTOP_SUPPLIERS_OFF_MSG }, 403);
+    return jsonResponse({ status: "error", code: "desktop", message: DESKTOP_REFUSED_ACTIONS.has(body.action) ? DESKTOP_REFUSED_MSG
+      : DESKTOP_EMAIL_ACTIONS.has(body.action) ? DESKTOP_EMAIL_OFF_MSG : DESKTOP_SUPPLIERS_OFF_MSG }, 403);
   }
 
   // ---- listOrgs — admin org picker -------------------------------------------
@@ -5172,10 +5178,13 @@ export async function onRequestPost(context) {
     if (typed && typed !== order.contact) { await updateOrderCustomerInfo(env.DB, orderId, { contact: typed }); order = await getOrderById(env.DB, orderId); }
     const org = await getOrgById(env.DB, order.orgId);
     if (!org) return jsonResponse({ status: "error", message: "Unknown org" }, 404);
-    const allowDelivery = body.allowDelivery !== false;
+    // The desktop program isn't on the web, so its invoice has no page to open: the email carries
+    // the whole invoice and how to pay, and the customer can't choose delivery online.
+    const desktop = isDesktopEdition(env);
+    const allowDelivery = !desktop && body.allowDelivery !== false;
     const inv = await sendOrderInvoice(env.DB, { orderId, orgId: order.orgId, sentTo: email, message: body.message, allowDelivery });
     const base = org.subdomain ? `https://${org.subdomain}.${rootDomain(env)}` : new URL(request.url).origin;
-    const url = `${base}/?invoice=${inv.token}`;
+    const url = desktop ? "" : `${base}/?invoice=${inv.token}`;
     const emailSent = await sendInvoiceEmail(env, { order: { ...order, manualShipping: inv.deliveryChoice === "shipping-quote" },
       orgName: org.name || "", invoiceUrl: url, message: inv.message, allowDelivery });
     audit({ orgId: order.orgId, orderId, action: "order.invoice_sent",

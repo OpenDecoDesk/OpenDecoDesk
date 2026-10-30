@@ -1157,11 +1157,14 @@ function adminPageOn_(hash){ const f = adminPageFeature_(hash); return !adminDes
 // DESKTOP_REFUSED_ACTIONS). Everything else is the same screen as a cloud install's.
 function adminDesktop_(){ return typeof siteEdition !== "undefined" && siteEdition === "desktop"; }
 const ADMIN_DESKTOP_HIDDEN_PAGES = ["vendors", "comms"];
-// Vendor integrations is back once the owner turns supplier connections on (Global settings).
+// Vendor integrations is back once the owner turns supplier connections on (Global settings), and
+// Communications (and the buttons that send email) once they set up their mailbox (Global settings → Email).
 function adminDesktopSuppliers_(){ return adminDesktop_() && typeof siteDesktopSuppliers !== "undefined" && siteDesktopSuppliers === true; }
+function adminDesktopEmail_(){ return adminDesktop_() && typeof siteDesktopEmail !== "undefined" && siteDesktopEmail === true; }
+function adminDesktopNoEmail_(){ return adminDesktop_() && !adminDesktopEmail_(); }
 function adminDesktopHides_(hash){
   const page = String(hash || "").replace(/^#\/?/, "").split("/")[0];
-  return adminDesktop_() && ADMIN_DESKTOP_HIDDEN_PAGES.includes(page) && !(page === "vendors" && adminDesktopSuppliers_());
+  return adminDesktop_() && ADMIN_DESKTOP_HIDDEN_PAGES.includes(page) && !(page === "vendors" && adminDesktopSuppliers_()) && !(page === "comms" && adminDesktopEmail_());
 }
 // The passphrase for the program's own first sign-in, or null (a normal start, or not the program).
 async function adminDesktopFirstRunKey_(){
@@ -1211,6 +1214,86 @@ function wireDesktopShippoSection_(){
   if(remove) remove.onclick = async () => {
     if(!await askConfirm_("Remove the Shippo key?\n\nShipping goes back to by hand: no rates, labels or tracking checks. Labels already bought stay on their orders.")) return;
     send(null);
+  };
+}
+
+// Global settings → Email, in the desktop version only: email goes out through the owner's own
+// mailbox (SMTP) — order emails, invoices, the morning roll-up. Off until set up. The program keeps
+// the settings and the password (desktop/server.js, mailer.js); the page never gets the password
+// back. Saving signs in to the server first, so a wrong password is reported before anything is
+// saved, then restarts the program's server and reloads this page. The presets fill in the server
+// settings for the common mailboxes.
+const DESKTOP_MAIL_PRESETS = [
+  { id: "gmail", label: "Gmail or Google Workspace", host: "smtp.gmail.com", port: 587, security: "starttls", note: "Use an app password: Google Account → Security → 2-Step Verification → App passwords. About 500 emails a day." },
+  { id: "icloud", label: "iCloud Mail", host: "smtp.mail.me.com", port: 587, security: "starttls", note: "Use an app-specific password from account.apple.com → Sign-In and Security. The username is your iCloud email address." },
+  { id: "fastmail", label: "Fastmail", host: "smtp.fastmail.com", port: 465, security: "tls", note: "Use an app password from Fastmail's Settings → Privacy & Security." },
+  { id: "zoho", label: "Zoho Mail", host: "smtp.zoho.com", port: 465, security: "tls", note: "With two-factor sign-in on, use an application-specific password." },
+  { id: "other", label: "Another provider (your web host's mail…)", host: "", port: 587, security: "starttls", note: "Your provider's help pages list its SMTP (outgoing mail) server, port and security." },
+];
+async function adminDesktopEmailSettings_(){
+  if(!window.oddDesktop || typeof window.oddDesktop.emailSettings !== "function") return undefined;
+  try{ return (await window.oddDesktop.emailSettings()) || null; }catch(e){ return undefined; }
+}
+function desktopEmailSectionHtml_(cur){
+  const presetOf = (c) => (c && DESKTOP_MAIL_PRESETS.find(p => p.host && p.host === c.host)) || (c ? DESKTOP_MAIL_PRESETS.find(p => p.id === "other") : DESKTOP_MAIL_PRESETS[0]);
+  const pre = presetOf(cur), v = cur || { host: pre.host, port: pre.port, security: pre.security, user: "", from: "" };
+  const lbl = "font-size:12px;font-weight:600;display:block;margin-bottom:8px;max-width:360px;";
+  return `<div id="gEmailSection">
+        <h2 style="margin:22px 0 12px;">Email</h2>
+        <div class="admin-note" style="margin-bottom:10px;">Send order emails (received, payment confirmed, shipped, cancelled), invoices and your morning roll-up from your own mailbox. They go out from its address, as if you had sent them, and copies land in its Sent folder with Gmail, iCloud and most others. This needs the internet. Microsoft 365 and Outlook.com mailboxes aren't supported yet.</div>
+        <div id="gEmailStatus" style="font-size:14px;margin-bottom:10px;">${cur ? `Email is on: sending from <strong>${escapeHtml(cur.from)}</strong> through ${escapeHtml(cur.host)}. <a href="#comms">Send a test email</a> from Communications.` : "Email is off: nothing is sent."}</div>
+        <label style="${lbl}">Your mailbox<br><select id="gEmailPreset">${DESKTOP_MAIL_PRESETS.map(p => `<option value="${p.id}"${p.id === pre.id ? " selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}</select></label>
+        <div id="gEmailPresetNote" class="admin-note" style="margin:-2px 0 10px;max-width:520px;">${escapeHtml(pre.note)}</div>
+        <label style="${lbl}">Email address<br><input type="email" id="gEmailFrom" maxlength="200" autocomplete="off" spellcheck="false" value="${escapeHtml(v.from || "")}" placeholder="you@example.com"></label>
+        <label style="${lbl}">Password or app password<br><input type="password" id="gEmailPass" maxlength="300" autocomplete="new-password" spellcheck="false" placeholder="${cur ? "Leave empty to keep the saved one" : ""}"></label>
+        <details id="gEmailServer"${pre.id === "other" ? " open" : ""} style="margin:0 0 10px;max-width:520px;"><summary style="cursor:pointer;font-size:13px;">Server settings</summary>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+            <label style="font-size:12px;font-weight:600;flex:2 1 200px;">Outgoing (SMTP) server<br><input type="text" id="gEmailHost" maxlength="200" spellcheck="false" value="${escapeHtml(v.host || "")}" placeholder="smtp.example.com"></label>
+            <label style="font-size:12px;font-weight:600;flex:0 1 90px;">Port<br><input id="gEmailPort" type="number" min="1" max="65535" value="${escapeHtml(String(v.port || 587))}"></label>
+            <label style="font-size:12px;font-weight:600;flex:1 1 150px;">Security<br><select id="gEmailSecurity"><option value="starttls"${v.security !== "tls" ? " selected" : ""}>STARTTLS (587)</option><option value="tls"${v.security === "tls" ? " selected" : ""}>SSL/TLS (465)</option></select></label>
+            <label style="font-size:12px;font-weight:600;flex:1 1 200px;">Username <span style="font-weight:400;color:#666;">(if not the email address)</span><br><input type="text" id="gEmailUser" maxlength="200" spellcheck="false" autocomplete="off" value="${escapeHtml(cur && cur.user !== cur.from ? cur.user : "")}"></label>
+          </div>
+        </details>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+          <button class="admin-btn" type="button" id="gEmailSave">${cur ? "Save email settings" : "Turn on email"}</button>
+          ${cur ? `<button class="admin-btn admin-btn-secondary" type="button" id="gEmailOff">Turn off email</button>` : ""}
+        </div>
+        <div id="gEmailError" class="admin-error"></div>
+      </div>`;
+}
+function wireDesktopEmailSection_(){
+  const save = document.getElementById("gEmailSave");
+  if(!save) return;
+  const $ = (id) => document.getElementById(id), errEl = $("gEmailError");
+  $("gEmailPreset").onchange = () => {
+    const p = DESKTOP_MAIL_PRESETS.find(x => x.id === $("gEmailPreset").value) || DESKTOP_MAIL_PRESETS[0];
+    $("gEmailPresetNote").textContent = p.note;
+    if(p.host){ $("gEmailHost").value = p.host; $("gEmailPort").value = p.port; $("gEmailSecurity").value = p.security; }
+    else { $("gEmailHost").value = ""; $("gEmailServer").open = true; }
+  };
+  // The usual pairing, when the port is changed by hand: 465 is SSL/TLS, 587 STARTTLS.
+  $("gEmailPort").onchange = () => { const n = Number($("gEmailPort").value); if(n === 465) $("gEmailSecurity").value = "tls"; else if(n === 587) $("gEmailSecurity").value = "starttls"; };
+  save.onclick = async () => {
+    errEl.textContent = "";
+    const settings = { host: $("gEmailHost").value.trim(), port: Number($("gEmailPort").value), security: $("gEmailSecurity").value,
+      from: $("gEmailFrom").value.trim(), user: $("gEmailUser").value.trim() || $("gEmailFrom").value.trim() };
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(settings.from)){ errEl.textContent = "Enter your mailbox's email address."; return; }
+    if(!settings.host){ $("gEmailServer").open = true; errEl.textContent = "Enter the outgoing (SMTP) server, from your provider's help pages."; return; }
+    save.disabled = true; const label = save.textContent; save.textContent = "Signing in…";
+    try{
+      const r = await window.oddDesktop.setEmail(settings, $("gEmailPass").value);
+      if(r && r.ok === false) errEl.textContent = r.message || "Could not save the email settings.";
+      else showToast("Signed in — the program restarts for a moment…");
+    }catch(e){ errEl.textContent = "Could not save the email settings."; }
+    finally{ save.disabled = false; save.textContent = label; }
+  };
+  const off = $("gEmailOff");
+  if(off) off.onclick = async () => {
+    if(!await askConfirm_("Turn off email?\n\nNothing more is sent: no order emails, invoices or morning roll-up. The saved password is forgotten.")) return;
+    errEl.textContent = "";
+    showToast("Turning off email — the program restarts for a moment…");
+    try{ const r = await window.oddDesktop.setEmail(null); if(r && r.ok === false) errEl.textContent = r.message || "Could not turn off email."; }
+    catch(e){ errEl.textContent = "Could not turn off email."; }
   };
 }
 
@@ -1287,7 +1370,7 @@ function renderDesktopOff_(app, hash){
     <div class="admin-panel" style="--org-accent:var(--accent);" id="desktopOffPanel">
       <div class="admin-empty">${String(hash || "").split("/")[0] === "vendors"
         ? "Vendor integrations need the internet. Turn them on under Global settings → Supplier connections."
-        : "This page needs the internet (email), so it isn't part of the desktop version."}</div>
+        : "Communications is about email. Set up your mailbox under Global settings → Email to send order emails, invoices and the morning roll-up."}</div>
       <div class="admin-actions" style="margin-top:14px;"><button class="admin-btn" onclick="location.hash='#orders'">Back to Orders</button></div>
     </div>`;
 }
@@ -3190,7 +3273,7 @@ function adminActionCell(org, o){
 
   if(!o.paid){
     return `<button class="admin-btn" ${dataAttrs} onclick="markOrderPaid(this.dataset.org, this.dataset.order)">Mark as paid</button>` +
-      (adminDesktop_() ? "" : `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>`) +
+      (adminDesktopNoEmail_() ? "" : `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>`) +
       invoiceCell_(org, o) +
       `<button class="admin-btn" ${dataAttrs} onclick="editOrder(this.dataset.org,this.dataset.order)" style="margin-top:4px;">Edit items</button>` +
       paymentsBtn + deleteBtn;
@@ -3209,7 +3292,7 @@ function adminActionCell(org, o){
         ${eligible.map(s => `<option value="${escapeHtml(s.stage)}">${escapeHtml(s.stage === "manufactured" && o.allFromStock ? "Pulled from stock" : s.label.replace(/^Mark /, ""))}</option>`).join("")}
         ${waiting.map(s => `<option value="" disabled>${escapeHtml(s.label.replace(/^Mark /, ""))} — upload the order design first</option>`).join("")}
       </select>`;
-  const emailBtn = adminDesktop_() ? "" : `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>`;
+  const emailBtn = adminDesktopNoEmail_() ? "" : `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>`;
   const hasAddr = o.shippingAddress && o.shippingAddress.line1;
   const shipBtn = `<button class="admin-btn" ${dataAttrs} onclick="setShippingInfo(this.dataset.org,this.dataset.order)" style="margin-top:4px;">${hasAddr ? "Edit shipping" : "Set shipping"}</button>`;
   const editBtn = `<button class="admin-btn" ${dataAttrs} onclick="editOrder(this.dataset.org,this.dataset.order)" style="margin-top:4px;">Edit items</button>`;
@@ -3226,9 +3309,10 @@ function adminActionCell(org, o){
 function invoiceCell_(org, o){
   const inv = o.invoice || null, owes = Number(o.balanceDue) > 0 && !o.voidedAt;
   const day = (iso) => { const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${+m[2]}/${+m[3]}` : ""; };
+  // (The desktop program's invoice is the email itself, with no page to open: no "opened" to report.)
   const status = inv ? `<div class="mono invoice-status" style="font-size:11px;color:var(--ink-soft);margin-top:4px;line-height:1.35;">Invoice sent ${escapeHtml(day(inv.sentAt))}` +
-    `${inv.viewedAt ? " · opened" : " · not opened yet"}${inv.deliveryChosenAt ? " · delivery chosen" : ""}</div>` : "";
-  const btn = owes && !adminDesktop_() ? `<button class="admin-btn" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="showSendInvoiceModal(this.dataset.org, this.dataset.order)" title="Email the customer a link to choose delivery and pay online" style="margin-top:4px;">${inv ? "Resend invoice…" : "Send invoice…"}</button>` : "";
+    `${adminDesktop_() ? "" : inv.viewedAt ? " · opened" : " · not opened yet"}${inv.deliveryChosenAt ? " · delivery chosen" : ""}</div>` : "";
+  const btn = owes && !adminDesktopNoEmail_() ? `<button class="admin-btn" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="showSendInvoiceModal(this.dataset.org, this.dataset.order)" title="${adminDesktop_() ? "Email the customer the invoice and how to pay" : "Email the customer a link to choose delivery and pay online"}" style="margin-top:4px;">${inv ? "Resend invoice…" : "Send invoice…"}</button>` : "";
   return btn + status;
 }
 
@@ -3241,10 +3325,12 @@ function showSendInvoiceModal(orgId, orderId){
   if (!o) { showToast("Reload the page and try again.", true); return; }
   const inp = "font-size:14px;padding:7px 9px;border:1px solid #ccc;border-radius:4px;width:100%;box-sizing:border-box;";
   const { ov, close } = inventoryModal_(o.invoice ? "Resend invoice" : "Send invoice", `
-    <div style="font-size:13px;color:#555;margin-bottom:12px;">Emails ${escapeHtml(o.customerName && o.customerName !== "Local Sale" ? o.customerName : "the customer")} a link to a page showing order <b>${escapeHtml(o.orderId)}</b> and what's owed (<b>$${Number(o.balanceDue).toFixed(2)}</b>), where they can pay online.</div>
+    <div style="font-size:13px;color:#555;margin-bottom:12px;">${adminDesktop_()
+      ? `Emails ${escapeHtml(o.customerName && o.customerName !== "Local Sale" ? o.customerName : "the customer")} the invoice for order <b>${escapeHtml(o.orderId)}</b>: what's owed (<b>$${Number(o.balanceDue).toFixed(2)}</b>) and how to pay, from your Business profile (Venmo, Zelle, a check by mail).`
+      : `Emails ${escapeHtml(o.customerName && o.customerName !== "Local Sale" ? o.customerName : "the customer")} a link to a page showing order <b>${escapeHtml(o.orderId)}</b> and what's owed (<b>$${Number(o.balanceDue).toFixed(2)}</b>), where they can pay online.`}</div>
     <label style="font-size:12px;font-weight:600;display:block;margin-bottom:10px;">Send to<br><input id="siEmail" type="email" value="${escapeHtml(o.contact && o.contact.includes("@") ? o.contact : "")}" placeholder="customer@example.com" style="${inp}"></label>
     <label style="font-size:12px;font-weight:600;display:block;margin-bottom:10px;">Note to the customer <span style="font-weight:400;color:#666;">(optional)</span><br><textarea id="siMessage" rows="3" maxlength="3000" style="${inp}font-family:inherit;resize:vertical;"></textarea></label>
-    <label style="font-size:13px;display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;cursor:pointer;"><input type="checkbox" id="siDelivery" checked style="margin-top:3px;">
+    <label style="font-size:13px;display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;cursor:pointer;${adminDesktop_() ? "display:none;" : ""}"><input type="checkbox" id="siDelivery"${adminDesktop_() ? "" : " checked"} style="margin-top:3px;">
       <span>Let the customer choose how they'll get it <span style="color:#666;">— this shop's delivery &amp; pickup options, with shipping rates for their address. Their choice updates the order.</span></span></label>
     <div id="siErr" style="color:#b03a2e;font-size:13px;min-height:18px;margin-top:6px;"></div>
     <div id="siDone" hidden style="border:1px solid #86efac;background:#f0fdf4;border-radius:6px;padding:10px 12px;font-size:13px;margin-bottom:10px;"></div>
@@ -3263,6 +3349,12 @@ function showSendInvoiceModal(orgId, orderId){
     if (!r.ok) { err.textContent = r.message; return; }
     const done = ov.querySelector("#siDone");
     done.hidden = false;
+    // The desktop program's invoice has no link (it is the email itself): just whether it went.
+    if (!r.url) {
+      done.innerHTML = r.emailSent ? `<b>Sent to ${escapeHtml(r.sentTo)}.</b>` : `<b style="color:#b45309;">The email couldn't be sent.</b> Tools → Communications says why.`;
+      ov.querySelector("#siCancel").textContent = "Close";
+      return;
+    }
     done.innerHTML = `${r.emailSent ? `<b>Sent to ${escapeHtml(r.sentTo)}.</b>` : `<b style="color:#b45309;">The email couldn't be sent</b> — the invoice is ready, so you can pass the link on yourself.`}
       <div style="display:flex;gap:6px;margin-top:6px;"><input id="siLink" readonly value="${escapeHtml(r.url)}" aria-label="Invoice link" style="${inp}font-size:12px;font-family:monospace;"><button type="button" class="admin-btn" id="siCopy" style="white-space:nowrap;">Copy link</button></div>`;
     done.querySelector("#siCopy").onclick = async () => {
@@ -7875,9 +7967,11 @@ async function renderGlobalSettings(app){
     const pv = (v) => v == null ? "" : escapeHtml(String(v));
     // Desktop: whether the program holds a Shippo key (never the key itself — desktop/preload.js).
     const shippoKeySet = adminDesktop_() ? await adminDesktopHasShippoKey_() : null;
+    const emailSettings = adminDesktop_() ? await adminDesktopEmailSettings_() : undefined;
     document.getElementById("adminPanel").innerHTML = `
       <div class="admin-form">
         ${setupStatusHtml_(setupItems)}
+        ${emailSettings === undefined ? "" : desktopEmailSectionHtml_(emailSettings)}
         ${shippoKeySet === null ? "" : desktopShippoSectionHtml_(shippoKeySet, features.shipping !== false)}
         ${shippoKeySet === null ? "" : desktopSuppliersSectionHtml_(adminDesktopSuppliers_())}
         <h2 style="margin-bottom:12px;">Business profile</h2>
@@ -8025,6 +8119,7 @@ async function renderGlobalSettings(app){
       </div>
     `;
     loadVendorShippingSettings_();
+    wireDesktopEmailSection_();
     wireDesktopShippoSection_();
     wireDesktopSuppliersSection_();
   }catch(e){
@@ -8097,8 +8192,8 @@ function setupStatusHtml_(items){
     : i.level === "recommended" ? ["!", "Not set up", "#b9770e"] : ["–", "Not set up (optional)", "#777"];
   return `<h2 style="margin-bottom:12px;">Setup status</h2>
         <div class="admin-note" style="margin-bottom:10px;">${need
-          ? `<strong>${need} thing${need === 1 ? "" : "s"} still need${need === 1 ? "s" : ""} setting up.</strong> Things set on the server (keys, buckets, the domain) are changed with <code>npm run setup</code> or in the Cloudflare dashboard — see docs/configuration.md; the rest are on this page.`
-          : "Everything this site needs is set up. Optional services that aren't in use are listed as off."} Only whether each thing is set is shown here — never a key or password.</div>
+          ? `<strong>${need} thing${need === 1 ? "" : "s"} still need${need === 1 ? "s" : ""} setting up.</strong> ${adminDesktop_() ? "Each is on this page." : "Things set on the server (keys, buckets, the domain) are changed with <code>npm run setup</code> or in the Cloudflare dashboard — see docs/configuration.md; the rest are on this page."}`
+          : adminDesktop_() ? "Everything is set up." : "Everything this site needs is set up. Optional services that aren't in use are listed as off."} Only whether each thing is set is shown here — never a key or password.</div>
         <div id="gSetupStatus" data-need="${need}" style="border:1px solid var(--line, #ddd);border-radius:6px;margin-bottom:26px;">${sorted.map(i => { const [sym, word, color] = mark(i); return `
           <div class="setup-row" data-key="${escapeHtml(i.key)}" data-ready="${i.ready ? "1" : "0"}" data-level="${escapeHtml(i.level)}" style="display:flex;gap:10px;padding:8px 10px;border-top:1px solid var(--line, #eee);align-items:flex-start;">
             <span aria-hidden="true" style="color:${color};font-weight:700;width:14px;text-align:center;">${sym}</span>
@@ -15751,7 +15846,7 @@ async function renderCommunications(app, opts){
   el.innerHTML = `
     <p style="margin:0 0 4px;color:#555;">${since}</p>
     ${lastRunLine}
-    <p style="margin:0 0 18px;color:#555;font-size:13px;">This is what the next roll-up email (about 6 AM) will contain. ${d.orders.length || d.notices.length || pickedUp.length || (d.issues || []).length || (d.security && d.security.count >= 5) ? "" : "<strong>Nothing new — no email will be sent.</strong>"}</p>
+    <p style="margin:0 0 18px;color:#555;font-size:13px;">This is what the next roll-up email (${adminDesktop_() ? "the first check after 6 AM while the program is open" : "about 6 AM"}) will contain. ${d.orders.length || d.notices.length || pickedUp.length || (d.issues || []).length || (d.security && d.security.count >= 5) ? "" : "<strong>Nothing new — no email will be sent.</strong>"}</p>
     ${d.security && d.security.count ? `<div style="border:2px solid #b45309;border-radius:6px;padding:10px 12px;margin-bottom:20px;background:#fffbeb;">
       <h2 style="margin:0 0 6px;color:#92400e;font-size:16px;">🔒 ${d.security.count} failed admin sign-in${d.security.count === 1 ? "" : "s"}</h2>
       <div style="font-size:14px;">${Number(d.security.passphrase || 0)} wrong password, ${Number(d.security.code || 0)} wrong 2FA code · ${escapeHtml(when(d.security.first))} – ${escapeHtml(when(d.security.last))} · from ${escapeHtml((d.security.ips || []).join(", ") || "unknown")}</div>
@@ -15762,7 +15857,7 @@ async function renderCommunications(app, opts){
       <ul style="margin:0;padding-left:18px;font-size:14px;">${d.issues.map(x => `<li><strong>${escapeHtml(x.label)}: ${Number(x.count)}</strong>
         <span style="${sub}">(${escapeHtml(when(x.first))}${x.count > 1 ? " – " + escapeHtml(when(x.last)) : ""})</span>
         ${(x.samples || []).length ? `<br><span style="${sub}">e.g. ${x.samples.map(t => escapeHtml(t)).join(" · ")}</span>` : ""}</li>`).join("")}</ul>
-      <div style="font-size:12px;color:#555;margin-top:4px;">Reported in the next roll-up (it's sent even with nothing else new), then cleared. Details are in the Cloudflare logs.</div></div>` : ""}
+      <div style="font-size:12px;color:#555;margin-top:4px;">Reported in the next roll-up (it's sent even with nothing else new), then cleared. Details are in ${adminDesktop_() ? "the program's log (Help → Open the log)" : "the Cloudflare logs"}.</div></div>` : ""}
     ${urgent.length ? `<div style="border:2px solid #b91c1c;border-radius:6px;padding:10px 12px;margin-bottom:20px;background:#fef2f2;">
       <h2 style="margin:0 0 8px;color:#b91c1c;font-size:16px;">⚠️ Needs attention</h2>${noticeTable(urgent)}</div>` : ""}
     <h2 style="font-size:17px;margin:0 0 8px;">New orders${d.orders.length ? ` — ${d.orders.length}, ${fmt(total)}` : ""}</h2>
