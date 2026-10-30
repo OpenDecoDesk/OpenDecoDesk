@@ -34,6 +34,8 @@
       "preload.js",
       "server.js",
       "migrate.js",
+      "files.js",
+      "r2-files-binding.mjs",
       "package.json",
       "!node_modules/workerd/bin/**",
       "!node_modules/sharp/**",

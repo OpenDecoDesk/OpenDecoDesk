@@ -29,7 +29,7 @@ your user folder. Nothing is sent anywhere, unless you add a Shippo key for carr
 | Carrier rates, buying labels, tracking checks (Shippo) | optional | optional, with a Shippo key and the internet |
 | Orders entered by hand (Local sale), production, inventory, cost of goods | yes | yes |
 | Expenses, accounts, reconciling, closing months, the accountant export | yes | yes |
-| Pictures, receipts, design files | R2 buckets | files in the data folder |
+| Pictures, receipts, design files | R2 buckets | ordinary files in the data folder |
 | Several people signing in | yes | yes, on that one computer |
 | Supplier files (CSV, PDF invoices, product files) | yes | yes |
 | A supplier's live connection (PromoStandards), ordering from it, its shipment notices | yes | optional, once turned on (needs the internet) |
@@ -134,9 +134,21 @@ it's turned back on.
 | Mac | `~/Library/Application Support/OpenDecoDesk` |
 | Linux | `~/.config/OpenDecoDesk` |
 
-**File → Open the data folder** opens it. Inside: `state/` (the database, files and send-agent
-mailbox), `desktop.json` (the port, the secrets the program signs links and passwords with, and the
-last database update applied), `backups/` and `electron/` (the window's own storage).
+**File → Open the data folder** opens it. Inside:
+
+- `state/files/`: pictures (`images/`), receipts (`receipts/`) and design files (`designs/`) as
+  ordinary files, under the names the program gave them. A hidden `.meta/` folder beside them keeps
+  each one's type, original name and upload time. The Worker uses them as its R2 buckets
+  (`desktop/files.js`, `desktop/r2-files-binding.mjs`); they don't depend on Miniflare.
+- `state/d1/`: the database, a SQLite file any SQLite tool can open.
+- `state/do/`: the send-agent's mailbox.
+- `desktop.json`: the port, the secrets the program signs links and passwords with, and the last
+  database update applied.
+- `backups/` and `electron/` (the window's own storage).
+
+Earlier test versions kept the files in Miniflare's own storage (`state/r2/`). The first start of
+this version copies them into `state/files/` and moves the old folder to `backups/` for you to
+delete once you're happy.
 
 The secrets in `desktop.json` are encrypted with the system's keychain where there is one (Windows
 and Mac). The database and files themselves are not encrypted. Your password keeps people out of

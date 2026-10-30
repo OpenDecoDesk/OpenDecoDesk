@@ -12,6 +12,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { readSources, migrate } = require("./migrate.js");
+const { FileStore, copyFromR2 } = require("./files.js");
 
 // Pictures are stored with this address (R2_PUBLIC_BASE), whatever port the server is on, so they
 // keep working when the port changes. ".invalid" can never be a real address (RFC 2606); the
@@ -83,9 +84,11 @@ async function adminHasUsablePassword(db, passphrase) {
 }
 
 // Where everything is kept, inside the data folder.
+// files/ holds pictures, receipts and design files as ordinary files (desktop/files.js); r2/ is where
+// Miniflare kept them before that, copied into files/ on the first start that finds it.
 const statePaths = (dataDir) => {
   const state = path.join(dataDir, "state");
-  return { state, d1: path.join(state, "d1"), r2: path.join(state, "r2"), durableObjects: path.join(state, "do") };
+  return { state, d1: path.join(state, "d1"), files: path.join(state, "files"), r2: path.join(state, "r2"), durableObjects: path.join(state, "do") };
 };
 
 // Copies the stored state (database, files, mailbox) to a new folder — only while the server is
@@ -125,31 +128,43 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {} }
     if (dest) log("Copied the database before updating it: " + dest);
   }
   const paths = statePaths(dataDir);
+  const store = new FileStore(paths.files);
+  await copyOldR2_(Miniflare, paths, store, dataDir, log);
+  // The Worker's buckets (IMAGES, RECEIPTS, DESIGNS) are files in state/files: each is a "wrapped
+  // binding" made by desktop/r2-files-binding.mjs, whose requests the store answers here in Node.
+  const bucket = (name) => ({ scriptName: "files", bindings: { BUCKET: name } });
   const options = (p) => ({
     host: "127.0.0.1",
     port: p,
-    modules: true,
-    modulesRoot: root,
-    // The Worker's files are ES modules with a .js name (there is no package.json "type" for them).
-    modulesRules: [{ type: "ESModule", include: ["**/*.js"] }],
-    scriptPath: path.join(root, "src", "worker.js"),
-    compatibilityDate: "2025-09-01",
-    assets: {
-      directory: path.join(root, "public"),
-      binding: "ASSETS",
-      routerConfig: { has_user_worker: true, invoke_user_worker_ahead_of_assets: false, static_routing: { user_worker: ["/api/*"] } },
-      assetConfig: { not_found_handling: "single-page-application", html_handling: "auto-trailing-slash", has_static_routing: true },
-    },
-    d1Databases: { DB: "desktop" },
-    r2Buckets: ["IMAGES", "RECEIPTS", "DESIGNS"],
-    durableObjects: { AGENT_MAILBOX: "AgentMailbox" },
     d1Persist: paths.d1,
-    r2Persist: paths.r2,
     durableObjectsPersist: paths.durableObjects,
     cachePersist: false,
-    // DESKTOP_SUPPLIERS: the owner turned on supplier connections (Global settings), which need the
-    // internet — hostConfig.js desktopSuppliersOn.
-    bindings: { EDITION: "desktop", R2_PUBLIC_BASE: IMAGES_BASE, ...secrets, ...(cfg.supplierConnections ? { DESKTOP_SUPPLIERS: "on" } : {}) },
+    workers: [{
+      name: "app",
+      modules: true,
+      modulesRoot: root,
+      // The Worker's files are ES modules with a .js name (there is no package.json "type" for them).
+      modulesRules: [{ type: "ESModule", include: ["**/*.js"] }],
+      scriptPath: path.join(root, "src", "worker.js"),
+      compatibilityDate: "2025-09-01",
+      assets: {
+        directory: path.join(root, "public"),
+        binding: "ASSETS",
+        routerConfig: { has_user_worker: true, invoke_user_worker_ahead_of_assets: false, static_routing: { user_worker: ["/api/*"] } },
+        assetConfig: { not_found_handling: "single-page-application", html_handling: "auto-trailing-slash", has_static_routing: true },
+      },
+      d1Databases: { DB: "desktop" },
+      wrappedBindings: { IMAGES: bucket("images"), RECEIPTS: bucket("receipts"), DESIGNS: bucket("designs") },
+      durableObjects: { AGENT_MAILBOX: "AgentMailbox" },
+      // DESKTOP_SUPPLIERS: the owner turned on supplier connections (Global settings), which need the
+      // internet — hostConfig.js desktopSuppliersOn.
+      bindings: { EDITION: "desktop", R2_PUBLIC_BASE: IMAGES_BASE, ...secrets, ...(cfg.supplierConnections ? { DESKTOP_SUPPLIERS: "on" } : {}) },
+    }, {
+      name: "files",
+      modules: true,
+      scriptPath: path.join(__dirname, "r2-files-binding.mjs"),
+      serviceBindings: { STORE: (request) => store.handle(request) },
+    }],
   });
   let mf = null, used = null;
   for (const p of [...new Set([port, cfg.port].filter(n => Number.isInteger(n) && n > 0)), 0]) {
@@ -178,12 +193,13 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {} }
     async firstRunKey() {
       return (await adminHasUsablePassword(db, secrets.PROXY_ADMIN_PASSPHRASE)) ? null : secrets.PROXY_ADMIN_PASSPHRASE;
     },
-    // A picture from the IMAGES bucket, for the window's images.desktop.invalid address.
+    // A picture from the IMAGES bucket, for the window's images.desktop.invalid address — read
+    // straight from its file.
     async image(key) {
-      const bucket = await mf.getR2Bucket("IMAGES");
-      const obj = await bucket.get(key);
+      let obj = null;
+      try { obj = store.get("images", key); } catch (e) { return null; }   // not a valid key
       if (!obj) return null;
-      return { body: Buffer.from(await obj.arrayBuffer()), contentType: (obj.httpMetadata && obj.httpMetadata.contentType) || "application/octet-stream" };
+      return { body: obj.body, contentType: (obj.httpMetadata && obj.httpMetadata.contentType) || "application/octet-stream" };
     },
     // Whether a Shippo key is set (carrier shipping, Global settings → Carrier shipping), never the key.
     hasShippoKey: () => !!secrets.SHIPPO_API_KEY,
@@ -197,6 +213,24 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {} }
     },
     async stop() { await mf.dispose(); },
   };
+}
+
+// Pictures, receipts and design files kept by Miniflare's own storage (the desktop program before they
+// became plain files, or a backup from then that was restored) are copied into state/files once.
+// Miniflare's folder then moves to backups/ — out of state/, so later backups don't carry it twice —
+// and is kept there until the owner deletes it.
+async function copyOldR2_(Miniflare, paths, store, dataDir, log) {
+  if (!fs.existsSync(paths.r2)) return 0;
+  const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response(null); } }",
+    r2Buckets: ["IMAGES", "RECEIPTS", "DESIGNS"], r2Persist: paths.r2 });
+  let copied;
+  try { await mf.ready; copied = await copyFromR2(store, (name) => mf.getR2Bucket(name)); }
+  finally { await mf.dispose(); }
+  const aside = path.join(dataDir, "backups", "miniflare-files-" + stamp());
+  fs.mkdirSync(path.dirname(aside), { recursive: true });
+  fs.renameSync(paths.r2, aside);
+  log("Moved " + copied + " stored file(s) from Miniflare's storage to " + paths.files + " (the old copy is in " + aside + ").");
+  return copied;
 }
 
 // Locked out: new secrets. Every password stops working (they are keyed with the passphrase,
