@@ -10,7 +10,7 @@
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain, safeStorage, session, net } = require("electron");
 const fs = require("fs");
 const path = require("path");
-const { startServer, copyState, restoreState, resetSignIn, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
+const { startServer, copyState, restoreState, resetSignIn, setShippoKey, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
 
 const SOURCE_URL = "https://github.com/opendecodesk/opendecodesk";
 const argData = process.argv.find(a => a.startsWith("--data-dir="));
@@ -88,17 +88,42 @@ function setUpSession() {
   ses.setPermissionRequestHandler((wc, permission, cb) => cb(permission === "clipboard-sanitized-write"));
 }
 
-// Stops the server, does `work` while nothing is using the database, starts it again and reloads.
-async function whileStopped(work) {
-  if (busy) return;
+// Opens `url` in the window, reloading it when the window is already there: loading the same
+// address again (…/#settings from …/#settings) would only move within the page.
+function showPage(url) {
+  if (win.webContents.getURL() === url) win.webContents.reload();
+  else win.loadURL(url);
+}
+
+// Stops the server, does `work` while nothing is using the database, starts it again and reloads
+// (at `hash`, an admin page such as "settings", when given).
+async function whileStopped(work, hash) {
+  if (busy) return false;
   busy = true;
   try {
     await stop();
     try { await work(); }
-    finally { await start(); if (win) win.loadURL(server.url); }
+    finally { await start(); if (win) showPage(server.url + (hash ? "#" + hash : "")); }
+    return true;
   } catch (e) {
     dialog.showErrorBox("OpenDecoDesk", String((e && e.message) || e));
+    return false;
   } finally { busy = false; }
+}
+
+// Tracking checks (carrier shipping with a Shippo key): there is no cron on this computer, so the
+// Worker's scheduled handler — which here only checks tracking (src/worker.js) — runs a minute after
+// the program opens and every two hours while it stays open. It does nothing without a key or with
+// Shipping switched off.
+const TRACKING_EVERY_MS = 2 * 60 * 60 * 1000;
+function startTrackingChecks() {
+  const run = async () => {
+    if (!server || busy || !server.hasShippoKey()) return;
+    try { await server.runScheduled(); }
+    catch (e) { console.error("Tracking check failed:", e); }
+  };
+  setTimeout(run, 60 * 1000);
+  setInterval(run, TRACKING_EVERY_MS);
 }
 
 async function backUp() {
@@ -145,6 +170,10 @@ function buildMenu() {
     { role: "editMenu" },
     { label: "View", submenu: [{ role: "reload" }, { role: "togglefullscreen" }, { type: "separator" }, { role: "resetZoom" }, { role: "zoomIn" }, { role: "zoomOut" }, { type: "separator" }, { role: "toggleDevTools" }] },
     { role: "windowMenu" },
+    { label: "Settings", submenu: [
+      // Global settings has the Carrier shipping (Shippo) section near the top in the desktop version.
+      { label: "Global settings and carrier shipping…", click: () => { if (win && server) win.loadURL(server.url + "#settings"); } },
+    ] },
     { role: "help", submenu: [
       { label: "Locked out? Reset sign-in…", click: resetSignInMenu },
       { type: "separator" },
@@ -153,6 +182,18 @@ function buildMenu() {
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
+
+// Global settings → Carrier shipping (Shippo): whether a key is set, and setting or removing it.
+// The key goes into desktop.json with the other secrets and the server restarts to read it; the
+// page reloads on Global settings.
+ipcMain.handle("odd:has-shippo-key", async (e) => !!(isOurs(e.senderFrame && e.senderFrame.url) && server && server.hasShippoKey()));
+ipcMain.handle("odd:set-shippo-key", async (e, key) => {
+  if (!isOurs(e.senderFrame && e.senderFrame.url)) return { ok: false, message: "Not allowed." };
+  const k = key == null ? null : String(key).trim();
+  if (k !== null && (!k || k.length > 200 || /\s/.test(k))) return { ok: false, message: "That doesn't look like a Shippo API token." };
+  const ok = await whileStopped(async () => { setShippoKey(dataDir, k, crypt()); }, "settings");
+  return { ok };
+});
 
 ipcMain.handle("odd:first-run-key", async (e) => {
   // Only the program's own page may ask.
@@ -181,6 +222,7 @@ app.whenReady().then(async () => {
   setUpSession();
   buildMenu();
   createWindow();
+  startTrackingChecks();
 });
 
 app.on("window-all-closed", () => app.quit());

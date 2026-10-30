@@ -66,7 +66,7 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   }
 
   console.log("\n=== B. localhost is the admin panel ===");
-  const host = new Function(strip(read("functions/_lib/hostConfig.js")) + "\nreturn { classifyHost, isDesktopEdition, DESKTOP_LOCKED_FEATURES };")();
+  const host = new Function(strip(read("functions/_lib/hostConfig.js")) + "\nreturn { classifyHost, isDesktopEdition, desktopLockedFeatures };")();
   const DESK = { EDITION: "desktop" };
   ok("in the desktop edition, localhost and 127.0.0.1 are the admin", host.classifyHost("localhost", {}, DESK).kind === "admin" && host.classifyHost("127.0.0.1", {}, DESK).kind === "admin");
   ok("…and any other name is refused (a page pointing its own name at this computer gets nothing)", host.classifyHost("evil.example.net", {}, DESK).kind === "unknown" && host.classifyHost("shop.example.com", { shop: "shop" }, { ...DESK, ROOT_DOMAIN: "example.com" }).kind === "unknown");
@@ -78,7 +78,8 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   await migrate(d1, src);
   const lib = new Function(strip(read("functions/_lib/db.js")) + "\n" + strip(read("functions/_lib/hostConfig.js")) + "\n" + strip(read("functions/_lib/desktop.js")) +
     "\nreturn { getFeatures, setFeatures, getAllOrgs, ensureDesktopReady, DESKTOP_DEFAULT_SHOP };")();
-  ok("the locked features are the storefront, carrier shipping and design approval", host.DESKTOP_LOCKED_FEATURES.join() === "storefront,shipping,designVerification");
+  ok("the locked features are the storefront, carrier shipping and design approval", host.desktopLockedFeatures({ EDITION: "desktop" }).join() === "storefront,shipping,designVerification");
+  ok("…and carrier shipping is unlocked once the program has a Shippo key", host.desktopLockedFeatures({ EDITION: "desktop", SHIPPO_API_KEY: "k" }).join() === "storefront,designVerification");
   let s = await lib.ensureDesktopReady({ DB: d1 });
   let f = await lib.getFeatures(d1);
   ok("the start-up step saves them off", s.changed && f.storefront === false && f.shipping === false && f.designVerification === false);
@@ -174,6 +175,60 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   fs.rmSync(tmp, { recursive: true, force: true });
   ok("pictures are stored under an address that can never be a real site", /^https:\/\/[a-z.]+\.invalid$/.test(server.IMAGES_BASE));
 
+  console.log("\n=== H. Shipping: by hand, and with a Shippo key ===");
+  {
+    const keyed = { ...env, SHIPPO_API_KEY: "shippo_test_key" };
+    r = await post(env, { action: "updateFeatures", key: "x", features: { shipping: true } });
+    ok("without a key, turning Shipping on is refused and says where the key goes", r.status === 400 && /needs a Shippo key — add it under Global settings → Carrier shipping/.test(r.body.message) && (await lib.getFeatures(d1)).shipping === false);
+    r = await post(keyed, { action: "getFeatures", key: "x" });
+    ok("with a key, Shipping is no longer locked", r.status === 200 && !r.body.locked.includes("shipping") && r.body.locked.includes("storefront"));
+    r = await post(keyed, { action: "updateFeatures", key: "x", features: { shipping: true } });
+    ok("…and can be turned on", r.status === 200 && r.body.features.shipping === true);
+    await lib.ensureDesktopReady(keyed);
+    ok("with a key, the start-up step leaves Shipping as the owner set it", (await lib.getFeatures(d1)).shipping === true);
+    await lib.ensureDesktopReady(env);
+    ok("…and once the key is removed, the next start switches it off again", (await lib.getFeatures(d1)).shipping === false);
+
+    // Local sale → Ship this order (the form is shared, so a cloud install gets it too).
+    const sale = (e, extra, hostname) => post(e, { action: "createLocalSale", key: "x", org: "shop", paymentMethod: "Cash", customerName: "Pat",
+      items: [{ productId: "__custom__", name: "Club tee", qty: 2, customUnitPrice: 20, type: "shirt" }], ...extra }, hostname);
+    const addr = { name: "Pat", line1: "1 Main St", city: "Columbus", state: "OH", zip: "43215" };
+    r = await sale(env, { shippingAddress: addr, shippingCost: 9.5, shippingMethod: "UPS  Ground " });
+    const row = r.status === 200 ? d1.q("SELECT * FROM orders WHERE orderId = ?", r.body.orderId)[0] : {};
+    ok("a local sale that ships keeps its address, method and charge", r.status === 200 && JSON.parse(row.shippingAddress).line1 === "1 Main St" && row.shippingMethod === "UPS Ground" && Number(row.shippingCostCents) === 950);
+    ok("…and the charge is part of what the customer pays", Number(row.totalCents) === 4950);
+    r = await sale(env, { shippingCost: 9.5, shippingMethod: "UPS Ground" });
+    ok("a shipping charge with no address to ship to is refused", r.status === 400 && /needs the address/.test(r.body.message));
+    r = await sale(env, { shippingAddress: addr, shippingCost: -1 });
+    ok("…and so is a charge that isn't a sensible amount", r.status === 400 && /between \$0 and \$10,000/.test(r.body.message));
+    r = await sale({ DB: d1 }, { shippingAddress: addr, shippingCost: 4, shippingMethod: "USPS Ground Advantage" }, "admin.example.com");
+    ok("a cloud install's Local sale takes shipping the same way", r.status === 200 && Number(d1.q("SELECT shippingCostCents c FROM orders WHERE orderId = ?", r.body.orderId)[0].c) === 400);
+    r = await sale(env, {});
+    ok("a sale that doesn't ship is as before", r.status === 200 && Number(d1.q("SELECT shippingCostCents c FROM orders WHERE orderId = ?", r.body.orderId)[0].c) === 0);
+
+    // Tracking: the program's scheduled run (src/worker.js) only checks tracking, and only with a key.
+    const worker = await import("./src/worker.js");
+    const shipped = d1.q("SELECT orderId FROM orders WHERE shippingMethod = 'UPS Ground'")[0].orderId;
+    d1._raw.run("UPDATE orders SET shippedAt = '2026-10-20T15:00:00Z', trackingNumber = '1Z999AA10123456784' WHERE orderId = ?", [shipped]);
+    const realFetch = global.fetch, looked = [];
+    global.fetch = async (u) => {
+      looked.push(String(u));
+      if (/api\.goshippo\.com\/tracks\//.test(String(u))) return { ok: true, json: async () => ({ tracking_status: { status: "DELIVERED", status_date: "2026-10-22T18:00:00Z" }, tracking_history: [] }) };
+      throw new Error("unexpected request " + u);
+    };
+    let out = await worker.handleScheduled({ scheduledTime: Date.now() }, { ...env });
+    ok("without a key the desktop's scheduled run does nothing (no lookups)", out.ran === false && looked.length === 0);
+    out = await worker.handleScheduled({ scheduledTime: Date.now() }, { ...keyed });
+    ok("with a key but Shipping off, it looks nothing up", out.ran === true && /turned off/.test(out.deliveries.skipped || "") && looked.length === 0);
+    await lib.setFeatures(d1, { shipping: true });
+    out = await worker.handleScheduled({ scheduledTime: Date.now() }, { ...keyed });
+    ok("with Shipping on, it checks the tracking (with the carrier the order's method names) and marks the order delivered", out.deliveries.delivered.some(x => x.orderId === shipped) &&
+      looked.some(u => /\/tracks\/ups\/1Z999AA10123456784$/.test(u)) && !!d1.q("SELECT deliveredAt d FROM orders WHERE orderId = ?", shipped)[0].d);
+    ok("…and nothing else: no roll-up, no Stripe, no email (only Shippo was asked)", looked.every(u => /api\.goshippo\.com/.test(u)) && out.desktop === true);
+    global.fetch = realFetch;
+    await lib.setFeatures(d1, { shipping: false });
+  }
+
   console.log("\n=== G. The admin page in the desktop program ===");
   // The real page and admin.js in jsdom, talking to the real catalog.js and orders.js above.
   const catalog = new Function(strip(read("functions/_lib/hostConfig.js")) + "\n" + strip(read("functions/_lib/http.js")) + "\n" + strip(read("functions/_lib/db.js")) + "\n" +
@@ -220,6 +275,11 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   ok("an order has no Send received / Resend email or Send invoice button", /Mark as paid/.test(cell) && !/resendEmail|showSendInvoiceModal/.test(cell));
   ok("a paid one has no email button either", !/resendEmail/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X2", paid: true, items: [{}], shippingAddress: { line1: "1 Main" } })));
   ok("there is nothing to publish", w.publishStateHtml_({ state: "never" }) === "");
+  const shippo = w.desktopShippoSectionHtml_(false, false);
+  ok("Global settings explains carrier shipping by hand and with a Shippo key, and takes the key in a password field", /Ship this order/.test(shippo) && /No Shippo key yet/.test(shippo) && /type="password" id="gShippoKey"/.test(shippo) && !/gShippoRemove/.test(shippo));
+  ok("…with a key set it offers to remove it, and never shows the key", /A Shippo key is set — turn on Shipping/.test(w.desktopShippoSectionHtml_(true, false)) && /gShippoRemove/.test(w.desktopShippoSectionHtml_(true, true)));
+  ok("a tracking number on an order sent by FedEx links to FedEx", /fedex\.com\/fedextrack\/\?trknbr=7712/.test(w.trackingCell({ orgId: "shop" }, { orderId: "F1", trackingNumber: "7712", shippingMethod: "FedEx Ground", items: [{}], labels: [] })));
+  ok("Local sale has a Ship this order section with the address, carrier and charge", ["lsShip", "lsShipLine1", "lsShipCity", "lsShipZip", "lsShipCarrier", "lsShipService", "lsShipCost"].every(id => adminJs.includes(`id="${id}"`)) && !adminJs.includes('id="lsAddress"'));
   w.eval('siteEdition = ""');
   ok("…while a cloud install's admin keeps all of them", /resendEmail/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X1", paid: false, items: [{}], balanceDue: 20 })) && /showSendInvoiceModal/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X1", paid: false, items: [{}], balanceDue: 20 })) && /Not published yet/.test(w.publishStateHtml_({ state: "never" })));
   ok("the page loads its fonts from this site, not Google", /href="\/vendor\/fonts\/fonts\.css"/.test(read("public/index.html")) && !/googleapis|gstatic/.test(read("public/index.html") + adminJs + read("public/_headers")) && fs.existsSync(__dirname + "/public/vendor/fonts/OFL-Fraunces.txt"));

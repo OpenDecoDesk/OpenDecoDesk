@@ -17,13 +17,16 @@ The same Worker (`src/worker.js`) and the same pages (`public/`), run by
 Miniflare, Cloudflare's own local runtime (the one `wrangler dev` uses), inside an Electron
 window.
 The database is SQLite and the files (pictures, receipts, design files) are kept on disk, both in
-your user folder. Nothing is sent anywhere.
+your user folder. Nothing is sent anywhere, unless you add a Shippo key for carrier shipping
+([Shipping](#shipping)).
 
 | | Cloud install | Desktop version |
 |---|---|---|
 | Storefront (shops online) | optional | **off** (locked) |
 | Email: confirmations, invoices, payment links, design proofs, the morning roll-up | yes | **none** |
-| Card payments (Stripe), carrier shipping (Shippo) | optional | **none**: payments and shipping are recorded by hand |
+| Card payments (Stripe) | optional | **none**: payments are recorded by hand |
+| Shipping an order: address, carrier, charge, tracking number | yes | yes, typed in (Local sale → Ship this order) |
+| Carrier rates, buying labels, tracking checks (Shippo) | optional | optional, with a Shippo key and the internet |
 | Orders entered by hand (Local sale), production, inventory, cost of goods | yes | yes |
 | Expenses, accounts, reconciling, closing months, the accountant export | yes | yes |
 | Pictures, receipts, design files | R2 buckets | files in the data folder |
@@ -43,8 +46,9 @@ With it:
 
 - `localhost` is the admin panel and no other name is anything (`functions/_lib/hostConfig.js`),
   so a web page that points a name of its own at this computer gets nothing.
-- The storefront, carrier shipping and design approval are saved off at every start and can't be
-  turned on (`functions/_lib/desktop.js`, `updateFeatures` in `functions/api/orders.js`).
+- The storefront and design approval are saved off at every start and can't be turned on, and so
+  is carrier shipping while the program has no Shippo key (`functions/_lib/desktop.js`,
+  `desktopLockedFeatures` in `hostConfig.js`, `updateFeatures` in `functions/api/orders.js`).
 - Actions that need the internet are refused (`DESKTOP_REFUSED_ACTIONS` in `orders.js`), and the
   admin leaves out their pages and buttons.
 - Global settings → Setup status lists only the business profile, sales tax and time zone.
@@ -73,6 +77,34 @@ certificate, both paid). Signing can be added to the workflow later without chan
    sales tax rate and state (leave it at 0 if you don't collect any). Save.
 3. Add products under Manage catalog (or Shop setup, which builds them from blanks), then take
    orders with **+ Local sale** on the Orders page.
+
+## Shipping
+
+**By hand, offline.** In **+ Local sale**, tick **Ship this order**: the address, the carrier (USPS,
+UPS, FedEx or other) and service, and the shipping charge. The charge is added to what the customer
+pays (shipping isn't taxed), and the address decides the sales tax as on any order. Once it's sent,
+select the order and use **Add tracking**: the tracking number links to the carrier's own page
+(USPS, UPS or FedEx, from the carrier on the order), which opens in your browser. Mark it shipped
+and delivered from the order's stage list. Mailing labels and packing slips print as always.
+
+**With a Shippo key (optional).** Shippo is a shipping service that buys postage from the carriers.
+With a key from your Shippo account, the program can get carrier rates, buy and print labels, and
+follow tracking. This needs the internet, and labels are paid to Shippo.
+
+1. **Settings → Global settings and carrier shipping…**, then *Carrier shipping (Shippo)*: paste
+   the API token from Shippo (its Settings → API) and choose **Save key**. The program restarts for
+   a moment. The key is kept with the program's other secrets in `desktop.json`, encrypted where
+   the system has a keychain, and never in the database.
+2. Turn on **Shipping** under Features, and fill in the **Ship-from address** that appears. Region's
+   country must be the US: carrier rates and labels are US-only, as on a cloud install.
+3. An order with an address then has a **Ship** button: it gets the rates and buys the label.
+
+Tracking is checked a minute after the program opens and every two hours while it stays open
+(there is no server running in between). Orders the carrier has picked up are marked shipped, and
+delivered ones delivered. **Check tracking now** on the Orders page does it at once. No email goes
+to the customer from the desktop version.
+
+**Remove key** puts shipping back to by hand. Labels already bought stay on their orders.
 
 ## Where your data is
 

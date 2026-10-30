@@ -1162,6 +1162,52 @@ async function adminDesktopFirstRunKey_(){
   if(!adminDesktop_() || !window.oddDesktop || typeof window.oddDesktop.firstRunKey !== "function") return null;
   try{ return (await window.oddDesktop.firstRunKey()) || null; }catch(e){ return null; }
 }
+// Global settings → Carrier shipping (Shippo), in the desktop version only. Shipping is manual
+// without a key (Local sale → Ship this order, a tracking number typed on the order). With one,
+// the Shipping switch can be turned on: carrier rates, buying labels, and tracking checks while the
+// program is open. The key is kept by the program with its other secrets (desktop/server.js),
+// never by the page or the database; saving restarts the program's server and reloads this page.
+async function adminDesktopHasShippoKey_(){
+  if(!window.oddDesktop || typeof window.oddDesktop.hasShippoKey !== "function") return null;
+  try{ return !!(await window.oddDesktop.hasShippoKey()); }catch(e){ return null; }
+}
+function desktopShippoSectionHtml_(keySet, shippingOn){
+  return `<div id="gShippoSection">
+        <h2 style="margin:22px 0 12px;">Carrier shipping (Shippo)</h2>
+        <div class="admin-note" style="margin-bottom:10px;">Without this, shipping is by hand: tick <strong>Ship this order</strong> in Local sale for the address, carrier and charge, and type the tracking number on the order. With a key from your Shippo account, turn on <strong>Shipping</strong> under Features (below) for carrier rates, buying and printing labels from the order's <strong>Ship</strong> button, and tracking checks every two hours while this program is open. Those need the internet; labels are paid to Shippo.</div>
+        <div id="gShippoStatus" style="font-size:14px;margin-bottom:8px;">${keySet ? `A Shippo key is set${shippingOn ? "." : " — turn on Shipping under Features to use it."}` : "No Shippo key yet."}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
+          <input type="password" id="gShippoKey" maxlength="200" autocomplete="off" spellcheck="false" placeholder="${keySet ? "Paste a new key to replace it" : "shippo_live_… or shippo_test_…"}" style="max-width:320px;">
+          <button class="admin-btn" type="button" id="gShippoSave">Save key</button>
+          ${keySet ? `<button class="admin-btn admin-btn-secondary" type="button" id="gShippoRemove">Remove key</button>` : ""}
+        </div>
+        <div id="gShippoError" class="admin-error"></div>
+      </div>`;
+}
+function wireDesktopShippoSection_(){
+  const save = document.getElementById("gShippoSave");
+  if(!save) return;
+  const errEl = document.getElementById("gShippoError");
+  const send = async (key) => {
+    if(errEl) errEl.textContent = "";
+    showToast(key ? "Saving the key — the program restarts for a moment…" : "Removing the key — the program restarts for a moment…");
+    try{
+      const r = await window.oddDesktop.setShippoKey(key);
+      if(r && r.ok === false && errEl) errEl.textContent = r.message || "Could not save the key.";
+    }catch(e){ if(errEl) errEl.textContent = "Could not save the key."; }
+  };
+  save.onclick = () => {
+    const key = (document.getElementById("gShippoKey").value || "").trim();
+    if(!key){ if(errEl) errEl.textContent = "Paste the API token from your Shippo account (Settings → API) first."; return; }
+    send(key);
+  };
+  const remove = document.getElementById("gShippoRemove");
+  if(remove) remove.onclick = async () => {
+    if(!await askConfirm_("Remove the Shippo key?\n\nShipping goes back to by hand: no rates, labels or tracking checks. Labels already bought stay on their orders.")) return;
+    send(null);
+  };
+}
+
 function renderDesktopOff_(app, hash){
   adminSetHash(hash);
   document.title = adminTitle_("Not in the desktop version");
@@ -3320,8 +3366,11 @@ function trackingCell(org, o){
   if(tracking){
     const tn = escapeHtml(tracking);
     let trackUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + encodeURIComponent(tracking);
-    if(o.shippingMethod && o.shippingMethod.toUpperCase().startsWith("UPS")){
+    const method = String(o.shippingMethod || "").toUpperCase();
+    if(method.startsWith("UPS")){
       trackUrl = "https://www.ups.com/track?tracknum=" + encodeURIComponent(tracking);
+    } else if(method.startsWith("FEDEX")){
+      trackUrl = "https://www.fedex.com/fedextrack/?trknbr=" + encodeURIComponent(tracking);
     }
     return `<a href="${trackUrl}" target="_blank" rel="noopener" style="font-family:monospace;font-size:12px;">${tn}</a>${labelBtn}`;
   }
@@ -4129,6 +4178,7 @@ function renderAdminOrders(app, org, opts){
         <button class="admin-btn" data-org="${escapeHtml(org.orgId)}" onclick="renderPackingLabels(this.dataset.org, getSelectedOrderIds())">Packing labels</button>
         <button class="admin-btn" data-org="${escapeHtml(org.orgId)}" onclick="renderBrandedLabels(this.dataset.org, getSelectedOrderIds())">Branded labels</button>
         ${shownOrders.some(o => o.shippingAddress && o.shippingAddress.line1) ? `<button class="admin-btn" data-org="${escapeHtml(org.orgId)}" onclick="renderMailingLabels(this.dataset.org, getSelectedOrderIds())">Mailing labels</button>` : ""}
+        ${adminDesktop_() && adminFeatureOn_("shipping") ? `<button class="admin-btn" id="ordCheckTracking" data-org="${escapeHtml(org.orgId)}" onclick="ordersCheckTracking_(this)" title="Look up every shipped order's tracking now (it's also checked every two hours while the program is open)">Check tracking now</button>` : ""}
       </div>
       <textarea class="export-box" id="exportBox" style="display:none;"></textarea>
       <div id="ordBreakdownSection">${renderOrderBreakdown(shownOrders, blankLinks, blanks)}</div>
@@ -5281,10 +5331,36 @@ function showLocalSaleModal(products, blanks){
             <input type="email" id="lsEmail" maxlength="200" placeholder="customer@example.com" style="${IS()}">
             ${LS("Phone", true)}
             <input type="tel" id="lsPhone" maxlength="50" placeholder="${adminIsUS_() ? "(555) 555-5555" : ""}" style="${IS()}">
-            ${LS("Address", true)}
-            <input type="text" id="lsAddress" maxlength="300" placeholder="Street address" style="${IS()}">
           </div>
         </details>
+
+        <div style="margin-bottom:10px;">
+          <label style="font-size:14px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="lsShip" style="width:auto;margin:0;"> Ship this order
+          </label>
+          <div id="lsShipWrap" style="display:none;margin-top:8px;padding:10px;border:1px solid var(--border,#ddd);border-radius:6px;">
+            ${LS("Recipient", true)}
+            <input type="text" id="lsShipName" maxlength="200" placeholder="Same as the customer's name" style="${IS()}">
+            ${LS("Address line 1")}
+            <input type="text" id="lsShipLine1" maxlength="200" placeholder="123 Main St" style="${IS()}">
+            ${LS("Address line 2", true)}
+            <input type="text" id="lsShipLine2" maxlength="200" placeholder="Apt, Suite, etc." style="${IS()}">
+            <div style="display:flex;gap:8px;">
+              <div style="flex:2;">${LS("City")}<input type="text" id="lsShipCity" maxlength="100" style="${IS()}"></div>
+              <div style="flex:1;">${LS(adminIsUS_() ? "State" : "State / region", !adminIsUS_())}<input type="text" id="lsShipState" ${adminIsUS_() ? 'maxlength="2" placeholder="ST"' : 'maxlength="50"'} style="${IS()}"></div>
+              <div style="flex:1;">${LS(adminIsUS_() ? "ZIP" : "Postal code")}<input type="text" id="lsShipZip" maxlength="20" style="${IS()}"></div>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <div style="flex:1;">${LS("Carrier")}<select id="lsShipCarrier" style="${IS()}">
+                <option value="USPS">USPS</option><option value="UPS">UPS</option><option value="FedEx">FedEx</option><option value="">Other</option>
+              </select></div>
+              <div style="flex:2;">${LS("Service", true)}<input type="text" id="lsShipService" maxlength="60" placeholder="e.g. Ground Advantage" style="${IS()}"></div>
+            </div>
+            ${LS("Shipping charge ($)")}
+            <input type="number" id="lsShipCost" min="0" max="10000" step="0.01" placeholder="0.00" style="${IS()}">
+            <div style="font-size:12px;color:var(--ink-soft,#888);margin-top:-4px;">Added to what the customer pays (shipping isn't taxed). The carrier decides the tracking link; ${adminFeatureOn_("shipping") ? "use Ship on the order to buy a label." : "add the tracking number on the order once it's shipped."}</div>
+          </div>
+        </div>
 
         <div style="margin:4px 0 10px;">
           <label style="font-size:14px;display:block;margin-bottom:4px;">Sale date</label>
@@ -5373,6 +5449,11 @@ function showLocalSaleModal(products, blanks){
       updatePricePreview();
     }
 
+    // The line's price, and the shipping charge after it when the order ships.
+    function showPreview(text){
+      const shipCost = overlay.querySelector("#lsShip").checked ? (parseFloat(overlay.querySelector("#lsShipCost").value) || 0) : 0;
+      overlay.querySelector("#lsPricePreview").textContent = text && shipCost > 0 ? text + ` + $${shipCost.toFixed(2)} shipping` : text;
+    }
     function updatePricePreview(){
       const pid = overlay.querySelector("#lsProduct").value;
       const qty = Math.max(1, parseInt(overlay.querySelector("#lsQty").value) || 1);
@@ -5383,12 +5464,12 @@ function showLocalSaleModal(products, blanks){
         const preview = unitPrice > 0
           ? `$${unitPrice.toFixed(2)}${qty > 1 ? " × " + qty : ""} = $${total.toFixed(2)}`
           : "";
-        overlay.querySelector("#lsPricePreview").textContent = preview;
+        showPreview(preview);
         return;
       }
 
       const p = productMap[pid];
-      if(!p){ overlay.querySelector("#lsPricePreview").textContent = ""; return; }
+      if(!p){ showPreview(""); return; }
 
       const isSized = p.pricingMode !== "flat" && p.sizePricing && Object.keys(p.sizePricing).length > 0;
       const sizeEl = overlay.querySelector("#lsSize");
@@ -5408,18 +5489,20 @@ function showLocalSaleModal(products, blanks){
         let preview = `$${customUnitPrice.toFixed(2)} (custom)`;
         if(qty > 1) preview += ` × ${qty}`;
         preview += ` = $${total.toFixed(2)}`;
-        overlay.querySelector("#lsPricePreview").textContent = preview;
+        showPreview(preview);
       } else {
         const total = (catalogUnitPrice + persFee) * qty;
         let preview = `$${catalogUnitPrice.toFixed(2)}`;
         if(persFee) preview += ` + $${persFee.toFixed(2)} personalization`;
         if(qty > 1) preview += ` × ${qty}`;
         preview += ` = $${total.toFixed(2)}`;
-        overlay.querySelector("#lsPricePreview").textContent = preview;
+        showPreview(preview);
       }
     }
 
     overlay.querySelector("#lsProduct").addEventListener("change", updateForProduct);
+    overlay.querySelector("#lsShip").addEventListener("change", (e) => { overlay.querySelector("#lsShipWrap").style.display = e.target.checked ? "" : "none"; updatePricePreview(); });
+    overlay.querySelector("#lsShipCost").addEventListener("input", updatePricePreview);
     const sizeEl2 = overlay.querySelector("#lsSize");
     if(sizeEl2) sizeEl2.addEventListener("change", updatePricePreview);
     overlay.querySelector("#lsQty").addEventListener("input", updatePricePreview);
@@ -5478,8 +5561,25 @@ function showLocalSaleModal(products, blanks){
         return;
       }
 
-      const addressLine = overlay.querySelector("#lsAddress").value.trim();
       const phone = overlay.querySelector("#lsPhone").value.trim();
+      // Ship this order: the address, carrier / service and charge go on the order (the server checks
+      // the address the way it checks a storefront order's).
+      let shipping = null;
+      if(overlay.querySelector("#lsShip").checked){
+        const v = (id) => overlay.querySelector(id).value.trim();
+        const addr = { name: v("#lsShipName") || overlay.querySelector("#lsName").value.trim(), line1: v("#lsShipLine1"), line2: v("#lsShipLine2"),
+          city: v("#lsShipCity"), state: v("#lsShipState").toUpperCase(), zip: v("#lsShipZip"), ...(phone ? { phone } : {}) };
+        const costRaw = v("#lsShipCost"), cost = costRaw === "" ? 0 : parseFloat(costRaw);
+        const shipErr = !addr.line1 || !addr.city || !addr.zip ? "Enter the street address, city and " + (adminIsUS_() ? "ZIP" : "postal code") + " to ship to."
+          : !isFinite(cost) || cost < 0 || cost > 10000 ? "Enter a shipping charge between $0 and $10,000 (or leave it empty)." : "";
+        if(shipErr){
+          errEl.textContent = shipErr;
+          errEl.style.display = "";
+          overlay.querySelector(!addr.line1 ? "#lsShipLine1" : !addr.city ? "#lsShipCity" : !addr.zip ? "#lsShipZip" : "#lsShipCost").focus();
+          return;
+        }
+        shipping = { address: addr, cost, method: [overlay.querySelector("#lsShipCarrier").value, v("#lsShipService")].filter(Boolean).join(" ") };
+      }
 
       let item;
       if(pid === "__custom__"){
@@ -5543,9 +5643,8 @@ function showLocalSaleModal(products, blanks){
         customerName: overlay.querySelector("#lsName").value.trim() || "",
         contact,
         phone,
-        shippingAddress: addressLine
-          ? { line1: addressLine, ...(phone ? { phone } : {}) }
-          : null,
+        shippingAddress: shipping ? shipping.address : null,
+        ...(shipping ? { shippingCost: shipping.cost, shippingMethod: shipping.method } : {}),
         paid:      overlay.querySelector("#lsPaid").checked,
         delivered: overlay.querySelector("#lsDelivered").checked,
         placedAt:  overlay.querySelector("#lsDate").value || null,
@@ -7619,9 +7718,12 @@ async function renderGlobalSettings(app){
       if(pr.ok && pd.status === "ok") pricing = pd.pricing;
     }catch(e){}
     const pv = (v) => v == null ? "" : escapeHtml(String(v));
+    // Desktop: whether the program holds a Shippo key (never the key itself — desktop/preload.js).
+    const shippoKeySet = adminDesktop_() ? await adminDesktopHasShippoKey_() : null;
     document.getElementById("adminPanel").innerHTML = `
       <div class="admin-form">
         ${setupStatusHtml_(setupItems)}
+        ${shippoKeySet === null ? "" : desktopShippoSectionHtml_(shippoKeySet, features.shipping !== false)}
         <h2 style="margin-bottom:12px;">Business profile</h2>
         <div class="admin-note" style="margin-bottom:14px;">Who runs this site. The name appears on the storefront, in every email, on labels and in the browser tab; the rest tells customers how to reach you and how to pay. Leave anything you don't use blank.</div>
         ${bizField("gBizName", "name", "Business name", "", 'maxlength="120" placeholder="e.g. Northside Stitch Co."')}
@@ -7661,9 +7763,9 @@ async function renderGlobalSettings(app){
         ${featureList.length ? `<h2 style="margin:22px 0 12px;">Features</h2>
         <div class="admin-note" style="margin-bottom:14px;">Parts of the site you can do without. Turning one off hides its pages here and stops its actions; nothing is deleted, and turning it back on brings everything back as it was. Stock of blanks and transfers, and cost of goods, are always on — making an order uses them.<br>
           <strong>Storefront</strong> is the one switch that hides nothing here: with it off, customers see an “online ordering isn't available” page on every shop address, and you keep entering orders, sending payment links and design proofs, and using Publish, a shop's “ready” box and its custom domain exactly as before (they only matter once it's back on).</div>
-        ${lockedFeatures.length ? `<div class="admin-note" style="margin-bottom:14px;"><strong>Desktop version:</strong> the parts that need the internet — the online storefront, carrier shipping and emailed design approval — stay off here.</div>` : ""}
+        ${lockedFeatures.length ? `<div class="admin-note" style="margin-bottom:14px;"><strong>Desktop version:</strong> the online storefront and emailed design approval stay off here; Shipping (carrier rates, labels and tracking) can be turned on once a Shippo key is set above.</div>` : ""}
         <div id="gFeatures">${featureList.map(f => { const locked = lockedFeatures.includes(f.key);
-          return `<label class="checkbox-row"><input type="checkbox" class="gFeature" data-feature="${escapeHtml(f.key)}" ${features[f.key] !== false ? "checked" : ""}${locked ? " disabled data-locked=\"1\"" : ""}> ${escapeHtml(f.label)}${locked ? ` <span style="font-size:12px;color:#666;">(not in the desktop version)</span>` : ""}</label>
+          return `<label class="checkbox-row"><input type="checkbox" class="gFeature" data-feature="${escapeHtml(f.key)}" ${features[f.key] !== false ? "checked" : ""}${locked ? " disabled data-locked=\"1\"" : ""}> ${escapeHtml(f.label)}${locked ? ` <span style="font-size:12px;color:#666;">${f.key === "shipping" ? "(needs a Shippo key — see Carrier shipping above)" : "(not in the desktop version)"}</span>` : ""}</label>
           <div class="admin-note" style="margin:-4px 0 12px 26px;">${escapeHtml(f.description)}</div>`; }).join("")}</div>` : ""}
 
         <h2 style="margin:22px 0 12px;">Payment methods</h2>
@@ -7763,6 +7865,7 @@ async function renderGlobalSettings(app){
       </div>
     `;
     loadVendorShippingSettings_();
+    wireDesktopShippoSection_();
   }catch(e){
     document.getElementById("adminPanel").innerHTML = `<div class="admin-empty">Could not reach the server.</div>`;
   }
@@ -15548,6 +15651,25 @@ function priceReminderHtml_(pr) {
 
 // Runs the roll-up's delivery check on demand: delivered orders are marked delivered and queued
 // for the next roll-up email, and show up above.
+// The desktop version's Orders page: its tracking check now (the same check the program runs every two
+// hours, src/worker.js), then the orders again. No email is sent from the desktop version.
+async function ordersCheckTracking_(btn){
+  btn.disabled = true; const was = btn.textContent; btn.textContent = "Checking…";
+  try{
+    const r = await fetch("/api/orders", { method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ action: "checkDeliveries", key: adminKey }) });
+    const d = await r.json().catch(() => ({ status: "error", message: "Server error (" + r.status + ")" }));
+    if(!r.ok || d.status === "error"){ showToast((d && d.message) || "Tracking check failed.", true); return; }
+    const n = d.delivered.length, p = (d.pickedUp || []).length;
+    const parts = [p ? `${p} picked up by the carrier — marked shipped` : "", n ? `${n} delivered — marked delivered` : ""].filter(Boolean);
+    showToast(parts.length ? parts.join("; ") + "."
+      : `Checked ${d.checked} order${d.checked === 1 ? "" : "s"} — nothing picked up or delivered yet.` + (d.errors ? ` (${d.errors} lookup${d.errors === 1 ? "" : "s"} failed)` : ""), false);
+    const org = (adminOrgs || []).find(o => o.orgId === btn.dataset.org);
+    if((p || n) && org) refreshOrdersInPlace_(org);
+  }catch(e){ showToast("Could not reach the server.", true); }
+  finally{ btn.disabled = false; btn.textContent = was; }
+}
+
 async function checkDeliveriesNow(btn){
   btn.disabled = true; btn.textContent = "Checking…";
   try{

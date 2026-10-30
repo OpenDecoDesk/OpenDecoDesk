@@ -11,7 +11,7 @@
  *   - Prices are recalculated server-side from D1 (priceItem()), never trusted from client
  */
 
-import { classifyHost, rootDomain, adminSubdomains, isDesktopEdition, DESKTOP_LOCKED_FEATURES } from "../_lib/hostConfig.js";
+import { classifyHost, rootDomain, adminSubdomains, isDesktopEdition, desktopLockedFeatures } from "../_lib/hostConfig.js";
 import { getCatalogData, invalidateCatalogVersionCache } from "../_lib/catalogCache.js";
 import { validateOrgFields, validateProductImages, cleanImageUrl, PRODUCT_ID_RE } from "../_lib/catalogValidation.js";
 import { requireAdmin, adminActor, adminUser } from "../_lib/adminAuth.js";
@@ -1934,6 +1934,20 @@ export async function onRequestPost(context) {
       if (ac.error) return jsonResponse({ status: "error", message: ac.error }, 400);
       order.shippingAddress = ac.address;
     }
+    // Ship this order: the shipping charge (dollars, part of what the customer owes — shipping is never
+    // taxed) and how it goes ("UPS Ground"; the carrier also picks the tracking link and lookup).
+    // Either needs an address to ship to.
+    const hasShipCost = body.shippingCost !== undefined && body.shippingCost !== null && body.shippingCost !== "";
+    const shipMethod = String(body.shippingMethod || "").replace(/\s+/g, " ").trim().slice(0, 100);
+    if (hasShipCost || shipMethod) {
+      const a = order.shippingAddress;
+      if (!a || !a.line1 || !a.city || !a.zip) return jsonResponse({ status: "error", message: "A shipping charge or method needs the address to ship to." }, 400);
+      const cost = hasShipCost ? Number(body.shippingCost) : 0;
+      if (!Number.isFinite(cost) || cost < 0 || cost > 10000) return jsonResponse({ status: "error", message: "The shipping charge must be between $0 and $10,000." }, 400);
+      order.shippingCost = cost;
+      order.shippingMethod = shipMethod;
+      order.total = subtotal + cost;
+    }
 
     // Lines for stocked products come out of the shop's finished stock (migrations/0060) — handed over
     // now, so they're pulled at once.
@@ -3065,9 +3079,9 @@ export async function onRequestPost(context) {
       return jsonResponse({ status: "ok", locale, effectiveTimeZone: await resolveTimeZone(env), envTimeZone: env.TIMEZONE ? String(env.TIMEZONE) : "" });
     }
     // ---- Features: which optional parts of the site are on (db.js FEATURES) ----
-    // The desktop edition (hostConfig.js) has no internet-facing parts: those switches are shown as
-    // locked off, and turning one on is refused below.
-    const lockedFeatures_ = isDesktopEdition(env) ? DESKTOP_LOCKED_FEATURES : [];
+    // The desktop edition (hostConfig.js): the switches that need the internet are shown as locked
+    // off, and turning one on is refused below — carrier shipping only until a Shippo key is set.
+    const lockedFeatures_ = isDesktopEdition(env) ? desktopLockedFeatures(env) : [];
     if (body.action === "getFeatures") {
       return jsonResponse({ status: "ok", features: await getFeatures(env.DB), list: FEATURES, locked: lockedFeatures_ });
     }
@@ -3077,7 +3091,9 @@ export async function onRequestPost(context) {
       for (const k of Object.keys(want)) {
         if (!FEATURES.some(f => f.key === k)) return jsonResponse({ status: "error", message: `"${String(k).slice(0, 40)}" isn't a feature.` }, 400);
         if (typeof want[k] !== "boolean") return jsonResponse({ status: "error", message: "Each feature is either on (true) or off (false)." }, 400);
-        if (want[k] && lockedFeatures_.includes(k)) return jsonResponse({ status: "error", message: `${featureLabel_(k)} isn't part of the desktop version.` }, 400);
+        if (want[k] && lockedFeatures_.includes(k)) return jsonResponse({ status: "error", message: k === "shipping"
+          ? "Carrier shipping needs a Shippo key — add it under Global settings → Carrier shipping (Shippo)."
+          : `${featureLabel_(k)} isn't part of the desktop version.` }, 400);
       }
       const changes = {};
       for (const f of FEATURES) if (typeof want[f.key] === "boolean" && want[f.key] !== before[f.key]) changes[f.key] = { from: before[f.key], to: want[f.key] };

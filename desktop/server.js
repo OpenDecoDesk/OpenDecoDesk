@@ -182,6 +182,14 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {} }
       if (!obj) return null;
       return { body: Buffer.from(await obj.arrayBuffer()), contentType: (obj.httpMetadata && obj.httpMetadata.contentType) || "application/octet-stream" };
     },
+    // Whether a Shippo key is set (carrier shipping, Global settings → Carrier shipping), never the key.
+    hasShippoKey: () => !!secrets.SHIPPO_API_KEY,
+    // The Worker's scheduled handler, which in the desktop version only checks tracking (src/worker.js):
+    // run by main.js while the program is open, since there is no cron here.
+    async runScheduled() {
+      const worker = await mf.getWorker();
+      return worker.scheduled({ scheduledTime: new Date(), cron: "desktop" });
+    },
     async stop() { await mf.dispose(); },
   };
 }
@@ -192,6 +200,18 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {} }
 function resetSignIn(dataDir, { protect, unprotect } = {}) {
   const { cfg, secrets } = loadConfig(dataDir, { unprotect });
   const next = { ...(secrets || makeSecrets()), PROXY_ADMIN_PASSPHRASE: newSecret() };
+  saveConfig(dataDir, cfg, next, { protect });
+}
+
+// The Shippo key (carrier rates, labels, tracking), kept with the other secrets in desktop.json —
+// encrypted where the system has a keychain. null removes it. Only while stopped: the server reads
+// the secrets when it starts.
+function setShippoKey(dataDir, key, { protect, unprotect } = {}) {
+  const { cfg, secrets } = loadConfig(dataDir, { unprotect });
+  if (!secrets) throw new Error("The saved secrets couldn't be read, so the key can't be saved with them.");
+  const next = { ...secrets };
+  const k = key == null ? "" : String(key).trim();
+  if (k) next.SHIPPO_API_KEY = k; else delete next.SHIPPO_API_KEY;
   saveConfig(dataDir, cfg, next, { protect });
 }
 
@@ -209,7 +229,7 @@ function restoreState(dataDir, from) {
   return { aside };
 }
 
-module.exports = { startServer, adminHasUsablePassword, copyState, restoreState, resetSignIn, stamp, statePaths, IMAGES_HOST, IMAGES_BASE, desktopCsp };
+module.exports = { startServer, adminHasUsablePassword, copyState, restoreState, resetSignIn, setShippoKey, stamp, statePaths, IMAGES_HOST, IMAGES_BASE, desktopCsp };
 
 if (require.main === module) {
   const dataDir = path.resolve(process.argv[2] || path.join(process.cwd(), "desktop-data"));

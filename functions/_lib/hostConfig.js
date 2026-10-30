@@ -24,9 +24,12 @@ export const RESERVED_SUBDOMAINS = ["www", "api", "images", "mail", "admin", "al
 // The same code run on one computer by the desktop program: the Worker inside Miniflare, the
 // database and files on that computer, the window on http://localhost:<port>. EDITION=desktop
 // (set only by desktop/server.js) makes localhost the admin panel, and keeps the parts that need the
-// internet switched off for good — the storefront, carrier shipping and emailed design approval
-// (FEATURES in db.js). A cloud install never sets EDITION and behaves exactly as before.
-export const DESKTOP_LOCKED_FEATURES = ["storefront", "shipping", "designVerification"];
+// internet switched off (FEATURES in db.js): the storefront and emailed design approval for good,
+// and carrier shipping until a Shippo key is set in the program (Global settings → Carrier
+// shipping). A cloud install never sets EDITION and behaves exactly as before.
+export function desktopLockedFeatures(env){
+  return env && env.SHIPPO_API_KEY ? ["storefront", "designVerification"] : ["storefront", "shipping", "designVerification"];
+}
 export function isDesktopEdition(env){
   return String((env && env.EDITION) || "").trim().toLowerCase() === "desktop";
 }

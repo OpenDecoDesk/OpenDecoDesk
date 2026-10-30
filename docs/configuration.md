@@ -50,7 +50,7 @@ Also in `wrangler.toml`: the **hostnames** the Worker serves (`routes`), and the
 | `TURNSTILE_SITE_KEY` | with Turnstile | — | The public half of a Turnstile widget; sent to the storefront. |
 | `ADMIN_AUTH_GLOBAL_LIMIT` | no | `100` | Failed sign-ins allowed across the whole site, from any address, per 15 minutes; past it, new sign-ins wait for the window to end (people already signed in aren't affected). `0` turns it off. Each address also has its own limit of 10 a minute. |
 | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | with Cloudflare Access | — | Turn on Cloudflare Access checking for the admin. See the warning below. |
-| `EDITION` | no | — | Set to `desktop` **only by the desktop program** ([desktop.md](desktop.md)), never on a cloud install: `localhost` becomes the admin, the storefront, carrier shipping and design approval are locked off, and actions that need the internet are refused. (`functions/_lib/hostConfig.js`) |
+| `EDITION` | no | — | Set to `desktop` **only by the desktop program** ([desktop.md](desktop.md)), never on a cloud install: `localhost` becomes the admin, the storefront, carrier shipping and design approval are locked off, and actions that need the internet are refused. There, `SHIPPO_API_KEY` is set by the program when the owner saves a Shippo key, and unlocks carrier shipping. (`functions/_lib/hostConfig.js`) |
 
 Older names the code still reads, for installs that already use them — don't set these on a new
 install: `CF_PAGES_PROJECT` (custom domains for a Cloudflare Pages deployment),

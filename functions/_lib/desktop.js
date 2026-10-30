@@ -4,10 +4,11 @@
  * Run by src/worker.js before the first request a desktop install answers, and once more after
  * any failure. It makes the database fit the desktop program, every time it starts:
  *
- *   - The features that need the internet (DESKTOP_LOCKED_FEATURES: the storefront, carrier
- *     shipping, emailed design approval) are saved OFF. Saving them, rather than only hiding them,
- *     matters: the rules that live in SQL (featureOnSql_ in db.js — which orders need an approval)
- *     read the saved value, and orders.js refuses to turn them back on.
+ *   - The features that need the internet (desktopLockedFeatures: the storefront, emailed design
+ *     approval, and carrier shipping while there is no Shippo key) are saved OFF. Saving them,
+ *     rather than only hiding them, matters: the rules that live in SQL (featureOnSql_ in db.js —
+ *     which orders need an approval) read the saved value, and orders.js refuses to turn them back
+ *     on. With a Shippo key, carrier shipping is left as the owner set it.
  *   - There is always one shop. Orders, products and prices belong to a shop, and the desktop
  *     program has no shop pages to create one from, so a database with none gets a default shop,
  *     "My shop", which the owner renames under Shops like any other.
@@ -15,7 +16,7 @@
  * Both are no-ops once done, so a normal start costs two small reads.
  */
 
-import { DESKTOP_LOCKED_FEATURES } from "./hostConfig.js";
+import { desktopLockedFeatures } from "./hostConfig.js";
 import { getFeatures, setFeatures, getAllOrgs, createOrg, bumpCatalogVersion } from "./db.js";
 
 // The default shop. Card payments need Stripe, which the desktop program doesn't have.
@@ -26,7 +27,7 @@ export async function ensureDesktopReady(env) {
   let changed = false;
   const features = await getFeatures(db);
   const off = {};
-  for (const k of DESKTOP_LOCKED_FEATURES) if (features[k] !== false) off[k] = false;
+  for (const k of desktopLockedFeatures(env)) if (features[k] !== false) off[k] = false;
   if (Object.keys(off).length) { await setFeatures(db, off); changed = true; }
   if (!(await getAllOrgs(db)).length) {
     try {

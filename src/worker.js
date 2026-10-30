@@ -38,6 +38,7 @@ import { isDigestHour } from "../functions/_lib/schedule.js";
 import { isDesktopEdition } from "../functions/_lib/hostConfig.js";
 import { ensureDesktopReady } from "../functions/_lib/desktop.js";
 import { fillMissingCardFees } from "../functions/_lib/stripeFees.js";
+import { checkShippedDeliveries, checkBlankShipments } from "../functions/_lib/deliveryCheck.js";
 
 // The send-agent relay's mailbox is a Durable Object (one globally consistent instance); the class must be
 // exported from the Worker entry for the AGENT_MAILBOX binding in wrangler.toml.
@@ -113,8 +114,18 @@ export async function handleRequest(request, env, ctx) {
 // configured local hour runs it, so it goes out once a day at the same local time all year. The
 // time zone is the install's one zone: Global settings → Region, else TIMEZONE, else UTC.
 export async function handleScheduled(event, env) {
-  // The desktop program has no cron, and nothing here applies offline (Stripe, customer uploads, email).
-  if (isDesktopEdition(env)) return { ran: false, reason: "desktop edition" };
+  // The desktop program has no cron: desktop/main.js calls this while it is open. Of the jobs below
+  // only the tracking checks apply there (no Stripe, no customer uploads, no email), and only with
+  // a Shippo key — both check functions also skip themselves while Shipping is switched off.
+  if (isDesktopEdition(env)) {
+    if (!env.SHIPPO_API_KEY) return { ran: false, reason: "desktop edition, no Shippo key" };
+    const out = { ran: true, desktop: true };
+    try { out.deliveries = await checkShippedDeliveries(env); }
+    catch (e) { console.error("Tracking check failed:", e); out.deliveries = { error: String(e && e.message) }; }
+    try { out.blankShipments = await checkBlankShipments(env); }
+    catch (e) { console.error("Blank shipment check failed:", e); out.blankShipments = { error: String(e && e.message) }; }
+    return out;
+  }
   const when = new Date(event && event.scheduledTime ? event.scheduledTime : Date.now());
   if (!isDigestHour(env, when, await resolveTimeZone(env))) return { ran: false, reason: "not the digest hour" };
   // Safety net: fill in Stripe fees the webhook couldn't read yet (see functions/_lib/stripeFees.js).
