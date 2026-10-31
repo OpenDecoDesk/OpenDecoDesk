@@ -7,6 +7,12 @@ every optional service skipped. Its other paths (R2 buckets, Stripe, Shippo, ema
 automatic hostnames) have run only against a simulated `wrangler`. If you try it now you are an early tester: expect rough edges, start with
 `npm run setup -- --dry-run`, and keep your own backups.
 
+**Or install with one click** (early): [docs/install-one-click.md](docs/install-one-click.md) says what has
+been tested. It has deployed into a brand-new free Cloudflare account and been signed into on its
+`workers.dev` address; connecting a domain from the app hasn't been tried on a real account yet.
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/OpenDecoDesk/opendecodesk)
+
 ## What it is, and who it's for
 
 OpenDecoDesk is for a small business that embroiders or prints garments — for clubs, teams, leagues,
@@ -95,7 +101,18 @@ folder. On first start it asks for your account, then opens Global settings for 
 details; a default shop is there for the orders you enter. Backups, restoring one and getting back
 in when locked out are in its menu. Early: see [docs/desktop.md](docs/desktop.md).
 
+## Install with one click
+
+The **Deploy to Cloudflare** button above needs no terminal, Node.js or git: a Cloudflare account and
+a free GitHub account. It copies the code into your GitHub account, makes the database, and deploys.
+You sign in on the `workers.dev` address it gives with a setup password you choose on Cloudflare's
+page, then connect your domain from **Global settings → Your domain** with one Cloudflare key.
+File storage, card payments, shipping, email and updates aren't set up from the app yet. Step by
+step, with what has and hasn't been tested: [docs/install-one-click.md](docs/install-one-click.md).
+
 ## Requirements
+
+For the command-line installer (the Quickstart below):
 
 - A **Cloudflare account**. R2 (file storage) is optional: without it the installer carries on,
   and product pictures, receipts and design files can't be uploaded until you switch it on.
@@ -133,6 +150,9 @@ The software is free. What you pay for is Cloudflare, and whichever of Stripe, S
   on the free Workers plan, the screen showed a free monthly allowance, nothing due up front, and
   charges only beyond the allowance. Cloudflare shows the current terms there before you agree.
   You can install without R2 and add it later.
+- **A one-click install has been deployed on a brand-new free account** (no domain, no file
+  storage) and signed into, and nothing asked for a card. That is not yet a whole shop run on the
+  free plan.
 - **Running it on Cloudflare's free plan is being evaluated and is not yet a supported claim.** Parts of
   the code were written with the free plan's limits in mind, but nobody has confirmed a whole install
   works within them. Don't plan a business around it until this section says otherwise.
@@ -226,6 +246,7 @@ accepted, so the check catches a clearly wrong state, not every possible mismatc
 
 | | |
 |---|---|
+| [docs/install-one-click.md](docs/install-one-click.md) | Installing with the Deploy to Cloudflare button: no terminal; what has been tested |
 | [docs/setup.md](docs/setup.md) | Installing: the installer step by step, and the same steps by hand |
 | [docs/accounts-and-keys.md](docs/accounts-and-keys.md) | Which accounts you need (Cloudflare, Stripe, Shippo, Resend, GitHub), creating each one, and where to find every key the installer asks for |
 | [docs/configuration.md](docs/configuration.md) | Every setting, variable, secret and binding |

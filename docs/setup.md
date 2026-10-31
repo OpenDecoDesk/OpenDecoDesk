@@ -6,6 +6,9 @@
 > simulated `wrangler`. Expect to hit something on those. Run `npm run setup -- --dry-run`
 > first, and if a step fails, the "by hand" section below shows what that step was trying to do.
 
+No terminal? [install-one-click.md](install-one-click.md) installs with the Deploy to Cloudflare
+button instead (early; it says what has been tested).
+
 ## Before you start
 
 New to these services? [accounts-and-keys.md](accounts-and-keys.md) walks through creating each
