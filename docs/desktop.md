@@ -8,7 +8,9 @@ hand, production, inventory and cost of goods, and the books.
 **Status: early.** The code is the same as a cloud install's, and the desktop parts have been run on
 Linux in testing (the program itself, a first start, backups, restoring one, getting back in after
 being locked out). The Windows and Mac downloads are built by GitHub Actions
-(`.github/workflows/desktop.yml`), but nobody has run those builds on a real Windows PC or Mac yet.
+(`.github/workflows/desktop.yml`). The Mac download for Apple silicon (`mac-arm64`) has been run on
+a real Mac: it opens, starts a new data folder, and restored a backup made by a copy run from the
+source. The Windows and Intel Mac (`mac-x64`) downloads haven't been run on a real computer yet.
 Keep backups.
 
 ## What it is
@@ -64,8 +66,12 @@ A cloud install never sets `EDITION`, so none of this changes it.
 
 From the project's GitHub Actions: the **Desktop builds** workflow's run → Artifacts.
 
-- **Windows**: `OpenDecoDesk-<version>-windows-portable.exe`. One file; no installer. Windows
-  warns about an unknown publisher the first time. Choose *More info → Run anyway*.
+- **Windows**: `OpenDecoDesk-<version>-windows-x64.zip`. No installer: unzip it to a folder of its
+  own (say `Documents\OpenDecoDesk`, not inside the zip) and run `OpenDecoDesk.exe` from there; pin
+  it to Start or the taskbar if you like. Windows warns about an unknown publisher the first time.
+  Choose *More info → Run anyway*. (Earlier builds were one self-unpacking `.exe`, which unpacked
+  itself into a temporary folder on every start; antivirus can remove files from that folder, and
+  then the program can't start.)
 - **Mac**: `OpenDecoDesk-<version>-mac-arm64.zip` (Apple silicon) or `-mac-x64.zip` (Intel).
   Unzip and move OpenDecoDesk to Applications. The first time, macOS refuses to open it because it
   isn't from an identified developer. Open *System Settings → Privacy & Security*, and choose
@@ -73,6 +79,20 @@ From the project's GitHub Actions: the **Desktop builds** workflow's run → Art
 
 The warnings go away once the builds are signed (an Apple Developer ID and a Windows code-signing
 certificate, both paid). Signing can be added to the workflow later without changing the program.
+
+**A newer download** uses the same data folder ([Where your data is](#where-your-data-is)), so
+nothing needs moving. On a Mac, an unsigned copy can be asked by macOS whether it may use the
+"OpenDecoDesk Safe Storage" item in the keychain, where the program's secrets are encrypted: choose
+**Always Allow**. If it can't read them, the program says so and offers to reset sign-in (your data
+is kept; you set up your account again).
+
+**Coming from a copy run from the source** with `--data-dir=<folder>` (see
+[Running it from the source](#running-it-from-the-source-and-building-it)): the download starts a
+new, empty data folder of its own. To bring the earlier data in, choose **File → Restore a backup…**
+in the download and pick that folder's `state` folder (the one with `d1` in it). You then set up
+your account again, as the sign-in secret stays with the other copy, and re-enter what Global
+settings → Features keeps in the program rather than the database: the Shippo key, the mailbox and
+supplier connections (and each vendor's login).
 
 ## The first start
 
@@ -197,7 +217,9 @@ already bought stay on their orders.
 
 Importing a supplier's files always works: S&S or SanMar product files, CSV, and vendor PDF
 invoices (Blanks → Import from PDF). Product photos that a file only links to aren't copied in
-unless supplier connections are on.
+unless supplier connections are on. Import from PDF uses its layout reader only: **Read with AI**
+(a Workers AI model, on Cloudflare) isn't in the desktop version, so a PDF the reader isn't sure of
+is shown with why, to check against the PDF before saving.
 
 **Vendor integrations** go further: a supplier's live product data and prices (PromoStandards),
 ordering blanks from it from Blanks to order, and its shipment notices. They need the internet,
@@ -296,7 +318,7 @@ both):
 
 ```bash
 cd desktop
-npx electron-builder --win portable --x64     # dist/OpenDecoDesk-<version>-windows-portable.exe
+npx electron-builder --win zip --x64          # dist/OpenDecoDesk-<version>-windows-x64.zip
 npx electron-builder --mac zip --arm64 --x64  # dist/OpenDecoDesk-<version>-mac-arm64.zip and -mac-x64.zip
 ```
 

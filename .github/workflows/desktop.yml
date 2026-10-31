@@ -21,7 +21,7 @@ jobs:
         include:
           - name: windows-x64
             os: windows-latest
-            builder: --win portable --x64
+            builder: --win zip --x64
             npm_flags: ""
           - name: mac-arm64
             os: macos-latest
@@ -48,7 +48,5 @@ jobs:
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: OpenDecoDesk-${{ matrix.name }}
-          path: |
-            desktop/dist/*.exe
-            desktop/dist/*.zip
+          path: desktop/dist/*.zip
           if-no-files-found: error
