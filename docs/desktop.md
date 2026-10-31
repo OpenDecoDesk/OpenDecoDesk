@@ -8,7 +8,9 @@ hand, production, inventory and cost of goods, and the books.
 **Status: early.** The code is the same as a cloud install's, and the desktop parts have been run on
 Linux in testing (the program itself, a first start, backups, restoring one, getting back in after
 being locked out). The Windows and Mac downloads are built by GitHub Actions
-(`.github/workflows/desktop.yml`), but nobody has run those builds on a real Windows PC or Mac yet.
+(`.github/workflows/desktop.yml`). The Mac download for Apple silicon (`mac-arm64`) has been run on
+a real Mac: it opens, starts a new data folder, and restored a backup made by a copy run from the
+source. The Windows and Intel Mac (`mac-x64`) downloads haven't been run on a real computer yet.
 Keep backups.
 
 ## What it is
@@ -73,6 +75,20 @@ From the project's GitHub Actions: the **Desktop builds** workflow's run → Art
 
 The warnings go away once the builds are signed (an Apple Developer ID and a Windows code-signing
 certificate, both paid). Signing can be added to the workflow later without changing the program.
+
+**A newer download** uses the same data folder ([Where your data is](#where-your-data-is)), so
+nothing needs moving. On a Mac, an unsigned copy can be asked by macOS whether it may use the
+"OpenDecoDesk Safe Storage" item in the keychain, where the program's secrets are encrypted: choose
+**Always Allow**. If it can't read them, the program says so and offers to reset sign-in (your data
+is kept; you set up your account again).
+
+**Coming from a copy run from the source** with `--data-dir=<folder>` (see
+[Running it from the source](#running-it-from-the-source-and-building-it)): the download starts a
+new, empty data folder of its own. To bring the earlier data in, choose **File → Restore a backup…**
+in the download and pick that folder's `state` folder (the one with `d1` in it). You then set up
+your account again, as the sign-in secret stays with the other copy, and re-enter what Global
+settings → Features keeps in the program rather than the database: the Shippo key, the mailbox and
+supplier connections (and each vendor's login).
 
 ## The first start
 
