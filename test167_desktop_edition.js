@@ -121,7 +121,7 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   ok("an admin request under any other name is refused", r.status === 404);
 
   console.log("\n=== D. Actions that need the internet ===");
-  for (const action of ["sendTestEmail", "sendInvoice", "createShippingPaymentLink", "setupOrgDomain", "saveVendorConnection", "placeSupplierOrder", "copyVendorImage"]) {
+  for (const action of ["readInvoiceWithAi", "sendTestEmail", "sendInvoice", "createShippingPaymentLink", "setupOrgDomain", "saveVendorConnection", "placeSupplierOrder", "copyVendorImage"]) {
     r = await post(env, { action, key: "x", org: "shop" });
     if (!(r.status === 403 && r.body.code === "desktop")) ok(action + " is refused in the desktop edition", false);
   }
@@ -372,6 +372,11 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   ok("…with a key saved it offers to remove it, and never shows the key", /✓ A key is saved \(never shown\)/.test(w.gShippingPanelHtml_({ shipFrom: {}, us: true, desktop: true, keySet: true })) &&
     /gShippoRemove/.test(w.gShippingPanelHtml_({ shipFrom: {}, us: true, desktop: true, keySet: true })));
   ok("a tracking number on an order sent by FedEx links to FedEx", /fedex\.com\/fedextrack\/\?trknbr=7712/.test(w.trackingCell({ orgId: "shop" }, { orderId: "F1", trackingNumber: "7712", shippingMethod: "FedEx Ground", items: [{}], labels: [] })));
+  ok("Import from PDF reads with its layout reader only: no Read with AI button, and no AI call when it isn't sure", /readWithAi: adminDesktop_\(\) \? null : readWithAi/.test(adminJs) &&
+    /if \(problem && adminDesktop_\(\)\) \{/.test(adminJs) && /parsed\.source === "ai" \|\| !readWithAi \? ""/.test(adminJs));
+  const pkgWin = JSON.parse(read("desktop/package.json")).build.win;
+  ok("the Windows download is a zip of the program's folder (nothing unpacked into Temp on every start)", pkgWin.target === "zip" && /windows-x64\.zip$/.test(pkgWin.artifactName) &&
+    /builder: --win zip --x64/.test(read(".github/workflows/desktop.yml")) && !/portable/.test(read("desktop/package.json") + read(".github/workflows/desktop.yml")));
   ok("Local sale has a Ship this order section with the address, carrier and charge", ["lsShip", "lsShipLine1", "lsShipCity", "lsShipZip", "lsShipCarrier", "lsShipService", "lsShipCost"].every(id => adminJs.includes(`id="${id}"`)) && !adminJs.includes('id="lsAddress"'));
   w.eval('siteEdition = ""');
   ok("…while a cloud install's admin keeps all of them", /resendEmail/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X1", paid: false, items: [{}], balanceDue: 20 })) && /showSendInvoiceModal/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X1", paid: false, items: [{}], balanceDue: 20 })) && /Not published yet/.test(w.publishStateHtml_({ state: "never" })));

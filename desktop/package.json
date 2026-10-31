@@ -12,7 +12,7 @@
   "scripts": {
     "start": "electron .",
     "serve": "node server.js",
-    "dist:win": "electron-builder --win portable --x64",
+    "dist:win": "electron-builder --win zip --x64",
     "dist:mac": "electron-builder --mac zip --arm64 --x64"
   },
   "dependencies": {
@@ -80,11 +80,9 @@
       }
     ],
     "win": {
-      "target": "portable",
-      "icon": "icons/icon.ico"
-    },
-    "portable": {
-      "artifactName": "OpenDecoDesk-${version}-windows-portable.exe"
+      "target": "zip",
+      "icon": "icons/icon.ico",
+      "artifactName": "OpenDecoDesk-${version}-windows-x64.zip"
     },
     "mac": {
       "target": "zip",

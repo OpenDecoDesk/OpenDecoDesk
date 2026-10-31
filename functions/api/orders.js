@@ -328,7 +328,7 @@ for (const [feature, actions] of Object.entries(FEATURE_ACTIONS)) for (const a o
 // on the internet — sending email, Stripe, attaching a shop's web address. The desktop program
 // leaves them out of its pages; these are refused (403) in case anything still asks.
 const DESKTOP_REFUSED_ACTIONS = new Set([
-  "createShippingPaymentLink", "backfillStripeFees",
+  "createShippingPaymentLink", "backfillStripeFees", "readInvoiceWithAi",
   "setupOrgDomain", "getOrgDomainStatus", "getPreviewLink",
 ]);
 const DESKTOP_REFUSED_MSG = "This needs the internet, so it isn't part of the desktop version.";

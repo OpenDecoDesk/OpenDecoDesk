@@ -66,8 +66,12 @@ A cloud install never sets `EDITION`, so none of this changes it.
 
 From the project's GitHub Actions: the **Desktop builds** workflow's run → Artifacts.
 
-- **Windows**: `OpenDecoDesk-<version>-windows-portable.exe`. One file; no installer. Windows
-  warns about an unknown publisher the first time. Choose *More info → Run anyway*.
+- **Windows**: `OpenDecoDesk-<version>-windows-x64.zip`. No installer: unzip it to a folder of its
+  own (say `Documents\OpenDecoDesk`, not inside the zip) and run `OpenDecoDesk.exe` from there; pin
+  it to Start or the taskbar if you like. Windows warns about an unknown publisher the first time.
+  Choose *More info → Run anyway*. (Earlier builds were one self-unpacking `.exe`, which unpacked
+  itself into a temporary folder on every start; antivirus can remove files from that folder, and
+  then the program can't start.)
 - **Mac**: `OpenDecoDesk-<version>-mac-arm64.zip` (Apple silicon) or `-mac-x64.zip` (Intel).
   Unzip and move OpenDecoDesk to Applications. The first time, macOS refuses to open it because it
   isn't from an identified developer. Open *System Settings → Privacy & Security*, and choose
@@ -213,7 +217,9 @@ already bought stay on their orders.
 
 Importing a supplier's files always works: S&S or SanMar product files, CSV, and vendor PDF
 invoices (Blanks → Import from PDF). Product photos that a file only links to aren't copied in
-unless supplier connections are on.
+unless supplier connections are on. Import from PDF uses its layout reader only: **Read with AI**
+(a Workers AI model, on Cloudflare) isn't in the desktop version, so a PDF the reader isn't sure of
+is shown with why, to check against the PDF before saving.
 
 **Vendor integrations** go further: a supplier's live product data and prices (PromoStandards),
 ordering blanks from it from Blanks to order, and its shipment notices. They need the internet,
@@ -312,7 +318,7 @@ both):
 
 ```bash
 cd desktop
-npx electron-builder --win portable --x64     # dist/OpenDecoDesk-<version>-windows-portable.exe
+npx electron-builder --win zip --x64          # dist/OpenDecoDesk-<version>-windows-x64.zip
 npx electron-builder --mac zip --arm64 --x64  # dist/OpenDecoDesk-<version>-mac-arm64.zip and -mac-x64.zip
 ```
 

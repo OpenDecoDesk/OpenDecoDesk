@@ -12881,10 +12881,16 @@ async function showPdfImportModal_(file, onDone){
       else showError(e.message);
     }
   };
-  const showParsed = (parsed) => showPdfImportPreview_(body, parsed, { file, blanks, close, onDone, showError, readWithAi });
+  // The desktop version has no Workers AI (it's Cloudflare's, online): the layout reader's answer
+  // only, with why it may be wrong, and no Read with AI button.
+  const showParsed = (parsed) => showPdfImportPreview_(body, parsed, { file, blanks, close, onDone, showError, readWithAi: adminDesktop_() ? null : readWithAi });
   const layout = parseVendorOrderPdf_(items);
   const problem = pdfParseProblem_(layout, items);
-  if (problem) await readWithAi(layout, problem);
+  if (problem && adminDesktop_()) {
+    if (layout.groups && layout.groups.length) showParsed({ ...layout, warnings: [problem, "Check every line against the PDF before saving (reading with AI isn't part of the desktop version)."] });
+    else showError("No line items found in this PDF, and reading with AI isn't part of the desktop version.");
+  }
+  else if (problem) await readWithAi(layout, problem);
   else showParsed(layout);
 }
 
@@ -12922,7 +12928,7 @@ function showPdfImportPreview_(body, parsed, { file, blanks, close, onDone, show
       <label style="font-size:12px;font-weight:600;">Invoice / order #<br><input id="piRef" value="${escapeHtml(parsed.vendorRef)}" style="${inp}width:130px;"></label>
       <label style="font-size:12px;font-weight:600;">Date<br><input id="piDate" type="date" value="${escapeHtml(parsed.receivedAt || new Date().toISOString().slice(0, 10))}" style="${inp}"></label>
       <label style="font-size:12px;font-weight:600;">Shipping &amp; other costs<br>$<input id="piShip" type="number" min="0" step="0.01" value="${parsed.extraCost ? Number(parsed.extraCost).toFixed(2) : ""}" style="${inp}width:90px;"></label>
-      ${parsed.source === "ai" ? "" : `<button type="button" class="admin-btn admin-btn-sm" id="piAi" style="align-self:flex-end;background:#fff;color:#232323;border:1px solid #999;" title="Not what the PDF says? Have a Workers AI model read it instead">Read with AI</button>`}
+      ${parsed.source === "ai" || !readWithAi ? "" : `<button type="button" class="admin-btn admin-btn-sm" id="piAi" style="align-self:flex-end;background:#fff;color:#232323;border:1px solid #999;" title="Not what the PDF says? Have a Workers AI model read it instead">Read with AI</button>`}
     </div>
     <div style="overflow-x:auto;border:1px solid #ddd;border-radius:6px;"><table style="width:100%;border-collapse:collapse;">
       <thead><tr style="background:#f0f0f0;font-size:12px;text-align:left;"><th style="padding:5px 6px;"><input type="checkbox" id="piAll" checked></th><th style="padding:5px 6px;">Item</th><th style="padding:5px 6px;">Sizes</th><th style="padding:5px 6px;">Blank</th><th style="padding:5px 6px;">Category ${manageCategoriesBtn_('data-select=".pi-type"')}</th></tr></thead>
