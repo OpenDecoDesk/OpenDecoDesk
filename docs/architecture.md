@@ -93,12 +93,16 @@ functions/_lib/           shared code
   customDomain.js           attaching a shop's hostname
   deliveryCheck.js          tracking lookups
   setupStatus.js            what is configured
+  desktop.js                the desktop version's start-up step (locked features, the default shop)
   …
 
 migrations/               every change to the database, in order
 schema.sql                the whole database for a new install
 scripts/setup.mjs         the installer
 scripts/admin-local.js    the admin on your own computer against a throwaway database (`--sign-in` for the real sign-in)
+desktop/                  the desktop version (docs/desktop.md): the Electron window (main.js),
+                          the Worker run by Miniflare (server.js), the database set-up (migrate.js),
+                          the R2 buckets as plain files (files.js, r2-files-binding.mjs)
 test*.js, testlib/        the tests
 ```
 

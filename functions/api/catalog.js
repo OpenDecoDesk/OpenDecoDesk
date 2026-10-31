@@ -188,7 +188,13 @@ export async function onRequestGet(context){
     // org names/list here — that stays gated behind the passphrase in
     // orders.js (action: "listOrgs"), so hitting this subdomain alone
     // can't be used to scrape the client list.
-    return jsonResponse({status:"admin", business: catalogData.business || {}, country, features});
+    // edition: "desktop" tells the admin it runs inside the desktop program (hostConfig.js), so it
+    // leaves out what needs the internet; desktopSuppliers / desktopEmail: the owner turned supplier
+    // connections on there, or set up email (hostConfig.js desktopSuppliersOn / desktopEmailOn,
+    // repeated here to keep this file's one import).
+    return jsonResponse({status:"admin", business: catalogData.business || {}, country, features,
+      ...(host.desktop ? {edition:"desktop", ...(String(env.DESKTOP_SUPPLIERS || "") === "on" ? {desktopSuppliers:true} : {}),
+        ...(String(env.DESKTOP_EMAIL || "") === "on" ? {desktopEmail:true} : {})} : {})});
   } else {
     // Unknown hostname — refuse rather than treating it like a known host.
     return jsonResponse({status:"error", message:"Unrecognized host", business: catalogData.business || {}, country, features}, 404);

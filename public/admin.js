@@ -175,6 +175,10 @@ async function adminRoute() {
 
   // A page of a feature that's switched off (Global settings → Features): say so instead of
   // showing a screen whose every request the server would refuse.
+  // The desktop version has no Vendor integrations page: its vendors are in Global settings →
+  // Features → Supplier connections.
+  if (adminDesktop_() && String(raw).split("/")[0] === "vendors") { window._gScrollTo = "gFeatRow-suppliers"; renderGlobalSettings(app); return; }
+  if (adminDesktopHides_(raw)) { renderDesktopOff_(app, raw); return; }
   { const off = adminPageFeature_(raw); if (off && !featureOn_(off)) { renderFeatureOff_(app, off, raw); return; } }
   // A page this user's role can't use: say so (the server would refuse every request it makes).
   if (!adminCan_(adminPageRole_(raw))) { renderRoleOff_(app, raw); return; }
@@ -819,10 +823,12 @@ async function adminLogin(){
   const stored = loadStoredSession();
   if(stored){ adminPending = stored.pending || null; adminMe = stored.user || null; return stored.token; }
 
-  // 2. Sign-in prompt
-  const key = (await promptAdminPassphrase()) || "";
+  // 2. Sign-in prompt — except the desktop program's very first start, which signs in with the
+  // passphrase it made itself (desktop/preload.js) and goes straight to "Finish setting up".
+  const desktopKey = adminDesktop_() ? await adminDesktopFirstRunKey_() : null;
+  const key = desktopKey || (await promptAdminPassphrase()) || "";
   if(!key) return "";
-  const email = _adminSignInEmail;
+  const email = desktopKey ? "" : _adminSignInEmail;
 
   // 3. POST to /api/admin-session (email + password first)
   let data;
@@ -971,6 +977,7 @@ async function loadAdminOrgList(){
     await refreshAdminMe_();
     renderAdminNav();
     if (adminFeatureOn_("shipping")) fetchBoxPresets(); // warm cache in background; sync loadBoxPresets() reads from it
+    adminDesktopBackupNudge_();
     // Only an admin can change what the setup list complains about, so only an admin is sent to it.
     if (_adminJustSignedIn) {
       _adminJustSignedIn = false;
@@ -1144,7 +1151,313 @@ const ADMIN_PAGE_FEATURE = {
 let FEATURE_LABELS_ = { storefront: "Storefront", production: "Production", bookkeeping: "Bookkeeping", shipping: "Shipping", designVerification: "Design approval" };
 function adminFeatureOn_(key){ return typeof featureOn_ !== "function" || featureOn_(key); }
 function adminPageFeature_(hash){ return ADMIN_PAGE_FEATURE[String(hash || "").replace(/^#\/?/, "").split("/")[0]] || ""; }
-function adminPageOn_(hash){ const f = adminPageFeature_(hash); return !f || adminFeatureOn_(f); }
+function adminPageOn_(hash){ const f = adminPageFeature_(hash); return !adminDesktopHides_(hash) && (!f || adminFeatureOn_(f)); }
+
+// ---- The desktop edition (desktop/; /api/catalog says edition "desktop") ---------------------------
+// The same admin, inside the desktop program on one computer. What needs the internet is left out:
+// these pages, and the buttons that send email, take card payments, attach a web address or talk
+// to a supplier's live connection (the server refuses those actions there too — orders.js
+// DESKTOP_REFUSED_ACTIONS). Everything else is the same screen as a cloud install's.
+function adminDesktop_(){ return typeof siteEdition !== "undefined" && siteEdition === "desktop"; }
+const ADMIN_DESKTOP_HIDDEN_PAGES = ["vendors", "comms"];
+// Vendor integrations is never a page of its own there (its vendors are in Global settings → Features
+// → Supplier connections, adminRoute), and Communications (and the buttons that send email) is back
+// once the owner turns Email on there.
+function adminDesktopSuppliers_(){ return adminDesktop_() && typeof siteDesktopSuppliers !== "undefined" && siteDesktopSuppliers === true; }
+function adminDesktopEmail_(){ return adminDesktop_() && typeof siteDesktopEmail !== "undefined" && siteDesktopEmail === true; }
+function adminDesktopNoEmail_(){ return adminDesktop_() && !adminDesktopEmail_(); }
+function adminDesktopHides_(hash){
+  const page = String(hash || "").replace(/^#\/?/, "").split("/")[0];
+  return adminDesktop_() && ADMIN_DESKTOP_HIDDEN_PAGES.includes(page) && !(page === "comms" && adminDesktopEmail_());
+}
+// The passphrase for the program's own first sign-in, or null (a normal start, or not the program).
+async function adminDesktopFirstRunKey_(){
+  if(!adminDesktop_() || !window.oddDesktop || typeof window.oddDesktop.firstRunKey !== "function") return null;
+  try{ return (await window.oddDesktop.firstRunKey()) || null; }catch(e){ return null; }
+}
+// ---- Global settings → Features: each switch opens to show what it needs ---------------------------
+// A ticked feature shows its panel right under it — Production: Machine Files; Shipping: the Shippo key
+// and the ship-from address; in the desktop version also Email (the mailbox, with Design approval
+// under it) and Supplier connections (the vendors, as on the Vendor integrations page). Unticking
+// closes the panel and keeps what's in it. Save (submitGlobalSettings) checks every open panel
+// first and saves nothing while one is incomplete; in the desktop version it then hands the
+// program its part (key, mailbox, supplier switch) in one go, which restarts its server once.
+async function adminDesktopHasShippoKey_(){
+  if(!window.oddDesktop || typeof window.oddDesktop.hasShippoKey !== "function") return null;
+  try{ return !!(await window.oddDesktop.hasShippoKey()); }catch(e){ return null; }
+}
+// The mailbox presets fill in the server settings for the common mailboxes.
+const DESKTOP_MAIL_PRESETS = [
+  { id: "gmail", label: "Gmail or Google Workspace", host: "smtp.gmail.com", port: 587, security: "starttls", note: "Use an app password: Google Account → Security → 2-Step Verification → App passwords. About 500 emails a day." },
+  { id: "icloud", label: "iCloud Mail", host: "smtp.mail.me.com", port: 587, security: "starttls", note: "Use an app-specific password from account.apple.com → Sign-In and Security. The username is your iCloud email address." },
+  { id: "fastmail", label: "Fastmail", host: "smtp.fastmail.com", port: 465, security: "tls", note: "Use an app password from Fastmail's Settings → Privacy & Security." },
+  { id: "zoho", label: "Zoho Mail", host: "smtp.zoho.com", port: 465, security: "tls", note: "With two-factor sign-in on, use an application-specific password." },
+  { id: "other", label: "Another provider (your web host's mail…)", host: "", port: 587, security: "starttls", note: "Your provider's help pages list its SMTP (outgoing mail) server, port and security." },
+];
+// The saved mailbox ({ host, port, security, user, from, on }, never the password), null when none is
+// saved, undefined outside the desktop program.
+async function adminDesktopEmailSettings_(){
+  if(!window.oddDesktop || typeof window.oddDesktop.emailSettings !== "function") return undefined;
+  try{ return (await window.oddDesktop.emailSettings()) || null; }catch(e){ return undefined; }
+}
+const G_REQ_ = `<span class="g-req" aria-hidden="true">*</span>`;
+// One feature: its box and name, what it covers, and its panel (opened while ticked).
+function gFeatureRowHtml_(key, { label, desc, checked, panel = "", sub = false, hidden = false, cls = "gFeature", disabled = false, extra = "" }){
+  return `<div class="g-feat${sub ? " g-feat-sub" : ""}" id="gFeatRow-${key}"${hidden ? ' style="display:none;"' : ""}>
+          <label class="checkbox-row g-feat-head"><input type="checkbox" class="${cls}" data-feature="${key}"${checked ? " checked" : ""}${disabled ? " disabled" : ""}> <strong>${escapeHtml(label)}</strong>${extra}</label>
+          <div class="admin-note g-feat-desc">${desc}</div>
+          ${panel ? `<div class="g-feat-panel" id="gPanel-${key}"${checked ? "" : " hidden"}>${panel}</div>` : ""}
+        </div>`;
+}
+function gRequiredNote_(what, all = true){ return `<div class="g-feat-req">${all ? "All fields below are" : `Every field marked ${G_REQ_} is`} required while ${what} is on.${all ? ` ${G_REQ_} required` : ""}</div>`; }
+function gProductionPanelHtml_(machineSettings, loaded){
+  return `<div id="gMachineSection" data-loaded="${loaded ? "1" : ""}">
+            <div style="font-weight:600;margin-bottom:4px;">Machine Files</div>
+            <div class="admin-note" style="margin-bottom:8px;">The Machine Files screen can show a <strong>Delete</strong> button on each file. Deleting over the machine protocol is currently disabled in the machines' firmware (the command exists but always refuses — see <code>the send-agent's PROTOCOL.md</code>), so the button is hidden by default. Turn it on only if a firmware update enables delete.</div>
+            <label class="checkbox-row"><input type="checkbox" id="gMachShowDelete" ${machineSettings.showDeleteButton ? "checked" : ""}> Show delete buttons on Machine Files</label>
+          </div>`;
+}
+// Shipping: the Shippo key (typed in the desktop version; a server secret on a cloud install), then
+// the ship-from address — all required while Shipping is on.
+function gShippingPanelHtml_({ shipFrom, us, desktop, keySet, cloudKey }){
+  const f = (id, label, key, attrs, style) => `<label${style ? ` style="${style}"` : ""}><span>${label} ${G_REQ_}</span>
+              <input type="${key === "email" ? "email" : "text"}" id="${id}" value="${escapeHtml(shipFrom[key] || "")}" ${attrs || ""}>
+            </label>`;
+  const keyHtml = desktop
+    ? `<label><span>Shippo key ${G_REQ_}</span>
+              <input type="password" id="gShippoKey" maxlength="200" autocomplete="off" spellcheck="false" placeholder="${keySet ? "A key is saved — paste a new one to replace it" : "shippo_live_… or shippo_test_…"}" style="max-width:360px;">
+            </label>
+            <div class="admin-note" id="gShippoStatus" style="margin:-4px 0 12px;">${keySet ? `✓ A key is saved (never shown). ` : ""}From your Shippo account: Settings → API. Labels are paid to Shippo. Carrier rates, labels and tracking need the internet.
+              ${keySet ? `<button type="button" class="admin-btn admin-btn-secondary" id="gShippoRemove" style="padding:2px 10px;font-size:12px;margin-left:6px;">Remove key</button>` : ""}</div>`
+    : `<div style="margin-bottom:12px;"><strong>Shippo key</strong> ${G_REQ_} — ${cloudKey ? `✓ set (the <code>SHIPPO_API_KEY</code> secret)` : `<span style="color:#b03a2e;">not set</span>: add the <code>SHIPPO_API_KEY</code> secret (docs/configuration.md)`}</div>`;
+  return `${gRequiredNote_("Shipping")}
+            ${keyHtml}
+            <div id="gShipFromSection">
+            <div style="font-weight:600;margin:4px 0;">Ship-from address ${G_REQ_}</div>
+            <div class="admin-note" style="margin-bottom:8px;">Printed on every shipping label as the sender, and used for shipping-rate quotes${desktop ? "" : " on the storefront"}.${us ? "" : " <strong>Carrier rates and labels need the country in Region to be the United States.</strong>"}</div>
+            ${f("gShipName", "Name", "name", 'maxlength="100"')}
+            ${f("gShipStreet1", "Street address", "street1", 'maxlength="200"')}
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              ${f("gShipCity", "City", "city", 'maxlength="100"', "flex:2;min-width:160px;")}
+              <label style="${us ? "flex:0 0 80px;" : "flex:1;min-width:120px;"}"><span><span id="gShipStateLabel">${us ? "State" : "State / region"}</span> ${G_REQ_}</span>
+                <input type="text" id="gShipState" maxlength="${us ? 2 : 50}" value="${escapeHtml(shipFrom.state || "")}" style="${us ? "text-transform:uppercase;" : ""}">
+              </label>
+              <label style="flex:0 0 130px;"><span><span id="gShipZipLabel">${us ? "ZIP" : "Postal code"}</span> ${G_REQ_}</span>
+                <input type="text" id="gShipZip" maxlength="12" value="${escapeHtml(shipFrom.zip || "")}">
+              </label>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              ${f("gShipPhone", "Phone", "phone", `maxlength="30" placeholder="${us ? "555-555-0100" : ""}"`, "flex:1;min-width:160px;")}
+              ${f("gShipEmail", "Email", "email", 'maxlength="200"', "flex:1;min-width:200px;")}
+            </div>
+            </div>
+            <div class="admin-note"><a href="#packages">Package sizes</a> — the boxes you ship in, for rates and labels.</div>`;
+}
+// Email (desktop): the mailbox. `saved` is what the program has (or null).
+function gEmailPanelHtml_(saved){
+  const presetOf = (c) => (c && DESKTOP_MAIL_PRESETS.find(p => p.host && p.host === c.host)) || (c ? DESKTOP_MAIL_PRESETS.find(p => p.id === "other") : DESKTOP_MAIL_PRESETS[0]);
+  const pre = presetOf(saved), v = saved || { host: pre.host, port: pre.port, security: pre.security, user: "", from: "" };
+  return `${gRequiredNote_("Email", false)}
+            <div class="admin-note" style="margin-bottom:10px;">They go out from your mailbox's address, as if you had sent them, and copies land in its Sent folder with Gmail, iCloud and most others. Microsoft 365 and Outlook.com mailboxes aren't supported yet.</div>
+            <div id="gEmailStatus" style="font-size:14px;margin-bottom:10px;">${saved ? (saved.on ? `Email is on: sending from <strong>${escapeHtml(saved.from)}</strong> through ${escapeHtml(saved.host)}.` : `A mailbox is saved (${escapeHtml(saved.from)}), not in use while Email is off.`) : "No mailbox yet."}</div>
+            <label style="max-width:360px;"><span>Your mailbox ${G_REQ_}</span><select id="gEmailPreset">${DESKTOP_MAIL_PRESETS.map(p => `<option value="${p.id}"${p.id === pre.id ? " selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}</select></label>
+            <div id="gEmailPresetNote" class="admin-note" style="margin:-4px 0 10px;max-width:520px;">${escapeHtml(pre.note)}</div>
+            <label style="max-width:360px;"><span>Email address ${G_REQ_}</span><input type="email" id="gEmailFrom" maxlength="200" autocomplete="off" spellcheck="false" value="${escapeHtml(v.from || "")}" placeholder="you@example.com"></label>
+            <label style="max-width:360px;"><span>Password or app password ${G_REQ_}</span><input type="password" id="gEmailPass" maxlength="300" autocomplete="new-password" spellcheck="false" placeholder="${saved ? "Leave empty to keep the saved one" : ""}"></label>
+            <details id="gEmailServer"${pre.id === "other" ? " open" : ""} style="margin:0 0 10px;max-width:520px;"><summary style="cursor:pointer;font-size:13px;">Server settings <span style="color:#666;" id="gEmailServerSummary">${escapeHtml([v.host, v.port, v.security === "tls" ? "SSL/TLS" : "STARTTLS"].filter(Boolean).join(" · "))}</span></summary>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                <label style="flex:2 1 200px;"><span>Outgoing (SMTP) server ${G_REQ_}</span><input type="text" id="gEmailHost" maxlength="200" spellcheck="false" value="${escapeHtml(v.host || "")}" placeholder="smtp.example.com"></label>
+                <label style="flex:0 1 90px;"><span>Port ${G_REQ_}</span><input id="gEmailPort" type="number" min="1" max="65535" value="${escapeHtml(String(v.port || 587))}"></label>
+                <label style="flex:1 1 150px;"><span>Security ${G_REQ_}</span><select id="gEmailSecurity"><option value="starttls"${v.security !== "tls" ? " selected" : ""}>STARTTLS (587)</option><option value="tls"${v.security === "tls" ? " selected" : ""}>SSL/TLS (465)</option></select></label>
+                <label style="flex:1 1 200px;">Username <span style="font-weight:400;color:#666;">(if not the email address)</span><input type="text" id="gEmailUser" maxlength="200" spellcheck="false" autocomplete="off" value="${escapeHtml(saved && saved.user !== saved.from ? saved.user : "")}"></label>
+              </div>
+            </details>
+            ${saved && saved.on ? `<div><button type="button" class="admin-btn admin-btn-secondary" id="gEmailTest" style="padding:3px 10px;font-size:12px;">Send a test email</button> <span id="gEmailTestResult" style="font-size:13px;"></span></div>` : `<div class="admin-note">Save signs in to the mailbox first; nothing is saved if it can't.</div>`}`;
+}
+// Supplier connections (desktop): the vendors, once the program has them on.
+function gSuppliersPanelHtml_(on){
+  return `<div class="admin-note" style="margin-bottom:10px;">Importing a supplier's files (product files, CSV, PDF invoices) always works. These need the internet; your logins with each supplier are saved encrypted on this computer, and shipment notices are checked every two hours while the program is open.</div>
+            <div id="gSuppliersBody">${on ? `<div class="admin-summary">Loading&hellip;</div>` : `<div class="admin-note"><strong>Save</strong> with this ticked to turn supplier connections on; then connect your vendors here.</div>`}</div>`;
+}
+// The Features list: cloud rows in the server's order; the desktop version adds Email (with Design
+// approval under it) and Supplier connections, and leaves out the storefront (it can't be on there).
+function globalFeaturesHtml_(c){
+  const desc = (k) => escapeHtml((c.featureList.find(f => f.key === k) || {}).description || "");
+  const on = (k) => c.features[k] !== false;
+  const rows = [];
+  for (const f of c.featureList) {
+    const k = f.key;
+    if (c.desktop && k === "designVerification") continue;   // under Email, below
+    const locked = c.lockedFeatures.includes(k) && !(c.desktop && k === "shipping");
+    const panel = k === "production" ? gProductionPanelHtml_(c.machineSettings, c.machineLoaded)
+      : k === "shipping" ? gShippingPanelHtml_(c) : "";
+    rows.push(gFeatureRowHtml_(k, { label: f.label, desc: desc(k), checked: on(k) && !locked, panel, hidden: c.desktop && locked, disabled: locked }));
+  }
+  if (c.desktop) {
+    const emailOn = !!(c.emailSaved && c.emailSaved.on);
+    rows.push(gFeatureRowHtml_("email", { label: "Email", cls: "gProgramFeature", checked: emailOn, panel: gEmailPanelHtml_(c.emailSaved),
+      desc: "Order emails (received, payment confirmed, shipped, cancelled), invoices with a PDF, design proofs and your morning roll-up — sent from your own mailbox." }));
+    rows.push(gFeatureRowHtml_("designVerification", { label: "Design approval", sub: true, checked: on("designVerification") && emailOn, disabled: !emailOn,
+      extra: ` <span class="g-feat-needs" style="font-size:12px;color:#666;"${emailOn ? " hidden" : ""}>(needs Email)</span>`,
+      desc: "Proofs go out by email with the pictures attached; the customer replies, and you mark the order Design approved. Orders with free-form personalization wait for it." }));
+    rows.push(gFeatureRowHtml_("suppliers", { label: "Supplier connections", cls: "gProgramFeature", checked: !!c.suppliersOn, panel: gSuppliersPanelHtml_(!!c.suppliersOn),
+      desc: "A supplier's live product data and prices (PromoStandards), ordering blanks from it from Blanks to order, and its shipment notices." }));
+  }
+  return `<h2 style="margin:22px 0 6px;">Features</h2>
+        <div class="admin-note" style="margin-bottom:10px;">Tick what you use; each one opens to show what it needs. Turning one off hides its pages and stops its actions; nothing is deleted, and turning it back on brings everything back as it was. Stock of blanks and transfers, and cost of goods, are always on — making an order uses them.${c.desktop ? "" : `<br>
+          <strong>Storefront</strong> is the one switch that hides nothing here: with it off, customers see an “online ordering isn't available” page on every shop address, and you keep entering orders, sending payment links and design proofs, and using Publish, a shop's “ready” box and its custom domain exactly as before (they only matter once it's back on).`}</div>
+        <div id="gFeatures">${rows.join("")}</div>`;
+}
+// Open / close panels as boxes are ticked, and the panels' own controls.
+function wireGlobalFeatures_(c){
+  const $ = (id) => document.getElementById(id);
+  document.querySelectorAll("#gFeatures .g-feat-head input[type=checkbox]").forEach(box => box.addEventListener("change", () => {
+    const panel = $("gPanel-" + box.dataset.feature);
+    if (panel) { panel.hidden = !box.checked; if (box.checked && panel.scrollIntoView) panel.scrollIntoView({ block: "nearest" }); }
+    if (box.dataset.feature === "production" && $("gProductionExtra")) $("gProductionExtra").style.display = box.checked ? "" : "none";
+    if (box.dataset.feature === "email") {
+      const dv = document.querySelector('#gFeatRow-designVerification .gFeature');
+      if (dv) { dv.disabled = !box.checked; if (!box.checked) dv.checked = false; }
+      const needs = document.querySelector("#gFeatRow-designVerification .g-feat-needs"); if (needs) needs.hidden = box.checked;
+    }
+  }));
+  if ($("gEmailPreset")) {
+    const summary = () => { if ($("gEmailServerSummary")) $("gEmailServerSummary").textContent = [$("gEmailHost").value, $("gEmailPort").value, $("gEmailSecurity").value === "tls" ? "SSL/TLS" : "STARTTLS"].filter(Boolean).join(" · "); };
+    $("gEmailPreset").onchange = () => {
+      const p = DESKTOP_MAIL_PRESETS.find(x => x.id === $("gEmailPreset").value) || DESKTOP_MAIL_PRESETS[0];
+      $("gEmailPresetNote").textContent = p.note;
+      if (p.host) { $("gEmailHost").value = p.host; $("gEmailPort").value = p.port; $("gEmailSecurity").value = p.security; }
+      else { $("gEmailHost").value = ""; $("gEmailServer").open = true; }
+      summary();
+    };
+    // The usual pairing, when the port is changed by hand: 465 is SSL/TLS, 587 STARTTLS.
+    $("gEmailPort").onchange = () => { const n = Number($("gEmailPort").value); if (n === 465) $("gEmailSecurity").value = "tls"; else if (n === 587) $("gEmailSecurity").value = "starttls"; summary(); };
+    $("gEmailHost").oninput = summary; $("gEmailSecurity").onchange = summary;
+  }
+  if ($("gEmailTest")) $("gEmailTest").onclick = async () => {
+    const out = $("gEmailTestResult"); out.textContent = "Sending…";
+    try {
+      const r = await hoopApi_({ action: "sendTestEmail", to: (c.emailSaved && c.emailSaved.from) || "" });
+      const rep = r.report || {};
+      out.textContent = rep.ok ? "✓ Sent to " + rep.to + " — " + (rep.providerMessage || "accepted") : "✗ " + (rep.providerMessage || (rep.hints || []).join(" ") || "Not sent.");
+    } catch (e) { out.textContent = "✗ " + e.message; }
+  };
+  if ($("gShippoRemove")) $("gShippoRemove").onclick = () => {
+    const removing = $("gShippoRemove").dataset.remove !== "1";
+    $("gShippoRemove").dataset.remove = removing ? "1" : "";
+    $("gShippoRemove").textContent = removing ? "Keep the key" : "Remove key";
+    $("gShippoKey").placeholder = removing ? "The key is removed when you save" : "A key is saved — paste a new one to replace it";
+    if (removing) $("gShippoKey").value = "";
+  };
+  // A field outlined by a refused save is cleared as soon as it's filled in.
+  document.querySelectorAll("#gFeatures input, #gFeatures select").forEach(e => e.addEventListener("input", () => { e.style.outline = ""; }));
+  if (c.suppliersOn && $("gSuppliersBody")) mountVendorConnections_($("gSuppliersBody"));
+  if (window._gScrollTo && $(window._gScrollTo)) { const t = $(window._gScrollTo); window._gScrollTo = null; if (t.scrollIntoView) t.scrollIntoView({ block: "start" }); }
+}
+// What would make this save invalid, checked before anything is sent: "" or the message (the fields
+// to fill in are outlined, and the first panel with one is scrolled to).
+function globalSettingsProblem_(){
+  const $ = (id) => document.getElementById(id);
+  const val = (id) => (($(id) || {}).value || "").trim();
+  const ticked = (k) => { const b = document.querySelector(`#gFeatRow-${k} .g-feat-head input[type=checkbox]`); return !!b && b.checked && !b.disabled; };
+  document.querySelectorAll("#gFeatures input, #gFeatures select").forEach(e => { e.style.outline = ""; });
+  const c = window._gSettingsCtx || {};
+  const problems = [], flagged = [];
+  const need = (what, missing, bad) => { if (missing.length || bad.length) problems.push(`${what} needs ${[missing.length ? missing.map(m => m[1]).join(", ") : "", ...bad.map(b => b[1])].filter(Boolean).join("; ")}`); flagged.push(...missing.map(m => m[0]), ...bad.map(b => b[0])); };
+  if (ticked("shipping")) {
+    const us = (val("gLocaleCountry") || (adminIsUS_() ? "US" : "OTHER")) !== "OTHER";
+    const fields = [["gShipName", "Name"], ["gShipStreet1", "Street address"], ["gShipCity", "City"], ["gShipState", us ? "State" : "State / region"], ["gShipZip", us ? "ZIP" : "Postal code"], ["gShipPhone", "Phone"], ["gShipEmail", "Email"]];
+    const missing = fields.filter(([id]) => !val(id)).map(([id, l]) => [id, "the ship-from " + (l === "ZIP" ? l : l.toLowerCase())]);
+    const bad = [];
+    if (us && val("gShipZip") && !/^\d{5}(-\d{4})?$/.test(val("gShipZip"))) bad.push(["gShipZip", "a 5-digit ZIP (or ZIP+4)"]);
+    if (us && val("gShipState") && !/^[A-Za-z]{2}$/.test(val("gShipState"))) bad.push(["gShipState", "a 2-letter state"]);
+    if (val("gShipEmail") && !/^\S+@\S+\.\S+$/.test(val("gShipEmail"))) bad.push(["gShipEmail", "a ship-from email that looks like one"]);
+    const removing = $("gShippoRemove") && $("gShippoRemove").dataset.remove === "1";
+    const hasKey = c.desktop ? (!!val("gShippoKey") || (c.keySet && !removing)) : window._gShippoKey !== false;
+    if (!hasKey) { missing.unshift([c.desktop ? "gShippoKey" : "", "a Shippo key"]); }
+    need("Shipping", missing, bad);
+  }
+  if (c.desktop && ticked("email")) {
+    const missing = [["gEmailFrom", "the email address"], ["gEmailHost", "the outgoing (SMTP) server"], ["gEmailPort", "the port"]].filter(([id]) => !val(id));
+    if (!val("gEmailPass") && !c.emailSaved) missing.push(["gEmailPass", "the password"]);
+    const bad = val("gEmailFrom") && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(val("gEmailFrom")) ? [["gEmailFrom", "an email address that looks like one"]] : [];
+    if (missing.some(m => m[0] === "gEmailHost" || m[0] === "gEmailPort") && $("gEmailServer")) $("gEmailServer").open = true;
+    need("Email", missing, bad);
+  }
+  if (c.desktop && ticked("designVerification") && !ticked("email")) problems.push("Design approval needs Email");
+  if (!problems.length) return "";
+  flagged.filter(Boolean).forEach(id => { const e = $(id); if (e) e.style.outline = "2px solid #b03a2e"; });
+  const first = flagged.filter(Boolean).map($).find(Boolean);
+  if (first) { const panel = first.closest(".g-feat-panel"); if (panel) panel.hidden = false; if (first.scrollIntoView) first.scrollIntoView({ block: "center" }); }
+  return `Nothing was saved. ${problems.join(". ")}. Fill ${flagged.length > 1 ? "them" : "it"} in, or untick ${problems.length > 1 ? "those features" : "it"}.`;
+}
+// The desktop program's part of a save: what changed in the Shipping key, Email and Supplier
+// connections. { shippoKey?, email?: { on, settings, password }, suppliers? } — empty when nothing did.
+function globalProgramChanges_(){
+  const $ = (id) => document.getElementById(id), c = window._gSettingsCtx || {};
+  if (!c.desktop) return {};
+  const out = {}, val = (id) => (($(id) || {}).value || "").trim();
+  const box = (k) => document.querySelector(`#gFeatRow-${k} .g-feat-head input[type=checkbox]`);
+  if (val("gShippoKey")) out.shippoKey = val("gShippoKey");
+  else if ($("gShippoRemove") && $("gShippoRemove").dataset.remove === "1") out.shippoKey = null;
+  const email = box("email"), saved = c.emailSaved;
+  if (email && email.checked) {
+    const settings = { host: val("gEmailHost"), port: Number(val("gEmailPort")), security: ($("gEmailSecurity") || {}).value || "starttls", from: val("gEmailFrom"), user: val("gEmailUser") || val("gEmailFrom") };
+    const same = saved && saved.on && saved.host === settings.host.toLowerCase() && Number(saved.port) === settings.port && saved.security === settings.security && saved.from === settings.from && saved.user === settings.user;
+    if (!same || val("gEmailPass")) out.email = { on: true, settings, password: ($("gEmailPass") || {}).value || "" };
+  } else if (email && saved && saved.on) out.email = { on: false };
+  const sup = box("suppliers");
+  if (sup && sup.checked !== !!c.suppliersOn) out.suppliers = sup.checked;
+  return out;
+}
+
+// The desktop version's backup reminder: there is no copy in the cloud, so a slim note under the menu
+// once the last backup is a week old — or a day after the program was first used, with none yet. It
+// says when, and Back up now opens File → Back up…. "Later" hides it until the program is next opened.
+const DESKTOP_BACKUP_DAYS = 7;
+function desktopBackupNote_(status, now){
+  if (!status) return "";
+  const day = 864e5, t = (iso) => { const v = Date.parse(iso || ""); return Number.isFinite(v) ? v : null; };
+  const last = t(status.lastBackupAt), created = t(status.createdAt);
+  if (last !== null) {
+    const days = Math.floor((now - last) / day);
+    return days >= DESKTOP_BACKUP_DAYS ? `Your last backup was ${days} days ago.` : "";
+  }
+  return created !== null && now - created >= day ? "Nothing has been backed up yet." : "";
+}
+async function adminDesktopBackupNudge_(){
+  if (!adminDesktop_() || !window.oddDesktop || typeof window.oddDesktop.backupStatus !== "function") return;
+  try { if (sessionStorage.getItem("oddBackupLater")) return; } catch (e) {}
+  let note = "";
+  try { note = desktopBackupNote_(await window.oddDesktop.backupStatus(), Date.now()); } catch (e) { return; }
+  const old = document.getElementById("desktopBackupNote");
+  if (old) old.remove();
+  if (!note) return;
+  const nav = document.getElementById("adminNav"), bar = document.createElement("div");
+  bar.id = "desktopBackupNote";
+  bar.setAttribute("role", "status");
+  bar.style.cssText = "display:flex;gap:10px;align-items:center;flex-wrap:wrap;max-width:1180px;margin:8px auto;padding:8px 12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;font-size:13px;color:#78350f;";
+  bar.innerHTML = `<span>${escapeHtml(note)} Everything is only on this computer — keep a copy somewhere else (a USB drive or a synced folder).</span>
+    <button type="button" class="admin-btn" id="desktopBackupNow" style="padding:3px 10px;font-size:12px;">Back up now&hellip;</button>
+    <button type="button" class="admin-btn admin-btn-secondary" id="desktopBackupLater" style="padding:3px 10px;font-size:12px;">Later</button>`;
+  if (nav && nav.parentNode) nav.parentNode.insertBefore(bar, nav.nextSibling); else document.body.prepend(bar);
+  bar.querySelector("#desktopBackupNow").onclick = () => { window.oddDesktop.backUp(); };
+  bar.querySelector("#desktopBackupLater").onclick = () => { try { sessionStorage.setItem("oddBackupLater", "1"); } catch (e) {} bar.remove(); };
+}
+
+function renderDesktopOff_(app, hash){
+  adminSetHash(hash);
+  document.title = adminTitle_("Not in the desktop version");
+  app.innerHTML = `
+    <div class="org-hero admin-hero" style="--org-accent:var(--accent);">
+      <h1>Not in the desktop version</h1>
+      <div class="stitch stitch-thick"></div>
+    </div>
+    <div class="admin-panel" style="--org-accent:var(--accent);" id="desktopOffPanel">
+      <div class="admin-empty">Communications is about email. Turn on <a href="#settings">Email under Global settings → Features</a> to send order emails, invoices and the morning roll-up.</div>
+      <div class="admin-actions" style="margin-top:14px;"><button class="admin-btn" onclick="location.hash='#orders'">Back to Orders</button></div>
+    </div>`;
+}
 // The lowest role a page is for (see ACTION_ROLE in functions/api/orders.js — the server is the
 // authority; this keeps people from landing on screens that could only show refusals).
 // Global settings is an admin's page: every change on it is (updateGlobalSettings, updateFeatures, the
@@ -1239,6 +1552,64 @@ function adminNavActive_(){
   if(top === "wizard") return "setup";
   return raw;
 }
+// ---- Small action menus (the Blanks toolbar and rows) ------------------------------------------------
+// A button that opens a short list of actions (index.html .admin-menu). The list opens below the button
+// (above it near the bottom of the window), fixed to the window so a scrolling table can't cut it off. It
+// closes on choosing an item, on Escape, on a click anywhere else, and when the page or a table scrolls.
+// Arrow keys move between the items. `opts`: id, hidden (start hidden — shown by the caller later), dots
+// (a "⋯" button with no ▾), ariaLabel, title, btnStyle.
+function adminMenuHtml_(label, itemsHtml, opts){
+  opts = opts || {};
+  return `<div class="admin-menu${opts.dots ? " admin-menu-dots" : ""}"${opts.id ? ` id="${escapeHtml(opts.id)}"` : ""}${opts.hidden ? ' style="display:none;"' : ""}>`
+    + `<button type="button" class="admin-btn" style="${opts.btnStyle || ""}" aria-haspopup="menu" aria-expanded="false"${opts.title ? ` title="${escapeHtml(opts.title)}"` : ""}${opts.ariaLabel ? ` aria-label="${escapeHtml(opts.ariaLabel)}"` : ""} onclick="toggleAdminMenu_(this)" onkeydown="adminMenuKey_(event)">${label}</button>`
+    + `<div class="admin-menu-list" role="menu" onkeydown="adminMenuKey_(event)">${itemsHtml}</div></div>`;
+}
+// One item: `attrs` is its id / onclick / data- / title attributes, already escaped by the caller.
+function adminMenuItem_(attrs, label, danger){
+  return `<button type="button" role="menuitem" class="admin-menu-item${danger ? " danger" : ""}" ${attrs || ""}>${label}</button>`;
+}
+function closeAdminMenus_(except){
+  document.querySelectorAll(".admin-menu.open").forEach(m => {
+    if (m === except) return;
+    m.classList.remove("open");
+    const b = m.querySelector(":scope > button"); if (b) b.setAttribute("aria-expanded", "false");
+  });
+}
+function toggleAdminMenu_(btn){
+  if (!window._adminMenusWired) {
+    window._adminMenusWired = true;
+    // Choosing an item or clicking elsewhere closes it (the item's own action runs first).
+    document.addEventListener("click", (e) => {
+      if (e.target.closest(".admin-menu-item") || !e.target.closest(".admin-menu")) closeAdminMenus_();
+    });
+    document.addEventListener("scroll", (e) => { if (!(e.target && e.target.closest && e.target.closest(".admin-menu-list"))) closeAdminMenus_(); }, true);
+    window.addEventListener("resize", () => closeAdminMenus_());
+  }
+  const menu = btn.parentNode, open = !menu.classList.contains("open");
+  closeAdminMenus_(menu);
+  menu.classList.toggle("open", open);
+  btn.setAttribute("aria-expanded", open ? "true" : "false");
+  if (!open) return;
+  const list = menu.querySelector(".admin-menu-list"), r = btn.getBoundingClientRect();
+  const w = list.offsetWidth, h = list.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+  let left = r.left, top = r.bottom + 4;
+  if (left + w > vw - 8) left = Math.max(8, r.right - w);
+  if (top + h > vh - 8 && r.top - h - 4 >= 8) top = r.top - h - 4;
+  list.style.left = left + "px"; list.style.top = top + "px";
+}
+function adminMenuKey_(e){
+  const menu = e.target.closest(".admin-menu");
+  if (!menu) return;
+  const btn = menu.querySelector(":scope > button"), items = [...menu.querySelectorAll(".admin-menu-item")];
+  if (e.key === "Escape" && menu.classList.contains("open")) { e.preventDefault(); e.stopPropagation(); closeAdminMenus_(); btn.focus(); return; }
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  e.preventDefault();
+  if (!menu.classList.contains("open")) toggleAdminMenu_(btn);
+  const i = items.indexOf(document.activeElement);
+  const next = e.key === "ArrowDown" ? (i + 1) % items.length : (i <= 0 ? items.length - 1 : i - 1);
+  if (items[next]) items[next].focus();
+}
+
 function toggleNavDropdown(btn){
   const group = btn.parentNode, wasOpen = group.classList.contains("open");
   closeNavDropdowns();
@@ -1380,7 +1751,7 @@ function shopBarHtml_(ctx){
       ${adminCanOpen_(shopBarHash_("products", shop)) ? link("products", "Products") : ""}
       ${adminCanOpen_(shopBarHash_("designs", shop)) ? link("designs", "Designs") : ""}
       ${adminCanOpen_(shopBarHash_("graphics", shop)) ? link("graphics", "Graphics") : ""}
-    </span><span class="shop-bar-end">${liveBtn}${discardBtn}${pubBtn}</span>` : ""}`;
+    </span><span class="shop-bar-end">${adminDesktop_() ? "" : liveBtn + discardBtn + pubBtn}</span>` : ""}`;
 }
 // The Live / Coming soon switch: asks, then opens or closes the shop for orders (nothing is published by it).
 async function shopBarLive_(orgId, ready){
@@ -1718,10 +2089,14 @@ async function bulkCancelLineItems(orgId){
 // Returns {message, imageUrls} or null on cancel.
 function showDesignVerifModal(){
   return new Promise(function(resolve){
+    // The desktop program: the pictures are attached to the email and the customer replies to it (no
+    // page to open); marking the order Design approved records their approval.
+    const desktop = adminDesktop_();
     const { ov, close } = inventoryModal_("Send design verification", `
+          ${desktop ? `<div class="admin-note" style="margin:0 0 10px;">The pictures are attached to the email, and the customer replies to approve or ask for changes. When they approve, mark the order <strong>Design approved</strong>.</div>` : ""}
           <label style="display:block;margin-bottom:4px;font-size:13px;font-weight:600;color:#1a1a1a;">Message to customer <span style="color:#b03a2e">*</span></label>
           <textarea id="dvMessage" rows="5" placeholder="Please review the design below and let us know if you approve or have any changes." style="width:100%;box-sizing:border-box;padding:8px;border:1px solid #ccc;border-radius:4px;font-size:14px;font-family:inherit;color:#1a1a1a;resize:vertical;"></textarea>
-          <div style="margin-top:14px;font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:6px;">Design images (optional — paste https:// URLs or upload)</div>
+          <div style="margin-top:14px;font-size:13px;font-weight:600;color:#1a1a1a;margin-bottom:6px;">${desktop ? "Design images (upload them; at most 15 MB in all)" : "Design images (optional — paste https:// URLs or upload)"}</div>
           ${[1,2,3].map(i => `
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
               <input type="text" id="dvImg${i}" placeholder="https://..." style="flex:1;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;color:#1a1a1a;">
@@ -1851,11 +2226,16 @@ async function renderVendorIntegrations(app){
   document.title = adminTitle_("Vendor integrations");
   app.innerHTML = `
     ${adminPageHead_("Vendor integrations")}
-    <div class="admin-panel" style="--org-accent:var(--accent);max-width:1000px;margin:8px auto 60px;">
+    <div class="admin-panel" style="--org-accent:var(--accent);max-width:1000px;margin:8px auto 60px;" id="vcPage"></div>`;
+  await mountVendorConnections_(document.getElementById("vcPage"));
+}
+// The vendors and "+ Connect a vendor", drawn into `root`: the Vendor integrations page, and the
+// desktop version's Global settings → Features → Supplier connections panel.
+async function mountVendorConnections_(root){
+  root.innerHTML = `
       <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:1.5;">Connect suppliers through <b>PromoStandards</b>, the industry's shared web services (S&amp;S, SanMar, OTTO Cap and ~1,900 others). A connected vendor's prices, colors, sizes, descriptions and images come in live — reviewed before anything changes — instead of from a downloaded file.</div>
       <div style="margin-bottom:12px;"><button type="button" class="admin-btn" id="vcConnect">+ Connect a vendor</button></div>
-      <div id="vcBody" style="color:#888;font-size:14px;">Loading…</div>
-    </div>`;
+      <div id="vcBody" style="color:#888;font-size:14px;">Loading…</div>`;
   if (!adminKey) { adminKey = (await adminLogin()) || ""; if (!adminKey) return; }
   const draw = async () => {
     const body = document.getElementById("vcBody"); if (!body) return;
@@ -2986,7 +3366,7 @@ function adminActionCell(org, o){
 
   if(!o.paid){
     return `<button class="admin-btn" ${dataAttrs} onclick="markOrderPaid(this.dataset.org, this.dataset.order)">Mark as paid</button>` +
-      `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>` +
+      (adminDesktopNoEmail_() ? "" : `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>`) +
       invoiceCell_(org, o) +
       `<button class="admin-btn" ${dataAttrs} onclick="editOrder(this.dataset.org,this.dataset.order)" style="margin-top:4px;">Edit items</button>` +
       paymentsBtn + deleteBtn;
@@ -3005,7 +3385,7 @@ function adminActionCell(org, o){
         ${eligible.map(s => `<option value="${escapeHtml(s.stage)}">${escapeHtml(s.stage === "manufactured" && o.allFromStock ? "Pulled from stock" : s.label.replace(/^Mark /, ""))}</option>`).join("")}
         ${waiting.map(s => `<option value="" disabled>${escapeHtml(s.label.replace(/^Mark /, ""))} — upload the order design first</option>`).join("")}
       </select>`;
-  const emailBtn = `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>`;
+  const emailBtn = adminDesktopNoEmail_() ? "" : `<button class="admin-btn" ${dataAttrs} onclick="resendEmail(this.dataset.org, this.dataset.order)" style="margin-top:4px;">${resendLabel}</button>`;
   const hasAddr = o.shippingAddress && o.shippingAddress.line1;
   const shipBtn = `<button class="admin-btn" ${dataAttrs} onclick="setShippingInfo(this.dataset.org,this.dataset.order)" style="margin-top:4px;">${hasAddr ? "Edit shipping" : "Set shipping"}</button>`;
   const editBtn = `<button class="admin-btn" ${dataAttrs} onclick="editOrder(this.dataset.org,this.dataset.order)" style="margin-top:4px;">Edit items</button>`;
@@ -3022,10 +3402,31 @@ function adminActionCell(org, o){
 function invoiceCell_(org, o){
   const inv = o.invoice || null, owes = Number(o.balanceDue) > 0 && !o.voidedAt;
   const day = (iso) => { const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${+m[2]}/${+m[3]}` : ""; };
+  // (The desktop program's invoice is the email itself, with no page to open: no "opened" to report.)
   const status = inv ? `<div class="mono invoice-status" style="font-size:11px;color:var(--ink-soft);margin-top:4px;line-height:1.35;">Invoice sent ${escapeHtml(day(inv.sentAt))}` +
-    `${inv.viewedAt ? " · opened" : " · not opened yet"}${inv.deliveryChosenAt ? " · delivery chosen" : ""}</div>` : "";
-  const btn = owes ? `<button class="admin-btn" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="showSendInvoiceModal(this.dataset.org, this.dataset.order)" title="Email the customer a link to choose delivery and pay online" style="margin-top:4px;">${inv ? "Resend invoice…" : "Send invoice…"}</button>` : "";
-  return btn + status;
+    `${adminDesktop_() ? "" : inv.viewedAt ? " · opened" : " · not opened yet"}${inv.deliveryChosenAt ? " · delivery chosen" : ""}</div>` : "";
+  const btn = owes && !adminDesktopNoEmail_() ? `<button class="admin-btn" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="showSendInvoiceModal(this.dataset.org, this.dataset.order)" title="${adminDesktop_() ? "Email the customer the invoice (with a PDF of it) and how to pay" : "Email the customer a link to choose delivery and pay online"}" style="margin-top:4px;">${inv ? "Resend invoice…" : "Send invoice…"}</button>` : "";
+  // The desktop program can save the invoice as a PDF (to print, or hand over) — email or not, and
+  // for a paid order too (it then says "Paid in full").
+  const pdfBtn = adminDesktop_() && !o.voidedAt && window.oddDesktop && typeof window.oddDesktop.saveInvoicePdf === "function"
+    ? `<button class="admin-btn admin-btn-secondary" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="saveInvoicePdf_(this.dataset.org, this.dataset.order)" title="Save this order's invoice as a PDF, to print or send yourself" style="margin-top:4px;">Save invoice PDF…</button>` : "";
+  return btn + pdfBtn + status;
+}
+
+// Orders → Save invoice PDF… (desktop): the server makes the invoice page, the program makes it a
+// PDF and asks where to save it.
+async function saveInvoicePdf_(orgId, orderId){
+  if (!adminKey) adminKey = (await adminLogin()) || "";
+  if (!adminKey) return;
+  try {
+    const res = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "getInvoiceDocument", org: orgId, orderId, key: adminKey }) });
+    const data = await res.json();
+    if (!res.ok || data.status === "error") { showToast((data && data.message) || "Couldn't make the invoice.", true); return; }
+    const r = await window.oddDesktop.saveInvoicePdf(data.document);
+    if (r && r.ok) showToast("Saved " + String(r.path || "").split(/[\\/]/).pop() + ".");
+    else if (r && !r.canceled) showToast(r.message || "Couldn't save the PDF.", true);
+  } catch (e) { showToast("Couldn't save the PDF.", true); }
 }
 
 // Orders → Send invoice…: who it goes to, an optional note, and whether the customer may choose how
@@ -3037,10 +3438,12 @@ function showSendInvoiceModal(orgId, orderId){
   if (!o) { showToast("Reload the page and try again.", true); return; }
   const inp = "font-size:14px;padding:7px 9px;border:1px solid #ccc;border-radius:4px;width:100%;box-sizing:border-box;";
   const { ov, close } = inventoryModal_(o.invoice ? "Resend invoice" : "Send invoice", `
-    <div style="font-size:13px;color:#555;margin-bottom:12px;">Emails ${escapeHtml(o.customerName && o.customerName !== "Local Sale" ? o.customerName : "the customer")} a link to a page showing order <b>${escapeHtml(o.orderId)}</b> and what's owed (<b>$${Number(o.balanceDue).toFixed(2)}</b>), where they can pay online.</div>
+    <div style="font-size:13px;color:#555;margin-bottom:12px;">${adminDesktop_()
+      ? `Emails ${escapeHtml(o.customerName && o.customerName !== "Local Sale" ? o.customerName : "the customer")} the invoice for order <b>${escapeHtml(o.orderId)}</b>, with a PDF of it attached: what's owed (<b>$${Number(o.balanceDue).toFixed(2)}</b>) and how to pay, from your Business profile (Venmo, Zelle, a check by mail).`
+      : `Emails ${escapeHtml(o.customerName && o.customerName !== "Local Sale" ? o.customerName : "the customer")} a link to a page showing order <b>${escapeHtml(o.orderId)}</b> and what's owed (<b>$${Number(o.balanceDue).toFixed(2)}</b>), where they can pay online.`}</div>
     <label style="font-size:12px;font-weight:600;display:block;margin-bottom:10px;">Send to<br><input id="siEmail" type="email" value="${escapeHtml(o.contact && o.contact.includes("@") ? o.contact : "")}" placeholder="customer@example.com" style="${inp}"></label>
     <label style="font-size:12px;font-weight:600;display:block;margin-bottom:10px;">Note to the customer <span style="font-weight:400;color:#666;">(optional)</span><br><textarea id="siMessage" rows="3" maxlength="3000" style="${inp}font-family:inherit;resize:vertical;"></textarea></label>
-    <label style="font-size:13px;display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;cursor:pointer;"><input type="checkbox" id="siDelivery" checked style="margin-top:3px;">
+    <label style="font-size:13px;display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;cursor:pointer;${adminDesktop_() ? "display:none;" : ""}"><input type="checkbox" id="siDelivery"${adminDesktop_() ? "" : " checked"} style="margin-top:3px;">
       <span>Let the customer choose how they'll get it <span style="color:#666;">— this shop's delivery &amp; pickup options, with shipping rates for their address. Their choice updates the order.</span></span></label>
     <div id="siErr" style="color:#b03a2e;font-size:13px;min-height:18px;margin-top:6px;"></div>
     <div id="siDone" hidden style="border:1px solid #86efac;background:#f0fdf4;border-radius:6px;padding:10px 12px;font-size:13px;margin-bottom:10px;"></div>
@@ -3059,6 +3462,12 @@ function showSendInvoiceModal(orgId, orderId){
     if (!r.ok) { err.textContent = r.message; return; }
     const done = ov.querySelector("#siDone");
     done.hidden = false;
+    // The desktop program's invoice has no link (it is the email itself): just whether it went.
+    if (!r.url) {
+      done.innerHTML = r.emailSent ? `<b>Sent to ${escapeHtml(r.sentTo)}.</b>` : `<b style="color:#b45309;">The email couldn't be sent.</b> Tools → Communications says why.`;
+      ov.querySelector("#siCancel").textContent = "Close";
+      return;
+    }
     done.innerHTML = `${r.emailSent ? `<b>Sent to ${escapeHtml(r.sentTo)}.</b>` : `<b style="color:#b45309;">The email couldn't be sent</b> — the invoice is ready, so you can pass the link on yourself.`}
       <div style="display:flex;gap:6px;margin-top:6px;"><input id="siLink" readonly value="${escapeHtml(r.url)}" aria-label="Invoice link" style="${inp}font-size:12px;font-family:monospace;"><button type="button" class="admin-btn" id="siCopy" style="white-space:nowrap;">Copy link</button></div>`;
     done.querySelector("#siCopy").onclick = async () => {
@@ -3179,7 +3588,7 @@ function verifSentCell(verif, rowspan){
   const d = m ? `${+m[2]}/${+m[3]}/${m[1]}` : new Date(verif.sentAt).toLocaleDateString();
   const statusLabel = verif.status === "approved" ? `<br><span style="font-size:11px;color:#15803d">✓ Approved</span>`
     : verif.status === "revision" ? `<br><span style="font-size:11px;color:#b45309">⚠ Changes</span>`
-    : `<br><span style="font-size:11px;color:var(--dim)">Pending</span>`;
+    : `<br><span style="font-size:11px;color:var(--dim)">${adminDesktop_() ? "Awaiting reply" : "Pending"}</span>`;
   return `<td rowspan="${rowspan}">${d}${statusLabel}</td>`;
 }
 
@@ -3290,8 +3699,11 @@ function trackingCell(org, o){
   if(tracking){
     const tn = escapeHtml(tracking);
     let trackUrl = "https://tools.usps.com/go/TrackConfirmAction?tLabels=" + encodeURIComponent(tracking);
-    if(o.shippingMethod && o.shippingMethod.toUpperCase().startsWith("UPS")){
+    const method = String(o.shippingMethod || "").toUpperCase();
+    if(method.startsWith("UPS")){
       trackUrl = "https://www.ups.com/track?tracknum=" + encodeURIComponent(tracking);
+    } else if(method.startsWith("FEDEX")){
+      trackUrl = "https://www.fedex.com/fedextrack/?trknbr=" + encodeURIComponent(tracking);
     }
     return `<a href="${trackUrl}" target="_blank" rel="noopener" style="font-family:monospace;font-size:12px;">${tn}</a>${labelBtn}`;
   }
@@ -4099,6 +4511,7 @@ function renderAdminOrders(app, org, opts){
         <button class="admin-btn" data-org="${escapeHtml(org.orgId)}" onclick="renderPackingLabels(this.dataset.org, getSelectedOrderIds())">Packing labels</button>
         <button class="admin-btn" data-org="${escapeHtml(org.orgId)}" onclick="renderBrandedLabels(this.dataset.org, getSelectedOrderIds())">Branded labels</button>
         ${shownOrders.some(o => o.shippingAddress && o.shippingAddress.line1) ? `<button class="admin-btn" data-org="${escapeHtml(org.orgId)}" onclick="renderMailingLabels(this.dataset.org, getSelectedOrderIds())">Mailing labels</button>` : ""}
+        ${adminDesktop_() && adminFeatureOn_("shipping") ? `<button class="admin-btn" id="ordCheckTracking" data-org="${escapeHtml(org.orgId)}" onclick="ordersCheckTracking_(this)" title="Look up every shipped order's tracking now (it's also checked every two hours while the program is open)">Check tracking now</button>` : ""}
       </div>
       <textarea class="export-box" id="exportBox" style="display:none;"></textarea>
       <div id="ordBreakdownSection">${renderOrderBreakdown(shownOrders, blankLinks, blanks)}</div>
@@ -5251,10 +5664,36 @@ function showLocalSaleModal(products, blanks){
             <input type="email" id="lsEmail" maxlength="200" placeholder="customer@example.com" style="${IS()}">
             ${LS("Phone", true)}
             <input type="tel" id="lsPhone" maxlength="50" placeholder="${adminIsUS_() ? "(555) 555-5555" : ""}" style="${IS()}">
-            ${LS("Address", true)}
-            <input type="text" id="lsAddress" maxlength="300" placeholder="Street address" style="${IS()}">
           </div>
         </details>
+
+        <div style="margin-bottom:10px;">
+          <label style="font-size:14px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="lsShip" style="width:auto;margin:0;"> Ship this order
+          </label>
+          <div id="lsShipWrap" style="display:none;margin-top:8px;padding:10px;border:1px solid var(--border,#ddd);border-radius:6px;">
+            ${LS("Recipient", true)}
+            <input type="text" id="lsShipName" maxlength="200" placeholder="Same as the customer's name" style="${IS()}">
+            ${LS("Address line 1")}
+            <input type="text" id="lsShipLine1" maxlength="200" placeholder="123 Main St" style="${IS()}">
+            ${LS("Address line 2", true)}
+            <input type="text" id="lsShipLine2" maxlength="200" placeholder="Apt, Suite, etc." style="${IS()}">
+            <div style="display:flex;gap:8px;">
+              <div style="flex:2;">${LS("City")}<input type="text" id="lsShipCity" maxlength="100" style="${IS()}"></div>
+              <div style="flex:1;">${LS(adminIsUS_() ? "State" : "State / region", !adminIsUS_())}<input type="text" id="lsShipState" ${adminIsUS_() ? 'maxlength="2" placeholder="ST"' : 'maxlength="50"'} style="${IS()}"></div>
+              <div style="flex:1;">${LS(adminIsUS_() ? "ZIP" : "Postal code")}<input type="text" id="lsShipZip" maxlength="20" style="${IS()}"></div>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <div style="flex:1;">${LS("Carrier")}<select id="lsShipCarrier" style="${IS()}">
+                <option value="USPS">USPS</option><option value="UPS">UPS</option><option value="FedEx">FedEx</option><option value="">Other</option>
+              </select></div>
+              <div style="flex:2;">${LS("Service", true)}<input type="text" id="lsShipService" maxlength="60" placeholder="e.g. Ground Advantage" style="${IS()}"></div>
+            </div>
+            ${LS("Shipping charge ($)")}
+            <input type="number" id="lsShipCost" min="0" max="10000" step="0.01" placeholder="0.00" style="${IS()}">
+            <div style="font-size:12px;color:var(--ink-soft,#888);margin-top:-4px;">Added to what the customer pays (shipping isn't taxed). The carrier decides the tracking link; ${adminFeatureOn_("shipping") ? "use Ship on the order to buy a label." : "add the tracking number on the order once it's shipped."}</div>
+          </div>
+        </div>
 
         <div style="margin:4px 0 10px;">
           <label style="font-size:14px;display:block;margin-bottom:4px;">Sale date</label>
@@ -5269,7 +5708,7 @@ function showLocalSaleModal(products, blanks){
             <input type="checkbox" id="lsDelivered" style="width:auto;margin:0;"> Delivered
           </label>
         </div>
-        <div style="margin:-4px 0 14px;">
+        <div style="margin:-4px 0 14px;${adminDesktop_() ? "display:none;" : ""}">
           <label style="font-size:14px;display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
             <input type="checkbox" id="lsInvoice" style="width:auto;margin:3px 0 0;">
             <span>Email the customer an invoice <span style="color:var(--ink-soft,#888);font-size:13px;">— a link where they choose pickup or delivery and pay online. Needs their email (under Customer info); the order is recorded unpaid.</span></span>
@@ -5343,6 +5782,11 @@ function showLocalSaleModal(products, blanks){
       updatePricePreview();
     }
 
+    // The line's price, and the shipping charge after it when the order ships.
+    function showPreview(text){
+      const shipCost = overlay.querySelector("#lsShip").checked ? (parseFloat(overlay.querySelector("#lsShipCost").value) || 0) : 0;
+      overlay.querySelector("#lsPricePreview").textContent = text && shipCost > 0 ? text + ` + $${shipCost.toFixed(2)} shipping` : text;
+    }
     function updatePricePreview(){
       const pid = overlay.querySelector("#lsProduct").value;
       const qty = Math.max(1, parseInt(overlay.querySelector("#lsQty").value) || 1);
@@ -5353,12 +5797,12 @@ function showLocalSaleModal(products, blanks){
         const preview = unitPrice > 0
           ? `$${unitPrice.toFixed(2)}${qty > 1 ? " × " + qty : ""} = $${total.toFixed(2)}`
           : "";
-        overlay.querySelector("#lsPricePreview").textContent = preview;
+        showPreview(preview);
         return;
       }
 
       const p = productMap[pid];
-      if(!p){ overlay.querySelector("#lsPricePreview").textContent = ""; return; }
+      if(!p){ showPreview(""); return; }
 
       const isSized = p.pricingMode !== "flat" && p.sizePricing && Object.keys(p.sizePricing).length > 0;
       const sizeEl = overlay.querySelector("#lsSize");
@@ -5378,18 +5822,20 @@ function showLocalSaleModal(products, blanks){
         let preview = `$${customUnitPrice.toFixed(2)} (custom)`;
         if(qty > 1) preview += ` × ${qty}`;
         preview += ` = $${total.toFixed(2)}`;
-        overlay.querySelector("#lsPricePreview").textContent = preview;
+        showPreview(preview);
       } else {
         const total = (catalogUnitPrice + persFee) * qty;
         let preview = `$${catalogUnitPrice.toFixed(2)}`;
         if(persFee) preview += ` + $${persFee.toFixed(2)} personalization`;
         if(qty > 1) preview += ` × ${qty}`;
         preview += ` = $${total.toFixed(2)}`;
-        overlay.querySelector("#lsPricePreview").textContent = preview;
+        showPreview(preview);
       }
     }
 
     overlay.querySelector("#lsProduct").addEventListener("change", updateForProduct);
+    overlay.querySelector("#lsShip").addEventListener("change", (e) => { overlay.querySelector("#lsShipWrap").style.display = e.target.checked ? "" : "none"; updatePricePreview(); });
+    overlay.querySelector("#lsShipCost").addEventListener("input", updatePricePreview);
     const sizeEl2 = overlay.querySelector("#lsSize");
     if(sizeEl2) sizeEl2.addEventListener("change", updatePricePreview);
     overlay.querySelector("#lsQty").addEventListener("input", updatePricePreview);
@@ -5448,8 +5894,25 @@ function showLocalSaleModal(products, blanks){
         return;
       }
 
-      const addressLine = overlay.querySelector("#lsAddress").value.trim();
       const phone = overlay.querySelector("#lsPhone").value.trim();
+      // Ship this order: the address, carrier / service and charge go on the order (the server checks
+      // the address the way it checks a storefront order's).
+      let shipping = null;
+      if(overlay.querySelector("#lsShip").checked){
+        const v = (id) => overlay.querySelector(id).value.trim();
+        const addr = { name: v("#lsShipName") || overlay.querySelector("#lsName").value.trim(), line1: v("#lsShipLine1"), line2: v("#lsShipLine2"),
+          city: v("#lsShipCity"), state: v("#lsShipState").toUpperCase(), zip: v("#lsShipZip"), ...(phone ? { phone } : {}) };
+        const costRaw = v("#lsShipCost"), cost = costRaw === "" ? 0 : parseFloat(costRaw);
+        const shipErr = !addr.line1 || !addr.city || !addr.zip ? "Enter the street address, city and " + (adminIsUS_() ? "ZIP" : "postal code") + " to ship to."
+          : !isFinite(cost) || cost < 0 || cost > 10000 ? "Enter a shipping charge between $0 and $10,000 (or leave it empty)." : "";
+        if(shipErr){
+          errEl.textContent = shipErr;
+          errEl.style.display = "";
+          overlay.querySelector(!addr.line1 ? "#lsShipLine1" : !addr.city ? "#lsShipCity" : !addr.zip ? "#lsShipZip" : "#lsShipCost").focus();
+          return;
+        }
+        shipping = { address: addr, cost, method: [overlay.querySelector("#lsShipCarrier").value, v("#lsShipService")].filter(Boolean).join(" ") };
+      }
 
       let item;
       if(pid === "__custom__"){
@@ -5513,9 +5976,8 @@ function showLocalSaleModal(products, blanks){
         customerName: overlay.querySelector("#lsName").value.trim() || "",
         contact,
         phone,
-        shippingAddress: addressLine
-          ? { line1: addressLine, ...(phone ? { phone } : {}) }
-          : null,
+        shippingAddress: shipping ? shipping.address : null,
+        ...(shipping ? { shippingCost: shipping.cost, shippingMethod: shipping.method } : {}),
         paid:      overlay.querySelector("#lsPaid").checked,
         delivered: overlay.querySelector("#lsDelivered").checked,
         placedAt:  overlay.querySelector("#lsDate").value || null,
@@ -5667,7 +6129,7 @@ function renderPackingLabels(orgId, selectedIds){
     if(!pw){ showToast("Allow popups to print labels", true); return; }
     pw.document.write(`<!DOCTYPE html><html><head>
 <meta charset="utf-8">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:wght@700&family=IBM+Plex+Mono&family=IBM+Plex+Sans&display=swap">
+<link rel="stylesheet" href="${location.origin}/vendor/fonts/fonts.css">
 <style>
 @page{size:letter;margin:0;}
 *{box-sizing:border-box;}
@@ -5886,7 +6348,7 @@ function renderBrandedLabels(orgId, selectedIds){
     if(!pw){ showToast("Allow popups to print labels", true); return; }
     pw.document.write(`<!DOCTYPE html><html><head>
 <meta charset="utf-8">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;1,9..144,400&family=IBM+Plex+Mono&family=IBM+Plex+Sans&display=swap">
+<link rel="stylesheet" href="${location.origin}/vendor/fonts/fonts.css">
 <style>
 @page{size:4.25in 10in;margin:0;}
 *{box-sizing:border-box;}
@@ -5996,7 +6458,7 @@ body{margin:0;padding:0;background:#fff;color:#000;}
     if(!pw){ showToast("Allow popups to print labels", true); return; }
     pw.document.write(`<!DOCTYPE html><html><head>
 <meta charset="utf-8">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:wght@700&display=swap">
+<link rel="stylesheet" href="${location.origin}/vendor/fonts/fonts.css">
 <style>${POPUP_CSS}</style></head><body>${html}<script>
 window.onload=function(){
   document.fonts.ready.then(function(){window.print();window.close();});
@@ -6359,8 +6821,8 @@ function renderAdminOrgListTable(orgs){
       <td data-label="Status">${o.ready ? "Live" : "Coming soon"}<div data-publish-state="${escapeHtml(o.orgId)}" style="font-size:12px;margin-top:2px;"></div><div data-shop-issues="${escapeHtml(o.orgId)}" style="font-size:12px;margin-top:2px;color:#92400e;"></div></td>
       <td class="stack-actions">
         ${adminCan_("manager") ? `<button class="admin-btn" data-org="${escapeHtml(o.orgId)}" onclick="location.hash='#wizard/'+encodeURIComponent(this.dataset.org)" title="The setup steps for this shop — picks up where it was left">Shop setup<span data-wizard-state="${escapeHtml(o.orgId)}"></span></button>
-        <button class="admin-btn" data-org="${escapeHtml(o.orgId)}" onclick="publishCatalog(this.dataset.org)" title="Shoppers see this shop's current products and settings">Publish</button>
-        <button class="admin-btn admin-btn-secondary" data-org="${escapeHtml(o.orgId)}" onclick="previewShop_(this.dataset.org)" title="Open the shop page as it will look after Publish">Preview</button>` : ""}
+        ${adminDesktop_() ? "" : `<button class="admin-btn" data-org="${escapeHtml(o.orgId)}" onclick="publishCatalog(this.dataset.org)" title="Shoppers see this shop's current products and settings">Publish</button>
+        <button class="admin-btn admin-btn-secondary" data-org="${escapeHtml(o.orgId)}" onclick="previewShop_(this.dataset.org)" title="Open the shop page as it will look after Publish">Preview</button>`}` : ""}
         ${adminCanOpen_("catalog/orgs/" + o.orgId + "/edit") ? `<button class="admin-btn" data-org="${escapeHtml(o.orgId)}" onclick="location.hash='#catalog/orgs/'+encodeURIComponent(this.dataset.org)+'/edit'">Edit</button>` : ""}
         <button class="admin-btn" data-org="${escapeHtml(o.orgId)}" data-issues="products" onclick="location.hash='#catalog/orgs/'+encodeURIComponent(this.dataset.org)+'/products'" style="margin-top:4px;">Products</button>
         ${adminFeatureOn_("production") ? `<button class="admin-btn" data-org="${escapeHtml(o.orgId)}" data-issues="designs" onclick="location.hash='#designs/'+encodeURIComponent(this.dataset.org)" style="margin-top:4px;">Designs</button>` : ""}
@@ -6371,7 +6833,7 @@ function renderAdminOrgListTable(orgs){
   panel.innerHTML = `
     <div class="admin-actions" style="margin:6px 0 10px 0;">
       ${adminCan_("manager") ? `<button class="admin-btn wiz-start-btn" onclick="location.hash='#wizard/new'">＋ New shop setup</button>
-      <button class="admin-btn" onclick="publishCatalog()" title="Publish every shop's current products and settings">Publish all shops</button>
+      ${adminDesktop_() ? "" : `<button class="admin-btn" onclick="publishCatalog()" title="Publish every shop's current products and settings">Publish all shops</button>`}
       <button class="admin-btn" id="catalogPriceBtn" onclick="showPriceAnalysis_({}, { title: 'Price analysis — every shop' })" title="What each item costs and leaves in every shop, and which are below your targets">Price analysis</button>` : ""}
     </div>
     <div id="publishStatus" class="admin-note"></div>
@@ -6434,7 +6896,8 @@ async function publishCatalog(orgId){
 }
 // Each shop's publish state, wherever a [data-publish-state="<orgId>"] slot is on the page.
 function publishStateHtml_(st){
-  if (!st) return "";
+  if (!st || adminDesktop_()) return "";   // the desktop version has no shop pages to publish
+
   if (st.state === "never") return `<span class="pub-state pub-never" title="Until it's published once, every change shows to shoppers straight away">Not published yet — changes show at once</span>`;
   if (st.state === "current") return `<span class="pub-state pub-current">✓ Published ${escapeHtml(String(st.publishedAt || "").slice(0, 10))}</span>`;
   const bits = [st.changedProducts && st.changedProducts.length ? `${st.changedProducts.length} product${st.changedProducts.length === 1 ? "" : "s"}` : "", st.shopChanged ? "shop settings" : ""].filter(Boolean).join(", ");
@@ -6479,7 +6942,7 @@ function wizStepList_(state){
   out.push({ id: "blanks", label: "Choose blanks", group: "Products" });
   (state.products || []).forEach((p, i) => WIZ_PRODUCT_STEPS_.forEach(([k, label]) =>
     out.push({ id: `p${i}:${k}`, label, group: "Products", productIndex: i, productStep: k })));
-  out.push({ id: "check", label: "Check everything", group: "Finish" }, { id: "live", label: "Go live", group: "Finish" });
+  out.push({ id: "check", label: "Check everything", group: "Finish" }, { id: "live", label: adminDesktop_() ? "Ready for orders" : "Go live", group: "Finish" });
   return out;
 }
 // done | warn | todo for one step, from what's been saved.
@@ -6801,7 +7264,7 @@ function wizScreen_(step){
             const subdomain = val("#wizSub") || o.subdomain;
             if (subdomain !== o.subdomain) { const why = webAddressProblem_(subdomain, o.orgId); if (why) return why; }
             if (name !== o.name || subdomain !== o.subdomain) await wizSaveOrg_({ name, subdomain });
-            if (subdomain !== o.subdomain) {
+            if (subdomain !== o.subdomain && !adminDesktop_()) {
               const r = await hoopApi_({ action: "setupOrgDomain", orgId: o.orgId }).catch(() => null);
               if (r && r.domain && r.domain.error) showToast(orgDomainText_(r.domain, subdomain), true);
               const orgs = await hoopApi_({ action: "listOrgsAdmin" }).catch(() => null);
@@ -7425,19 +7888,46 @@ function wizCheckScreen_(){
         ${later.length ? `<details class="wiz-more wiz-later"><summary>Before it can be made — not needed to publish (${later.length})</summary>
           <ul class="wiz-issues">${later.map(x => `<li><strong>${escapeHtml(nameOf(x.id))}</strong>: ${escapeHtml(x.text)}${stepFor(x.id, x.code) ? ` <button type="button" class="admin-btn admin-btn-secondary" data-goto="${escapeHtml(stepFor(x.id, x.code))}">Open</button>` : ""}</li>`).join("")}</ul>
           <div class="wiz-note">Link a stitch file (design) to each embroidery graphic on the Graphics screen, or on the product's Graphics step here, once it's digitized.</div></details>` : ""}
-        <button type="button" class="admin-btn admin-btn-secondary" id="wizPreview">Preview the shop</button>`;
+        ${adminDesktop_() ? "" : `<button type="button" class="admin-btn admin-btn-secondary" id="wizPreview">Preview the shop</button>`}`;
       box.querySelectorAll("[data-goto]").forEach(btn => btn.onclick = async () => { await wizSaveState_(); st.step = btn.dataset.goto; wizDraw_(); });
-      box.querySelector("#wizPreview").onclick = () => previewShop_(_wiz.orgId);
+      if (box.querySelector("#wizPreview")) box.querySelector("#wizPreview").onclick = () => previewShop_(_wiz.orgId);
       // Redraw the rail so the Check step's mark matches what was found.
       root.querySelectorAll('.wiz-step[data-step="check"]').forEach(el => { el.classList.remove("wiz-done", "wiz-warn", "wiz-todo"); el.classList.add(st.checkOk ? "wiz-done" : "wiz-warn"); });
     },
     save: async () => "" };
 }
 
+function wizDesktopFinish_(o, st){
+  const links = `<div class="wiz-actions"><a class="admin-btn" href="#orders/${encodeURIComponent(o.orgId)}">Its orders</a>
+        <a class="admin-btn admin-btn-secondary" href="#catalog/orgs/${encodeURIComponent(o.orgId)}/products">Its products</a>
+        <a class="admin-btn admin-btn-secondary" href="#wizard/${encodeURIComponent(o.orgId)}/products">Add more products</a></div>`;
+  if (st.live && o.ready) return { title: "Ready for orders", noNext: true,
+    html: `<div class="wiz-ok">${escapeHtml(o.name)}'s products are ready to use in Local sale and on orders.</div>${links}`, save: async () => "" };
+  return {
+    title: "Finish setting up this shop?",
+    html: `<ul class="wiz-summary"><li><strong>${escapeHtml(o.name || "")}</strong></li>
+        <li>${st.products.filter(x => x.saved).length} product${st.products.filter(x => x.saved).length === 1 ? "" : "s"} made in this setup</li></ul>
+      ${st.checkOk ? "" : `<div class="wiz-warn">“Check everything” found something to fix — you can still finish, and fix it later on the product.</div>`}
+      <div class="wiz-note">Finishing makes every product made here available for orders.</div>`,
+    nextLabel: "Finish",
+    save: async () => {
+      for (const x of st.products.filter(x => x.saved && x.productId)) await hoopApi_({ action: "setProductVisible", org: o.orgId, productId: x.productId, visible: true }).catch(() => {});
+      await hoopApi_({ action: "setOrgReady", orgId: o.orgId, ready: true });
+      _wiz.org = Object.assign({}, o, { ready: true });
+      { const reg = (window._adminOrgRegistry || []).find(x => x.orgId === o.orgId); if (reg) reg.ready = true; }
+      st.live = true; st.done = true;
+      return "";
+    },
+    nextStep: "live" };
+}
+
 function wizLiveScreen_(){
   const o = _wiz.org || {}, st = _wiz.state;
+  // The desktop version has no shop page for anyone to see: the last step only makes the products made
+  // here available for orders (the same saves: visible, open, published — which changes nothing a customer sees).
+  if (adminDesktop_()) return wizDesktopFinish_(o, st);
   const root = location.hostname.split(".").slice(1).join(".");
-  const url = o.subdomain && root ? `https://${o.subdomain}.${root}/` : "";
+  const url = o.subdomain && root && !adminDesktop_() ? `https://${o.subdomain}.${root}/` : "";
   if (st.live && o.ready) return {
     title: "Your shop is open 🎉", noNext: true,
     html: `<div class="wiz-ok">${escapeHtml(o.name)} is open for orders and published.</div>
@@ -7527,8 +8017,9 @@ async function renderGlobalSettings(app){
       const td = await tr.json();
       if(tr.ok && td.status === "ok") salesTax = td.salesTax;
     }catch(e){}
+    // Read whether Shipping is on or not: ticking it shows the section, with what's saved.
     let shipFrom = { name: "", street1: "", city: "", state: "", zip: "", phone: "", email: "" };
-    if(typeof featureOn_ !== "function" || featureOn_("shipping")) try{
+    try{
       const sr = await fetch("/api/orders", { method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({action: "getShipFromAddress", key: adminKey}) });
       const sd = await sr.json();
@@ -7553,13 +8044,14 @@ async function renderGlobalSettings(app){
           <input type="${/Email$/.test(key) ? "email" : "text"}" id="${id}" value="${escapeHtml(biz[key] || "")}" ${extra || ""}>
         </label>${note ? `<div class="admin-note" style="margin-top:-6px;">${note}</div>` : ""}`;
     // Features: the list (names and what each covers) and the switches come from the server.
-    let featureList = [], features = {};
+    let featureList = [], features = {}, lockedFeatures = [];
     try{
       const fr = await fetch("/api/orders", { method: "POST", headers: {"Content-Type": "application/json"},
         body: JSON.stringify({action: "getFeatures", key: adminKey}) });
       const fd = await fr.json();
       if(fr.ok && fd.status === "ok"){
-        featureList = fd.list || []; features = fd.features || {};
+        featureList = fd.list || []; features = fd.features || {}; lockedFeatures = Array.isArray(fd.locked) ? fd.locked : [];
+        window._gShippoKey = typeof fd.shippoKey === "boolean" ? fd.shippoKey : null;   // null: the server didn't say
         featureList.forEach(f => { FEATURE_LABELS_[f.key] = f.label; });
         if(typeof applyFeatures_ === "function") applyFeatures_(features);
       }
@@ -7588,17 +8080,29 @@ async function renderGlobalSettings(app){
       if(pr.ok && pd.status === "ok") pricing = pd.pricing;
     }catch(e){}
     const pv = (v) => v == null ? "" : escapeHtml(String(v));
+    // Desktop: what the program keeps for the Features panels — whether a Shippo key is saved (never
+    // the key itself), the mailbox (never its password) and whether supplier connections are on.
+    const desktop = adminDesktop_() && !!window.oddDesktop;
+    const ctx = window._gSettingsCtx = { desktop, featureList, features, lockedFeatures, shipFrom, us, machineSettings, machineLoaded: productionOn,
+      keySet: desktop ? !!(await adminDesktopHasShippoKey_()) : false, cloudKey: window._gShippoKey,
+      emailSaved: desktop ? (await adminDesktopEmailSettings_()) || null : null, suppliersOn: desktop && adminDesktopSuppliers_() };
     document.getElementById("adminPanel").innerHTML = `
       <div class="admin-form">
         ${setupStatusHtml_(setupItems)}
         <h2 style="margin-bottom:12px;">Business profile</h2>
-        <div class="admin-note" style="margin-bottom:14px;">Who runs this site. The name appears on the storefront, in every email, on labels and in the browser tab; the rest tells customers how to reach you and how to pay. Leave anything you don't use blank.</div>
+        <div class="admin-note" style="margin-bottom:14px;">${adminDesktop_()
+          ? "Your business. The name appears on packing slips, labels, invoices and reports, and in the window title; the rest is printed where customers need it (how to pay, where to mail a check). Leave anything you don't use blank."
+          : "Who runs this site. The name appears on the storefront, in every email, on labels and in the browser tab; the rest tells customers how to reach you and how to pay. Leave anything you don't use blank."}</div>
         ${bizField("gBizName", "name", "Business name", "", 'maxlength="120" placeholder="e.g. Northside Stitch Co."')}
+        <div${adminDesktop_() ? ' style="display:none;"' : ""}>
         ${bizField("gBizTagline", "tagline", "One-line description", "Shown on the page people see when they reach the site without a shop link.", 'maxlength="200"')}
         ${bizField("gBizFooter", "footer", "Footer line", "Shown at the bottom of every storefront page.", 'maxlength="300"')}
+        </div>
         ${bizField("gBizSupportEmail", "supportEmail", "Contact email (shown to customers)", "", 'maxlength="200"')}
+        <div${adminDesktop_() ? ' style="display:none;"' : ""}>
         ${bizField("gBizOwnerEmail", "ownerEmail", "Your inbox (not shown to customers)", "Where the daily roll-up and other notices to you are sent, and where customers' replies go. Blank = owner@ your domain.", 'maxlength="200"')}
         ${bizField("gBizReceiptsEmail", "receiptsEmail", "Receipts inbox (optional)", "Gets a hidden copy of every email the site sends.", 'maxlength="200"')}
+        </div>
         ${bizField("gBizVenmo", "venmo", "Venmo username", "Without the @. Builds the customer's pre-filled Venmo link.", 'maxlength="60"')}
         ${bizField("gBizZelle", "zelle", "Zelle email or phone", "", 'maxlength="200"')}
         ${bizField("gBizLegalName", "legalName", "Checks payable to", "Your legal or bank-account name, if it differs from the business name.", 'maxlength="160"')}
@@ -7606,7 +8110,9 @@ async function renderGlobalSettings(app){
         ${bizField("gBizPoPrefix", "poPrefix", "Purchase order prefix", "Starts the number of each order placed with a supplier from Blanks to Order (PO-20261021-1). Letters and numbers; blank = PO.", 'maxlength="10" placeholder="PO"')}
 
         <h2 style="margin:22px 0 12px;">Region</h2>
-        <div class="admin-note" style="margin-bottom:14px;">Where the business is. The time zone decides the hour the daily roll-up arrives and the dates and times printed in emails; the country decides how addresses are checked.</div>
+        <div class="admin-note" style="margin-bottom:14px;">Where the business is. ${adminDesktop_()
+          ? "The time zone decides the dates and times on orders and reports"
+          : "The time zone decides the hour the daily roll-up arrives and the dates and times printed in emails"}; the country decides how addresses are checked.</div>
         <label>Time zone
           <input type="text" id="gLocaleTimeZone" maxlength="64" value="${escapeHtml(locale.timeZone || "")}" placeholder="${escapeHtml(locale.timeZone ? "" : effectiveTz)}" list="gLocaleTimeZoneList" autocomplete="off" spellcheck="false" style="max-width:320px;">
           <datalist id="gLocaleTimeZoneList">${["UTC", "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Toronto", "Europe/London", "Europe/Berlin", "Asia/Tokyo", "Australia/Sydney"].map(z => `<option value="${z}">`).join("")}</datalist>
@@ -7623,15 +8129,11 @@ async function renderGlobalSettings(app){
         <div class="admin-note" style="margin:-4px 0 14px;"><strong>United States:</strong> 5-digit ZIP codes, 2-letter states, a check that the ZIP belongs to the state, and carrier shipping rates by ZIP.<br>
           <strong>Other:</strong> postal code and state / region are free text and aren't checked. Carrier shipping rates and labels aren't available — shops offer pickup and flat-fee delivery options instead.</div>
 
-        ${featureList.length ? `<h2 style="margin:22px 0 12px;">Features</h2>
-        <div class="admin-note" style="margin-bottom:14px;">Parts of the site you can do without. Turning one off hides its pages here and stops its actions; nothing is deleted, and turning it back on brings everything back as it was. Stock of blanks and transfers, and cost of goods, are always on — making an order uses them.<br>
-          <strong>Storefront</strong> is the one switch that hides nothing here: with it off, customers see an “online ordering isn't available” page on every shop address, and you keep entering orders, sending payment links and design proofs, and using Publish, a shop's “ready” box and its custom domain exactly as before (they only matter once it's back on).</div>
-        <div id="gFeatures">${featureList.map(f => `<label class="checkbox-row"><input type="checkbox" class="gFeature" data-feature="${escapeHtml(f.key)}" ${features[f.key] !== false ? "checked" : ""}> ${escapeHtml(f.label)}</label>
-          <div class="admin-note" style="margin:-4px 0 12px 26px;">${escapeHtml(f.description)}</div>`).join("")}</div>` : ""}
+        ${featureList.length ? globalFeaturesHtml_(ctx) : ""}
 
         <h2 style="margin:22px 0 12px;">Payment methods</h2>
         <div class="admin-note" style="margin-bottom:14px;">These are site-wide toggles. Disabling a method here removes it for <strong>all shops</strong>, even if that org has it enabled. Org-level settings can further restrict methods but cannot re-enable a globally disabled one.</div>
-        <label class="checkbox-row"><input type="checkbox" id="gPayCard" ${checked("card")}> Credit / Debit Card (requires Stripe)</label>
+        <label class="checkbox-row"${adminDesktop_() ? ' style="display:none;"' : ""}><input type="checkbox" id="gPayCard" ${checked("card")}> Credit / Debit Card (requires Stripe)</label>
         <label class="checkbox-row"><input type="checkbox" id="gPayVenmo" ${checked("venmo")}> Venmo</label>
         <label class="checkbox-row"><input type="checkbox" id="gPayZelle" ${checked("zelle")}> Zelle</label>
         <label class="checkbox-row"><input type="checkbox" id="gPayCheck" ${checked("check")}> Check</label>
@@ -7656,36 +8158,7 @@ async function renderGlobalSettings(app){
           <input type="text" id="gTaxJurisdiction" maxlength="${us ? 2 : 50}" value="${escapeHtml(salesTax.jurisdiction || "")}" placeholder="${us ? "e.g. OH" : "e.g. Ontario"}" style="${us ? "max-width:80px;text-transform:uppercase;" : "max-width:320px;"}">
         </label>
 
-        <div id="gShipFromSection"${shippingOn ? "" : ' style="display:none;"'}>
-        <h2 style="margin:22px 0 12px;">Ship-from address</h2>
-        <div class="admin-note" style="margin-bottom:14px;">Printed on every shipping label as the sender, and used for shipping-rate quotes on the storefront. USPS requires all of these (except Name) to actually purchase a label — rate quotes still work with just the ZIP.</div>
-        <label>Name
-          <input type="text" id="gShipName" maxlength="100" value="${escapeHtml(shipFrom.name || "")}">
-        </label>
-        <label>Street address
-          <input type="text" id="gShipStreet1" maxlength="200" value="${escapeHtml(shipFrom.street1 || "")}">
-        </label>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <label style="flex:2;min-width:160px;">City
-            <input type="text" id="gShipCity" maxlength="100" value="${escapeHtml(shipFrom.city || "")}">
-          </label>
-          <label style="${us ? "flex:0 0 80px;" : "flex:1;min-width:120px;"}"><span id="gShipStateLabel">${us ? "State" : "State / region"}</span>
-            <input type="text" id="gShipState" maxlength="${us ? 2 : 50}" value="${escapeHtml(shipFrom.state || "")}" style="${us ? "text-transform:uppercase;" : ""}">
-          </label>
-          <label style="flex:0 0 130px;"><span id="gShipZipLabel">${us ? "ZIP" : "Postal code"}</span>
-            <input type="text" id="gShipZip" maxlength="12" value="${escapeHtml(shipFrom.zip || "")}">
-          </label>
-        </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <label style="flex:1;min-width:160px;">Phone
-            <input type="text" id="gShipPhone" maxlength="30" value="${escapeHtml(shipFrom.phone || "")}" placeholder="${us ? "555-555-0100" : ""}">
-          </label>
-          <label style="flex:1;min-width:200px;">Email
-            <input type="email" id="gShipEmail" maxlength="200" value="${escapeHtml(shipFrom.email || "")}">
-          </label>
-        </div>
-        </div>
-        <div id="gMachineSection"${productionOn ? "" : ' style="display:none;"'}>
+        <div id="gProductionExtra"${productionOn ? "" : ' style="display:none;"'}>
         <h2 style="margin:22px 0 12px;">Pricing</h2>
         <div class="admin-note" style="margin-bottom:14px;">What each product's Pricing panel takes off the price to show what an item leaves. Card processing is counted on every item as if paid by card (the worst case). The targets are optional — leave one blank to not be alerted on it. They're an <strong>or</strong>: an item that meets either one is fine (a $5 cap that makes $40/hr against a $10 / $40/hr pair isn't flagged; the hourly target counts only for products with a run time). An item that misses every target set is flagged on its product, on the Products list, in Price analysis and (once, when it slips) in the 6 AM email.</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -7712,20 +8185,19 @@ async function renderGlobalSettings(app){
         <div class="admin-note" style="margin-bottom:14px;">When an order from a vendor reaches its amount (or piece count) it ships free. Blanks to Order shows how far each vendor's order is from it, with <strong>Get me to free shipping</strong>. One row per vendor named on a blank; each change is saved at once.</div>
         <div id="gVendorShipping"><div class="admin-summary">Loading&hellip;</div></div>
 
-        <h2 style="margin:22px 0 12px;">Machine Files</h2>
-        <div class="admin-note" style="margin-bottom:14px;">The Machine Files screen can show a <strong>Delete</strong> button on each file. Deleting over the machine protocol is currently disabled in the machines' firmware (the command exists but always refuses — see <code>the send-agent's PROTOCOL.md</code>), so the button is hidden by default. Turn it on only if a firmware update enables delete.</div>
-        <label class="checkbox-row"><input type="checkbox" id="gMachShowDelete" ${machineSettings.showDeleteButton ? "checked" : ""}> Show delete buttons on Machine Files</label>
         </div>
 
         <div id="globalSettingsError" class="admin-error"></div>
         <div class="admin-actions" style="margin-top:16px;">
           <button class="admin-btn" onclick="submitGlobalSettings()">Save global settings</button>
-          <button class="admin-btn" type="button" onclick="backfillStripeFees(this)" title="Look up Stripe's processing fee and charge date for card payments (safe to run again)">Sync Stripe fees &amp; dates</button>
+          ${adminDesktop_() ? "" : `<button class="admin-btn" type="button" onclick="backfillStripeFees(this)" title="Look up Stripe's processing fee and charge date for card payments (safe to run again)">Sync Stripe fees &amp; dates</button>`}
           <button class="admin-btn" onclick="location.hash='#catalog'">Cancel</button>
         </div>
       </div>
     `;
     loadVendorShippingSettings_();
+    wireGlobalFeatures_(ctx);
+    try { if (sessionStorage.getItem("oddSettingsSaved")) { sessionStorage.removeItem("oddSettingsSaved"); showToast("Global settings saved."); } } catch (e) {}
   }catch(e){
     document.getElementById("adminPanel").innerHTML = `<div class="admin-empty">Could not reach the server.</div>`;
   }
@@ -7796,8 +8268,8 @@ function setupStatusHtml_(items){
     : i.level === "recommended" ? ["!", "Not set up", "#b9770e"] : ["–", "Not set up (optional)", "#777"];
   return `<h2 style="margin-bottom:12px;">Setup status</h2>
         <div class="admin-note" style="margin-bottom:10px;">${need
-          ? `<strong>${need} thing${need === 1 ? "" : "s"} still need${need === 1 ? "s" : ""} setting up.</strong> Things set on the server (keys, buckets, the domain) are changed with <code>npm run setup</code> or in the Cloudflare dashboard — see docs/configuration.md; the rest are on this page.`
-          : "Everything this site needs is set up. Optional services that aren't in use are listed as off."} Only whether each thing is set is shown here — never a key or password.</div>
+          ? `<strong>${need} thing${need === 1 ? "" : "s"} still need${need === 1 ? "s" : ""} setting up.</strong> ${adminDesktop_() ? "Each is on this page." : "Things set on the server (keys, buckets, the domain) are changed with <code>npm run setup</code> or in the Cloudflare dashboard — see docs/configuration.md; the rest are on this page."}`
+          : adminDesktop_() ? "Everything is set up." : "Everything this site needs is set up. Optional services that aren't in use are listed as off."} Only whether each thing is set is shown here — never a key or password.</div>
         <div id="gSetupStatus" data-need="${need}" style="border:1px solid var(--line, #ddd);border-radius:6px;margin-bottom:26px;">${sorted.map(i => { const [sym, word, color] = mark(i); return `
           <div class="setup-row" data-key="${escapeHtml(i.key)}" data-ready="${i.ready ? "1" : "0"}" data-level="${escapeHtml(i.level)}" style="display:flex;gap:10px;padding:8px 10px;border-top:1px solid var(--line, #eee);align-items:flex-start;">
             <span aria-hidden="true" style="color:${color};font-weight:700;width:14px;text-align:center;">${sym}</span>
@@ -7816,6 +8288,9 @@ function globalSettingsNeedPublish_(){
 async function submitGlobalSettings(){
   const errEl = document.getElementById("globalSettingsError");
   if(errEl) errEl.textContent = "";
+  const problem = globalSettingsProblem_();
+  if(problem){ if(errEl) errEl.textContent = problem; showToast(problem, true); return; }   // the page has scrolled to the fields: say it there too
+  const program = globalProgramChanges_();   // the desktop program's part: Shippo key, mailbox, supplier switch
   const needPublish = globalSettingsNeedPublish_();
   const body = {
     action: "updateGlobalSettings",
@@ -7830,40 +8305,24 @@ async function submitGlobalSettings(){
     }
   };
   try{
-    const res = await fetch("/api/orders", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(body)
-    });
-    const data = await res.json();
-    if(!res.ok || data.status === "error"){
-      if(errEl) errEl.textContent = (data && data.message) || "Something went wrong.";
-      return;
-    }
-    // Features: saved before the sections below, which are only sent for a feature that is (still) on.
-    // The ship-from address and the Machine Files setting are saved only if their section was shown
-    // when the page loaded — a feature switched on in this same save has its settings on the next visit.
-    const shipShown = (document.getElementById("gShipFromSection") || {style: {}}).style.display !== "none";
-    const machShown = (document.getElementById("gMachineSection") || {style: {}}).style.display !== "none";
-    let savedFeatures = null;
-    const featBoxes = [...document.querySelectorAll("#gFeatures .gFeature")];
-    if(featBoxes.length){
-      const want = {}; featBoxes.forEach(b => { want[b.dataset.feature] = b.checked; });
-      const featRes = await fetch("/api/orders", {
-        method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ action: "updateFeatures", key: adminKey, features: want })
-      });
-      const featData = await featRes.json();
-      if(!featRes.ok || featData.status === "error"){
-        if(errEl) errEl.textContent = (featData && featData.message) || "Could not save the features.";
-        return;
+    // The desktop program's part first, so the features it unlocks (Shipping with a new key, Design
+    // approval with email) can be saved on in the same go: a new mailbox is tried (sign-in only),
+    // then the program takes the key, mailbox and supplier switch at once and restarts its server.
+    if(Object.keys(program).length){
+      if(program.email && program.email.on){
+        const tried = await window.oddDesktop.checkEmail(program.email.settings, program.email.password);
+        if(!tried || !tried.ok){
+          const m = "Nothing was saved. The mailbox didn't sign in: " + ((tried && tried.message) || "no answer") ;
+          if(errEl) errEl.textContent = m; showToast(m, true);
+          const pass = document.getElementById("gEmailPass"); if(pass){ pass.style.outline = "2px solid #b03a2e"; if(pass.scrollIntoView) pass.scrollIntoView({ block: "center" }); }
+          return;
+        }
       }
-      savedFeatures = featData.features || want;
-      if(typeof applyFeatures_ === "function") applyFeatures_(savedFeatures);   // the menu follows at once
-      _accountsCache = null;
-      renderAdminNav();
+      showToast("Saving — the program restarts for a moment…");
+      const applied = await window.oddDesktop.applySettings(program);
+      if(!applied || !applied.ok){ if(errEl) errEl.textContent = "Nothing was saved. " + ((applied && applied.message) || "The program's settings couldn't be saved."); return; }
     }
-    const stillOn = (k) => !savedFeatures || savedFeatures[k] !== false;
-    // Region first: the country decides how the tax state and the ship-from address below are checked.
+    // Region first: the country decides how the ship-from address, and the tax state below, are checked.
     if(document.getElementById("gLocaleCountry")){
       const locRes = await fetch("/api/orders", {
         method: "POST", headers: {"Content-Type": "application/json"},
@@ -7877,6 +8336,41 @@ async function submitGlobalSettings(){
         return;
       }
       if(typeof applyCountry_ === "function") applyCountry_(locData.locale && locData.locale.country);
+    }
+    // Features next, with Shipping's ship-from address in the same request when Shipping is ticked:
+    // the server saves the two together, or neither (orders.js updateFeatures). The Machine Files
+    // setting is saved only if its section was shown when the page loaded.
+    const machShown = (document.getElementById("gMachineSection") || {dataset: {}}).dataset.loaded === "1";
+    let savedFeatures = null;
+    const featBoxes = [...document.querySelectorAll("#gFeatures .gFeature")];
+    if(featBoxes.length){
+      const want = {}; featBoxes.forEach(b => { want[b.dataset.feature] = b.checked; });
+      const sv = (id) => ((document.getElementById(id) || {}).value || "").trim();
+      const shipFrom = want.shipping && document.getElementById("gShipStreet1") ? { name: sv("gShipName"), street1: sv("gShipStreet1"), city: sv("gShipCity"),
+        state: sv("gShipState"), zip: sv("gShipZip"), phone: sv("gShipPhone"), email: sv("gShipEmail") } : null;
+      const featRes = await fetch("/api/orders", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ action: "updateFeatures", key: adminKey, features: want, ...(shipFrom ? { shipFrom } : {}) })
+      });
+      const featData = await featRes.json();
+      if(!featRes.ok || featData.status === "error"){
+        if(errEl) errEl.textContent = (featData && featData.message) || "Could not save the features.";
+        return;
+      }
+      savedFeatures = featData.features || want;
+      if(typeof applyFeatures_ === "function") applyFeatures_(savedFeatures);   // the menu follows at once
+      _accountsCache = null;
+      renderAdminNav();
+    }
+    const stillOn = (k) => !savedFeatures || savedFeatures[k] !== false;
+    const res = await fetch("/api/orders", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if(!res.ok || data.status === "error"){
+      if(errEl) errEl.textContent = (data && data.message) || "Something went wrong.";
+      return;
     }
     const taxRes = await fetch("/api/orders", {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -7906,26 +8400,6 @@ async function submitGlobalSettings(){
       }
       applyBusiness_(bizData.business);   // the header and page titles follow at once
     }
-    if(shipShown && stillOn("shipping")){
-    const shipRes = await fetch("/api/orders", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ action: "updateShipFromAddress", key: adminKey,
-        shipFrom: {
-          name: document.getElementById("gShipName").value.trim(),
-          street1: document.getElementById("gShipStreet1").value.trim(),
-          city: document.getElementById("gShipCity").value.trim(),
-          state: document.getElementById("gShipState").value.trim(),
-          zip: document.getElementById("gShipZip").value.trim(),
-          phone: document.getElementById("gShipPhone").value.trim(),
-          email: document.getElementById("gShipEmail").value.trim(),
-        } })
-    });
-    const shipData = await shipRes.json();
-    if(!shipRes.ok || shipData.status === "error"){
-      if(errEl) errEl.textContent = (shipData && shipData.message) || "Could not save the ship-from address.";
-      return;
-    }
-    }
     if(machShown && stillOn("production")){
     const machRes = await fetch("/api/orders", {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -7952,7 +8426,9 @@ async function submitGlobalSettings(){
     }
     // New fees / targets re-check every product: say which are now below a target.
     if((priceData.belowTarget || []).length) setTimeout(() => belowTargetToast_(priceData.belowTarget, "With these settings, "), 1200);
-    showToast(needPublish
+    // The program restarted with new settings: reload, so the menu and pages follow them.
+    if(Object.keys(program).length){ try { sessionStorage.setItem("oddSettingsSaved", "1"); } catch (e) {} location.hash = "#settings"; location.reload(); return; }
+    showToast(adminDesktop_() ? "Global settings saved." : needPublish
       ? "Global settings saved. The payment-method change reaches the storefront when you click Publish on the Manage catalog screen; everything else is already live."
       : "Global settings saved. The changes are already live — no need to Publish.", false);
     location.hash = "#catalog";
@@ -8050,7 +8526,9 @@ async function renderAccountSetup(app){
   panel.innerHTML = `
       <form class="admin-form" id="acctForm" data-need-password="${needPassword ? "1" : "0"}" onsubmit="submitAccountSetup(event)" style="max-width:440px;">
         <h2 style="margin-bottom:8px;">Finish setting up</h2>
-        <p class="admin-note" style="margin-bottom:16px;">${needPassword
+        <p class="admin-note" style="margin-bottom:16px;">${needPassword && adminDesktop_()
+          ? "Welcome. Say who you are and choose a password. Each time the program opens, you sign in with your email and that password. Next comes Global settings: your business's name, where you are and your sales tax."
+          : needPassword
           ? "You signed in with the passphrase the installer printed. Say who you are and choose a password of your own. From then on you sign in with your email and that password, and the printed passphrase stops working."
           : "From now on each person signs in as themselves. Say who you are; you keep the password you have, and sign in with this email from now on."}</p>
         <label for="acctName">Your name</label>
@@ -8136,7 +8614,7 @@ function renderChangePassword(app, forced){
         <input type="password" id="pwNext" autocomplete="new-password" minlength="${ADMIN_MIN_PASSWORD_}" required style="width:100%;margin:4px 0 12px;" />
         <label for="pwAgain">New password again</label>
         <input type="password" id="pwAgain" autocomplete="new-password" required style="width:100%;margin-top:4px;" />
-        <p class="admin-note" style="margin-top:10px;">Forgotten it? An admin can reset it under Security → Users. If you are the only admin, run <code>npm run setup -- --new-passphrase</code> on the computer you installed from: it prints a passphrase that gets you back in (and resets everyone's password).</p>
+        <p class="admin-note" style="margin-top:10px;">Forgotten it? An admin can reset it under Security → Users. If you are the only admin, ${adminDesktop_() ? "choose Help → Locked out? Reset sign-in in the program's menu: you then set up your account again (and everyone's password is reset)." : "run <code>npm run setup -- --new-passphrase</code> on the computer you installed from: it prints a passphrase that gets you back in (and resets everyone's password)."}</p>
         <div id="pwError" class="admin-error" style="margin-top:8px;"></div>
         <div class="admin-actions" style="margin-top:14px;">
           <button class="admin-btn" type="submit" id="pwSubmit">${forced ? "Set password" : "Change password"}</button>
@@ -8749,7 +9227,7 @@ function drawOrgDeliveryList_(){
         : `<button type="button" class="admin-btn" data-dlv-add="shipping" style="${btn}" disabled title="Carrier rates need a US ZIP">+ Shipping</button>`)}
       <button type="button" class="admin-btn" data-dlv-add="custom" style="${btn}">+ Custom option</button>
     </div>
-    ${!adminFeatureOn_("shipping") ? `<div class="admin-note" id="orgDeliveryFeatureNote" style="margin-top:6px;">Carrier shipping is turned off (Global settings → Features → Shipping)${has("shipping") ? ", so the Shipping option above isn't offered to customers" : ""}. For delivery, add a custom option with a flat fee.</div>` : ""}
+    ${!adminFeatureOn_("shipping") ? `<div class="admin-note" id="orgDeliveryFeatureNote" style="margin-top:6px;">Carrier shipping is turned off (<a href="#settings">Global settings → Features → Shipping</a>${adminDesktop_() ? ", which needs a Shippo key under Carrier shipping there" : ""})${has("shipping") ? ", so the Shipping option above isn't offered to customers" : ""}. For delivery, add a custom option with a flat fee.</div>` : ""}
     ${!adminIsUS_() ? `<div class="admin-note" id="orgDeliveryRegionNote" style="margin-top:6px;">Carrier shipping (rates by ZIP) is only available when the country in Global settings → Region is US. For delivery, add a custom option with a flat fee.</div>`
       : has("shipping") ? `<div class="admin-note" style="margin-top:6px;">Shipping needs a weight on every visible product, and the customer's ZIP to price it.</div>` : ""}`;
   box.onclick = (e) => {
@@ -8813,7 +9291,7 @@ function renderOrgForm(app, org){
           <input type="text" id="orgFormSubdomain" value="${escapeHtml(org ? org.subdomain : "")}" placeholder="e.g. club404">
         </label>
         <div class="admin-note">Filled in from the name. Lowercase letters / numbers only — becomes &lt;address&gt;.${escapeHtml(siteRootDomain_())}. Creating the shop also sets that address up in Cloudflare.</div>
-        ${isEdit ? `<div id="orgDomainBox" data-org="${escapeHtml(org.orgId)}" style="margin:-4px 0 12px;padding:8px 10px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#111;font-size:13px;">Checking custom domain&hellip;</div>` : ""}
+        ${isEdit && !adminDesktop_() ? `<div id="orgDomainBox" data-org="${escapeHtml(org.orgId)}" style="margin:-4px 0 12px;padding:8px 10px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#111;font-size:13px;">Checking custom domain&hellip;</div>` : ""}
         <label>Small heading above the name (optional)
           <input type="text" id="orgFormEyebrow" value="${escapeHtml(org ? org.eyebrow : "")}" placeholder="e.g. Team store">
         </label>
@@ -8908,7 +9386,7 @@ function renderOrgForm(app, org){
   }
   { const pick = document.getElementById("orgFormAccentPick"), txt = document.getElementById("orgFormAccent");
     if (pick && txt) { pick.oninput = () => { txt.value = pick.value; }; txt.addEventListener("input", () => { if (/^#[0-9a-f]{6}$/i.test(txt.value.trim())) pick.value = txt.value.trim(); }); } }
-  if (isEdit) loadOrgDomainBox_(org.orgId, "getOrgDomainStatus");
+  if (isEdit && !adminDesktop_()) loadOrgDomainBox_(org.orgId, "getOrgDomainStatus");
   if (isEdit) loadOrgTierBox_(org.orgId);
 }
 
@@ -9109,7 +9587,8 @@ async function submitOrgForm(isEdit){
           showToast(`Shop created, but copying the products failed${e && e.message ? " (" + e.message + ")" : ""} — use Products → Copy from another shop.\n\n${domainMsg}`, true);
         }
       } else {
-        showToast(`Shop created — Shop setup shows what's left, starting with its products.\n\n${domainMsg}\n\nUntil the shop is published once, changes show to shoppers straight away (it says "Coming soon" until it's opened for orders).`, domainFailed);
+        showToast(adminDesktop_() ? "Shop created — Shop setup shows what's left, starting with its products."
+          : `Shop created — Shop setup shows what's left, starting with its products.\n\n${domainMsg}\n\nUntil the shop is published once, changes show to shoppers straight away (it says "Coming soon" until it's opened for orders).`, domainFailed);
       }
       location.hash = goProducts;
       return;
@@ -9259,13 +9738,13 @@ function renderProductListTable(orgId, products){
       <button class="admin-btn" id="prodCopyBtn" title="Copy products — with their prices, sizes, colors and blank links — from another shop">Copy from another shop&hellip;</button>
       ${adminCan_("manager") ? `<button class="admin-btn" id="prodListPriceBtn" title="What each item costs and leaves, and which are below your targets">Price analysis</button>` : ""}
       <input type="file" id="prodImportCsvFile" accept=".csv,text/csv" style="display:none;">
-      ${adminCan_("manager") ? `<button class="admin-btn admin-btn-secondary" data-org="${escapeHtml(orgId)}" onclick="previewShop_(this.dataset.org)" title="Open the shop page as it will look after Publish">Preview</button>` : ""}
+      ${adminCan_("manager") && !adminDesktop_() ? `<button class="admin-btn admin-btn-secondary" data-org="${escapeHtml(orgId)}" onclick="previewShop_(this.dataset.org)" title="Open the shop page as it will look after Publish">Preview</button>` : ""}
     </div>
     <div data-publish-state="${escapeHtml(orgId)}" class="admin-note"></div>
     <div id="publishStatus" class="admin-note"></div>
     <h2>Products</h2>
     ${products.length === 0 ? '<div class="admin-empty">No products yet.</div>' : `
-      <div class="admin-note" style="margin-bottom:4px;">Listed the way the shop's page shows them: a section per category, then the products in this order. Use &uarr; &darr; to rearrange a section; the sections' own order and headings are in Product categories ${manageCategoriesBtn_(`data-org="${escapeHtml(orgId)}" data-after="productListCategoriesChanged_"`)} Hidden products aren't shown to customers, and are listed last in their section.</div>
+      <div class="admin-note" style="margin-bottom:4px;">${adminDesktop_() ? "Listed" : "Listed the way the shop's page shows them:"} a section per category, then the products in this order. Use &uarr; &darr; to rearrange a section; the sections' own order and headings are in Product categories ${manageCategoriesBtn_(`data-org="${escapeHtml(orgId)}" data-after="productListCategoriesChanged_"`)} ${adminDesktop_() ? "Hidden products are listed last in their section." : "Hidden products aren't shown to customers, and are listed last in their section."}</div>
       ${sections}
     `}
   `;
@@ -15511,7 +15990,7 @@ async function renderCommunications(app, opts){
   el.innerHTML = `
     <p style="margin:0 0 4px;color:#555;">${since}</p>
     ${lastRunLine}
-    <p style="margin:0 0 18px;color:#555;font-size:13px;">This is what the next roll-up email (about 6 AM) will contain. ${d.orders.length || d.notices.length || pickedUp.length || (d.issues || []).length || (d.security && d.security.count >= 5) ? "" : "<strong>Nothing new — no email will be sent.</strong>"}</p>
+    <p style="margin:0 0 18px;color:#555;font-size:13px;">This is what the next roll-up email (${adminDesktop_() ? "the first check after 6 AM while the program is open" : "about 6 AM"}) will contain. ${d.orders.length || d.notices.length || pickedUp.length || (d.issues || []).length || (d.security && d.security.count >= 5) ? "" : "<strong>Nothing new — no email will be sent.</strong>"}</p>
     ${d.security && d.security.count ? `<div style="border:2px solid #b45309;border-radius:6px;padding:10px 12px;margin-bottom:20px;background:#fffbeb;">
       <h2 style="margin:0 0 6px;color:#92400e;font-size:16px;">🔒 ${d.security.count} failed admin sign-in${d.security.count === 1 ? "" : "s"}</h2>
       <div style="font-size:14px;">${Number(d.security.passphrase || 0)} wrong password, ${Number(d.security.code || 0)} wrong 2FA code · ${escapeHtml(when(d.security.first))} – ${escapeHtml(when(d.security.last))} · from ${escapeHtml((d.security.ips || []).join(", ") || "unknown")}</div>
@@ -15522,7 +16001,7 @@ async function renderCommunications(app, opts){
       <ul style="margin:0;padding-left:18px;font-size:14px;">${d.issues.map(x => `<li><strong>${escapeHtml(x.label)}: ${Number(x.count)}</strong>
         <span style="${sub}">(${escapeHtml(when(x.first))}${x.count > 1 ? " – " + escapeHtml(when(x.last)) : ""})</span>
         ${(x.samples || []).length ? `<br><span style="${sub}">e.g. ${x.samples.map(t => escapeHtml(t)).join(" · ")}</span>` : ""}</li>`).join("")}</ul>
-      <div style="font-size:12px;color:#555;margin-top:4px;">Reported in the next roll-up (it's sent even with nothing else new), then cleared. Details are in the Cloudflare logs.</div></div>` : ""}
+      <div style="font-size:12px;color:#555;margin-top:4px;">Reported in the next roll-up (it's sent even with nothing else new), then cleared. Details are in ${adminDesktop_() ? "the program's log (Help → Open the log)" : "the Cloudflare logs"}.</div></div>` : ""}
     ${urgent.length ? `<div style="border:2px solid #b91c1c;border-radius:6px;padding:10px 12px;margin-bottom:20px;background:#fef2f2;">
       <h2 style="margin:0 0 8px;color:#b91c1c;font-size:16px;">⚠️ Needs attention</h2>${noticeTable(urgent)}</div>` : ""}
     <h2 style="font-size:17px;margin:0 0 8px;">New orders${d.orders.length ? ` — ${d.orders.length}, ${fmt(total)}` : ""}</h2>
@@ -15573,6 +16052,25 @@ function priceReminderHtml_(pr) {
 
 // Runs the roll-up's delivery check on demand: delivered orders are marked delivered and queued
 // for the next roll-up email, and show up above.
+// The desktop version's Orders page: its tracking check now (the same check the program runs every two
+// hours, src/worker.js), then the orders again. No email is sent from the desktop version.
+async function ordersCheckTracking_(btn){
+  btn.disabled = true; const was = btn.textContent; btn.textContent = "Checking…";
+  try{
+    const r = await fetch("/api/orders", { method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ action: "checkDeliveries", key: adminKey }) });
+    const d = await r.json().catch(() => ({ status: "error", message: "Server error (" + r.status + ")" }));
+    if(!r.ok || d.status === "error"){ showToast((d && d.message) || "Tracking check failed.", true); return; }
+    const n = d.delivered.length, p = (d.pickedUp || []).length;
+    const parts = [p ? `${p} picked up by the carrier — marked shipped` : "", n ? `${n} delivered — marked delivered` : ""].filter(Boolean);
+    showToast(parts.length ? parts.join("; ") + "."
+      : `Checked ${d.checked} order${d.checked === 1 ? "" : "s"} — nothing picked up or delivered yet.` + (d.errors ? ` (${d.errors} lookup${d.errors === 1 ? "" : "s"} failed)` : ""), false);
+    const org = (adminOrgs || []).find(o => o.orgId === btn.dataset.org);
+    if((p || n) && org) refreshOrdersInPlace_(org);
+  }catch(e){ showToast("Could not reach the server.", true); }
+  finally{ btn.disabled = false; btn.textContent = was; }
+}
+
 async function checkDeliveriesNow(btn){
   btn.disabled = true; btn.textContent = "Checking…";
   try{
@@ -15957,15 +16455,21 @@ async function renderAdminBlanks(app) {
           <option value="onsale">On a product for sale</option><option value="unlinked">Not linked to any product</option><option value="low">Below reorder point</option></select>
         <button type="button" class="admin-btn" id="blankAddBtn">+ New blank</button>
         <button type="button" class="admin-btn" id="blankOrderBtn" title="Record a whole vendor order: several blanks, shipping, R&amp;D and personal items">Receive order</button>
-        <button type="button" class="admin-btn" id="blankImportPdfBtn" title="Read a vendor invoice or order confirmation PDF and pre-fill Receive order from it">Import from PDF&hellip;</button>
+        ${adminMenuHtml_("Import", [
+          adminMenuItem_('id="blankImportPdfBtn" title="Read a vendor invoice or order confirmation PDF and pre-fill Receive order from it — Import from PDF"', "Vendor invoice (PDF)&hellip;"),
+          adminMenuItem_('id="blankVendorNewBtn" title="Bring in complete blanks from a vendor\'s product file — colors, sizes, prices per color, description, and images from the vendor\'s image download"', "Vendor product file — new blanks&hellip;"),
+          adminMenuItem_('id="blankVendorUpdBtn" title="Refresh the vendor prices (per color) of blanks you have from a vendor\'s product file"', "Vendor product file — update prices&hellip;"),
+          adminMenuItem_('id="blankImportCsvBtn" title="Add or update many blanks at once from a spreadsheet saved as CSV: one row per style, a cost column per size"', "Spreadsheet (CSV)&hellip;"),
+        ].join(""), { title: "Bring blanks in from a file: a vendor's invoice or product file, or a spreadsheet" })}
+        ${adminMenuHtml_("Connected vendor", [
+          adminMenuItem_('id="blankVendorApiNewBtn" title="Look up a style at a connected vendor and bring it in as a complete blank"', "Look up a style → new blank&hellip;"),
+          adminMenuItem_('id="blankVendorLiveBtn" title="Fetch live prices, colors and content for the blanks linked to a connected vendor"', "Refresh prices and colors&hellip;"),
+        ].join(""), { id: "blankVendorMenu", hidden: true, title: "A vendor connected under Vendor integrations" })}
+        ${adminMenuHtml_("More", [
+          adminMenuItem_('id="blankDupPhotosBtn" title="Find the same photo more than once on a blank\'s color, and take the extra copies off"', "Find duplicate photos&hellip;"),
+          adminMenuItem_('id="blankRepairThumbsBtn" title="Make the small preview copy for blank photos that don\'t have one (photos downloaded from a vendor before this was fixed)"', "Repair photo thumbnails&hellip;"),
+        ].join(""))}
         <input type="file" id="blankImportPdfFile" accept="application/pdf" style="display:none;">
-        <button type="button" class="admin-btn" id="blankVendorNewBtn" title="Bring in complete blanks from a vendor's product file — colors, sizes, prices per color, description, and images from the vendor's image download">+ New blank from vendor file&hellip;</button>
-        <button type="button" class="admin-btn" id="blankVendorUpdBtn" title="Refresh the vendor prices (per color) of blanks you have from a vendor's product file">Update prices from vendor file&hellip;</button>
-        <button type="button" class="admin-btn" id="blankVendorLiveBtn" title="Fetch live prices, colors and content for the blanks linked to a connected vendor (Tools → Vendor integrations)">Refresh from vendor&hellip;</button>
-        <button type="button" class="admin-btn" id="blankVendorApiNewBtn" title="Look up a style at a connected vendor and bring it in as a complete blank">+ New blank from a connected vendor&hellip;</button
-        ><button type="button" class="admin-btn" id="blankImportCsvBtn" title="Add or update many blanks at once from a spreadsheet saved as CSV: one row per style, a cost column per size">Import CSV&hellip;</button>
-        <button type="button" class="admin-btn" id="blankDupPhotosBtn" title="Find the same photo more than once on a blank's color, and take the extra copies off">Find duplicate photos&hellip;</button>
-        <button type="button" class="admin-btn" id="blankRepairThumbsBtn" title="Make the small preview copy for blank photos that don't have one (photos downloaded from a vendor before this was fixed)">Repair photo thumbnails&hellip;</button>
         <input type="file" id="blankImportCsvFile" accept=".csv,text/csv" style="display:none;">
       </div>
       <div id="blanksPanel" data-keep-scroll="blanks" style="overflow:auto;max-height:66vh;border:1px solid var(--card-line);border-radius:4px;"><div class="admin-summary">Loading&hellip;</div></div>
@@ -15993,7 +16497,18 @@ async function renderAdminBlanks(app) {
     const file = e.target.files[0]; e.target.value = "";
     if (file) await showBlankCsvImportModal_(file, refresh);
   };
+  showBlankVendorMenu_();
   await loadBlanksPanel(app);
+}
+
+// Blanks → Connected vendor ▾ appears only when a vendor is connected (with a login) under Vendor integrations.
+// The desktop version doesn't even ask while supplier connections are off (they would be refused there).
+function showBlankVendorMenu_(){
+  if (adminDesktop_() && !adminDesktopSuppliers_()) return;
+  hoopApi_({ action: "listVendorConnections" }).then(r => {
+    const menu = document.getElementById("blankVendorMenu");
+    if (menu && ((r && r.connections) || []).some(c => c.hasCredentials)) menu.style.display = "";
+  }).catch(() => { /* stays hidden */ });
 }
 
 // Blanks → Repair photo thumbnails: every blank photo in the image store whose 320px "-thumb" copy doesn't load
@@ -16299,12 +16814,15 @@ function renderBlanksTable(panel, app, blanks, query) {
           <td style="padding:8px 10px;font-family:monospace;font-size:12px;vertical-align:top;">${escapeHtml(b.brand)}${b.sku ? " / " + escapeHtml(b.sku) : ""}</td>
           <td style="padding:8px 10px;vertical-align:top;">${colorBlocks}<div style="font-size:11px;color:var(--ink-soft);margin-top:3px;">${totalStock} units${totalHeld ? ` · ${totalHeld} set aside` : ""} · $${totalValue.toFixed(2)} value</div></td>
           <td style="padding:8px 10px;white-space:nowrap;vertical-align:top;">
-            <button class="admin-btn" style="padding:3px 10px;font-size:12px;" data-blank-id="${b.id}" onclick="blankHistory(this.dataset.blankId)" title="Every stock movement for this blank">History</button>
-            <button class="admin-btn" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" onclick="blankWriteOff(this.dataset.blankId)" title="Damaged, lost, or used for testing/samples/shop scrap">Write off</button>
-            <button class="admin-btn" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" onclick="blankEdit(this.dataset.blankId)">Edit</button>
-            <button class="admin-btn" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" onclick="blankMerge(this.dataset.blankId)" title="Fold other blanks (old per-color rows) into this one">Merge…</button>
-            <button class="admin-btn" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" onclick="blankClone(this.dataset.blankId)">Clone</button>
-            <button class="admin-btn admin-btn-danger" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" data-blank-name="${escapeHtml(b.name || [b.brand, b.color].filter(Boolean).join(" "))}" onclick="blankDelete(this.dataset.blankId, this.dataset.blankName)">Delete</button>
+            <button class="admin-btn" style="padding:3px 10px;font-size:12px;" data-blank-id="${b.id}" onclick="blankEdit(this.dataset.blankId)">Edit</button>
+            <button class="admin-btn" style="padding:3px 10px;font-size:12px;margin-left:4px;" data-blank-id="${b.id}" onclick="blankHistory(this.dataset.blankId)" title="Every stock movement for this blank">History</button>
+            ${adminMenuHtml_("⋯", [
+              adminMenuItem_(`data-blank-id="${b.id}" onclick="blankWriteOff(this.dataset.blankId)" title="Damaged, lost, or used for testing/samples/shop scrap"`, "Write off&hellip;"),
+              adminMenuItem_(`data-blank-id="${b.id}" onclick="blankMerge(this.dataset.blankId)" title="Fold other blanks (old per-color rows) into this one"`, "Merge&hellip;"),
+              adminMenuItem_(`data-blank-id="${b.id}" onclick="blankClone(this.dataset.blankId)" title="Start a new blank from this one: its colors, sizes, prices and photos, with no stock"`, "Clone"),
+              '<div class="admin-menu-sep" role="separator"></div>',
+              adminMenuItem_(`data-blank-id="${b.id}" data-blank-name="${escapeHtml(b.name || [b.brand, b.color].filter(Boolean).join(" "))}" onclick="blankDelete(this.dataset.blankId, this.dataset.blankName)"`, "Delete&hellip;", true),
+            ].join(""), { dots: true, ariaLabel: "More for " + (b.name || "this blank"), btnStyle: "padding:3px 10px;font-size:12px;margin-left:4px;" })}
           </td>
         </tr>`;
     });
