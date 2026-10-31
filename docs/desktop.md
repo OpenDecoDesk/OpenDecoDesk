@@ -69,7 +69,10 @@ A cloud install never sets `EDITION`, so none of this changes it.
 
 ## Getting it
 
-From the project's GitHub Actions: the **Desktop builds** workflow's run → Artifacts.
+From the project's **Releases** page on GitHub (the website's download buttons point at the latest
+one): `OpenDecoDesk-Windows.zip`,
+`OpenDecoDesk-macOS-AppleSilicon.zip` or `OpenDecoDesk-macOS-Intel.zip`. Every build is also
+under its **Desktop builds** workflow run → Artifacts, named with its version, as below.
 
 - **Windows**: `OpenDecoDesk-<version>-windows-x64.zip`. No installer: unzip it to a folder of its
   own (say `Documents\OpenDecoDesk`, not inside the zip) and run `OpenDecoDesk.exe` from there; pin
@@ -328,6 +331,12 @@ npx electron-builder --mac zip --arm64 --x64  # dist/OpenDecoDesk-<version>-mac-
 ```
 
 (`desktop/package.json` has the same two as its `dist:win` and `dist:mac` scripts.)
+
+**A release:** set the new `version` in `desktop/package.json` and write what's new in
+`desktop/RELEASE_NOTES.md` (the release's notes), then in GitHub Actions run **Desktop builds**
+with **Publish a release** ticked (or push a tag `desktop-v<version>`). It builds all three and
+publishes the release `desktop-v<version>` with them, named as the website links to them. A version
+is released once; a second run for the same one stops with an error.
 
 The program's icon is the OpenDecoDesk logo, `public/images/icon.svg`, which is also the admin's
 browser-tab icon and the website's. `desktop/icons/` has it in each system's format (`icon.icns`

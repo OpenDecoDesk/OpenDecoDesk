@@ -2,14 +2,20 @@ name: Desktop builds
 
 # The desktop program (desktop/, docs/desktop.md) for Windows and Mac. Each build runs on the
 # system it is for, because Miniflare's workerd runtime is a native program installed per system.
-# Run it from the Actions tab (Run workflow), or push a tag named desktop-v<version>. The files are
-# under the run's Artifacts. The builds are not signed (see docs/desktop.md).
+# Run it from the Actions tab (Run workflow): the files are under the run's Artifacts. To publish
+# them as a GitHub release, tick "Publish a release" there, or push a tag named desktop-v<version>
+# (the version in desktop/package.json). The builds are not signed (see docs/desktop.md).
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Publish a release: desktop-v<version in desktop/package.json>, with the notes in desktop/RELEASE_NOTES.md"
+        type: boolean
+        default: false
   push:
     tags: ["desktop-v*"]
 
-# Only reads the repo; the files go to the run's own artifacts.
+# The builds only read the repo; only the release job below may write (it publishes the release).
 permissions:
   contents: read
 
@@ -50,3 +56,42 @@ jobs:
           name: OpenDecoDesk-${{ matrix.name }}
           path: desktop/dist/*.zip
           if-no-files-found: error
+
+  # The release: the three builds under the names the website's download buttons link to
+  # (https://github.com/OpenDecoDesk/opendecodesk/releases/latest/download/<name>), and the notes in
+  # desktop/RELEASE_NOTES.md. A version is released once: a second run for the same one fails, so
+  # bump "version" in desktop/package.json first.
+  release:
+    if: startsWith(github.ref, 'refs/tags/desktop-v') || (github.event_name == 'workflow_dispatch' && inputs.release)
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to create the release (and its tag)
+      actions: read     # to fetch this run's builds
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: The version
+        run: |
+          v=$(node -p "require('./desktop/package.json').version")
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "desktop-v$v" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME doesn't match the version in desktop/package.json ($v). Tag desktop-v$v instead, or change the version."
+            exit 1
+          fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "TAG=desktop-v$v" >> "$GITHUB_ENV"
+      - name: The builds, named for the website
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir built
+          mkdir release
+          cp "built/OpenDecoDesk-windows-x64/OpenDecoDesk-$VERSION-windows-x64.zip" release/OpenDecoDesk-Windows.zip
+          cp "built/OpenDecoDesk-mac-arm64/OpenDecoDesk-$VERSION-mac-arm64.zip" release/OpenDecoDesk-macOS-AppleSilicon.zip
+          cp "built/OpenDecoDesk-mac-x64/OpenDecoDesk-$VERSION-mac-x64.zip" release/OpenDecoDesk-macOS-Intel.zip
+          ls -l release
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "OpenDecoDesk desktop $VERSION" --notes-file desktop/RELEASE_NOTES.md

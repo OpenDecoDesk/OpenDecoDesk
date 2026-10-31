@@ -377,6 +377,12 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   const pkgWin = JSON.parse(read("desktop/package.json")).build.win;
   ok("the Windows download is a zip of the program's folder (nothing unpacked into Temp on every start)", pkgWin.target === "zip" && /windows-x64\.zip$/.test(pkgWin.artifactName) &&
     /builder: --win zip --x64/.test(read(".github/workflows/desktop.yml")) && !/portable/.test(read("desktop/package.json") + read(".github/workflows/desktop.yml")));
+  const wf = read(".github/workflows/desktop.yml");
+  ok("a release publishes the three builds under the website's download names, with desktop/RELEASE_NOTES.md", /release:\n    if: startsWith\(github\.ref, 'refs\/tags\/desktop-v'\) \|\| \(github\.event_name == 'workflow_dispatch' && inputs\.release\)\n    needs: build/.test(wf) &&
+    ["OpenDecoDesk-Windows.zip", "OpenDecoDesk-macOS-AppleSilicon.zip", "OpenDecoDesk-macOS-Intel.zip"].every(n => wf.includes("release/" + n)) &&
+    /--notes-file desktop\/RELEASE_NOTES\.md/.test(wf) && fs.existsSync(path.join(__dirname, "desktop/RELEASE_NOTES.md")) &&
+    /contents: write/.test(wf.slice(wf.indexOf("\n  release:\n"))) && /permissions:\n  contents: read/.test(wf));
+  ok("…and a tag that isn't the package's version stops it", /"\$GITHUB_REF_NAME" != "desktop-v\$v"/.test(wf) && /exit 1/.test(wf));
   ok("Local sale has a Ship this order section with the address, carrier and charge", ["lsShip", "lsShipLine1", "lsShipCity", "lsShipZip", "lsShipCarrier", "lsShipService", "lsShipCost"].every(id => adminJs.includes(`id="${id}"`)) && !adminJs.includes('id="lsAddress"'));
   w.eval('siteEdition = ""');
   ok("…while a cloud install's admin keeps all of them", /resendEmail/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X1", paid: false, items: [{}], balanceDue: 20 })) && /showSendInvoiceModal/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X1", paid: false, items: [{}], balanceDue: 20 })) && /Not published yet/.test(w.publishStateHtml_({ state: "never" })));
