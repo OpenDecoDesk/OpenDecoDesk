@@ -1,0 +1,54 @@
+name: Desktop builds
+
+# The desktop program (desktop/, docs/desktop.md) for Windows and Mac. Each build runs on the
+# system it is for, because Miniflare's workerd runtime is a native program installed per system.
+# Run it from the Actions tab (Run workflow), or push a tag named desktop-v<version>. The files are
+# under the run's Artifacts. The builds are not signed (see docs/desktop.md).
+on:
+  workflow_dispatch:
+  push:
+    tags: ["desktop-v*"]
+
+# Only reads the repo; the files go to the run's own artifacts.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            builder: --win portable --x64
+            npm_flags: ""
+          - name: mac-arm64
+            os: macos-latest
+            builder: --mac zip --arm64
+            npm_flags: ""
+          # An Intel Mac build from the same (Apple silicon) runner: npm installs the x64 workerd.
+          - name: mac-x64
+            os: macos-latest
+            builder: --mac zip --x64
+            npm_flags: --cpu=x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 (pinned to a commit, like the other workflows)
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      # The tests run in the "Test suite" workflow (test.yml) on every push; the program runs that same code.
+      - run: npm ci ${{ matrix.npm_flags }}   # exact versions from desktop/package-lock.json
+        working-directory: desktop
+      - run: npx electron-builder ${{ matrix.builder }} --publish never
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"   # unsigned (no certificate is set up)
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: OpenDecoDesk-${{ matrix.name }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.zip
+          if-no-files-found: error

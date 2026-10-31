@@ -50,6 +50,7 @@ Also in `wrangler.toml`: the **hostnames** the Worker serves (`routes`), and the
 | `TURNSTILE_SITE_KEY` | with Turnstile | — | The public half of a Turnstile widget; sent to the storefront. |
 | `ADMIN_AUTH_GLOBAL_LIMIT` | no | `100` | Failed sign-ins allowed across the whole site, from any address, per 15 minutes; past it, new sign-ins wait for the window to end (people already signed in aren't affected). `0` turns it off. Each address also has its own limit of 10 a minute. |
 | `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` | with Cloudflare Access | — | Turn on Cloudflare Access checking for the admin. See the warning below. |
+| `EDITION` | no | — | Set to `desktop` **only by the desktop program** ([desktop.md](desktop.md)), never on a cloud install: `localhost` becomes the admin, the storefront, carrier shipping and design approval are locked off, and actions that need the internet are refused. There, `SHIPPO_API_KEY` is set by the program when the owner saves a Shippo key, and unlocks carrier shipping, `DESKTOP_SUPPLIERS` is `on` when the owner has turned on supplier connections (Vendor integrations), and `DESKTOP_EMAIL` is `on` when the owner has set up their mailbox (Global settings → Email): email then goes out through the `MAILER` binding, which the program answers by sending over SMTP (`desktop/mailer.js`), from `EMAIL_FROM`, the mailbox's address. (`functions/_lib/hostConfig.js`) |
 
 Older names the code still reads, for installs that already use them — don't set these on a new
 install: `CF_PAGES_PROJECT` (custom domains for a Cloudflare Pages deployment),
@@ -99,11 +100,11 @@ when that install's owner becomes its first user, and each user's own secret is 
 | **Setup status** | Read-only: which of the things on this page are set. | — | |
 | **Business profile** | Business name, one-line description, footer line, contact email shown to customers, your own inbox, a receipts inbox, Venmo username, Zelle contact, "checks payable to", "mail checks to", the purchase order prefix for orders placed with suppliers. | all blank ("Our shop" stands in for a missing name) | Live as soon as saved. |
 | **Region** | Time zone; country (`US` or `OTHER`). | time zone from `TIMEZONE`, else UTC; country `US` | Country `OTHER` makes addresses free text and turns carrier shipping off. |
-| **Features** | Five switches: Storefront, Production, Bookkeeping, Shipping, Design approval. | all on | See the README. Live within about half a minute. |
+| **Features** | Five switches: Storefront, Production, Bookkeeping, Shipping, Design approval. A ticked one opens a panel with its settings (Production: Machine Files; Shipping: the Shippo key and the ship-from address). | all on | See the README. Live within about half a minute. |
 | **Payment methods** | Which of Card, Venmo, Zelle, Check are offered, site-wide. Each shop can turn more off, never back on. | all on (Card also needs Stripe) | **The one section that needs Publish** (Manage catalog → Publish) to reach the storefront. |
 | **Sales tax** | Rate, home state (or region), and whether prices include the tax or it is added at checkout. | no rate: nothing is taxed | Applies to new orders. See [sales-tax.md](sales-tax.md). |
-| **Ship-from address** | The sender's name, address, phone and email for shipping quotes and labels. | blank | Shown only while the Shipping feature is on. A label can't be bought until it's filled in. |
-| **Machine Files** | Whether delete buttons are shown on the Machine Files page. | off | Shown only while the Production feature is on. |
+| **Ship-from address** | The sender's name, address, phone and email for shipping quotes and labels. | blank | In the Shipping feature's panel. Every field is required while Shipping is on: nothing saves until it's complete. |
+| **Machine Files** | Whether delete buttons are shown on the Machine Files page. | off | In the Production feature's panel. |
 
 Settings kept elsewhere in the admin: **package sizes** (Tools → Package sizes), the **accounts
 that postage is paid from and Stripe pays out to** (Finance → Accounts & money), and each shop's

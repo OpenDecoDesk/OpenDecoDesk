@@ -80,7 +80,10 @@ async function runDailyDigestInner_(env, trigger) {
   // blank shipments (one supplier call per order, from the same budget, at most 10), so the Shippo check below
   // follows them the same morning.
   let afterDeliveries = Math.max(0, TRACKING_LOOKUP_BUDGET - (deliveries.checked || 0));
-  if (afterDeliveries > 0) {
+  // (Not in the desktop program while supplier connections are off there: nothing goes to suppliers —
+  // hostConfig.js desktopSuppliersOn, repeated so this file needs no other import.)
+  const suppliersOff = String(env.EDITION || "").trim().toLowerCase() === "desktop" && String(env.DESKTOP_SUPPLIERS || "") !== "on";
+  if (afterDeliveries > 0 && !suppliersOff) {
     try { const r = await checkSupplierShipments(env, { limit: Math.min(10, afterDeliveries) }); afterDeliveries -= (r.checked || 0) + (r.errors || []).length; }
     catch (e) { console.error("Supplier-shipment check failed — sending the roll-up without it:", e); }
   }

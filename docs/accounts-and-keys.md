@@ -464,7 +464,7 @@ openssl rand -hex 32 | npx wrangler secret put VENDOR_CREDENTIALS_KEY
 
 Keep it: a new key makes the saved logins unreadable, and they'd have to be entered again. Without the
 key, Vendor integrations says so and nothing else changes; you can still import a vendor's product
-file (Blanks → + New blank from vendor file…).
+file (Blanks → Import → Vendor product file — new blanks…).
 
 ---
 

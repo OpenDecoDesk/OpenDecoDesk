@@ -11,7 +11,7 @@
  *   - Prices are recalculated server-side from D1 (priceItem()), never trusted from client
  */
 
-import { classifyHost, rootDomain, adminSubdomains } from "../_lib/hostConfig.js";
+import { classifyHost, rootDomain, adminSubdomains, isDesktopEdition, desktopLockedFeatures, desktopSuppliersOn, desktopEmailOn } from "../_lib/hostConfig.js";
 import { getCatalogData, invalidateCatalogVersionCache } from "../_lib/catalogCache.js";
 import { validateOrgFields, validateProductImages, cleanImageUrl, PRODUCT_ID_RE } from "../_lib/catalogValidation.js";
 import { requireAdmin, adminActor, adminUser } from "../_lib/adminAuth.js";
@@ -48,7 +48,7 @@ import {
   getAllOrgs, getOrgById, createOrg, updateOrg, cleanDeliveryOptions, setOrgDeliveryOptions, defaultDeliveryOptions, cleanShippingAddress, stagePrereqError, getSystemIssues,
   getProductsByOrg, productShipWeightOz, createProduct, updateProduct, setProductVisible,
   getGlobalSettings, setGlobalSettings, getMachineSettings, setMachineSettings,
-  getShipFromAddress, setShipFromAddress, getBusinessProfile, setBusinessProfile, getLocaleSettings, setLocaleSettings, FEATURES, getFeatures, setFeatures, resolveTimeZone, setOrdersCompleted, getShippedAwaitingDelivery,
+  getShipFromAddress, setShipFromAddress, shipFromMissing, getBusinessProfile, setBusinessProfile, getLocaleSettings, setLocaleSettings, FEATURES, getFeatures, setFeatures, resolveTimeZone, setOrdersCompleted, getShippedAwaitingDelivery,
   getBoxPresets, setBoxPresets,
   addShippingPaidAmount, setShippingPaidAmount,
   getAllInventory, createInventoryItem, updateInventoryItem, deleteInventoryItem,
@@ -85,7 +85,7 @@ import {
   getOrderTotal, getOrderForShipping,
   updateOrderCustomerInfo,
   priceItem, CUSTOM_DESIGN_KINDS, CUSTOM_PLAIN_LOCATION, customFromConfig,
-  createDesignVerification,
+  createDesignVerification, approvePendingDesignVerifications,
   getLatestVerificationsByOrg,
   updateOrderShipping,
   addOrderPayment, getOrderPaymentById, setOrderDiscount,
@@ -118,7 +118,7 @@ import {
 import {
   sendOrderReceivedEmail,
   sendPaymentConfirmedEmail, sendCancellationEmail, sendShippedEmail,
-  sendDesignVerificationEmail, sendShippingPaymentEmail, sendInvoiceEmail, sendTestEmail,
+  sendDesignVerificationEmail, sendShippingPaymentEmail, sendInvoiceEmail, sendTestEmail, invoiceDocument,
 } from "../_lib/email.js";
 import { verifyQuote, canonicalItems } from "../_lib/quoteToken.js";
 import { selectBox } from "../_lib/boxSize.js";
@@ -273,7 +273,7 @@ const STAFF_ACTIONS = [
   "setDiscount", "deleteOrder", "voidOrder", "updateCustomerInfo", "createLocalSale", "setFulfillmentStage", "useBlanksFromStock", "addBlankShipment",
   "updateBlankShipment", "deleteBlankShipment", "getBlankShipments", "bulkSetFulfillmentStage", "cancelLineItem", "bulkCancelLineItems",
   "setLineItemRefund", "editOrder", "recordTracking", "bulkRecordTracking", "getOrderForShipping", "sendDesignVerification",
-  "listDesignVerifications", "setShippingInfo", "setShippingPaidAmount", "createShippingPaymentLink", "sendInvoice", "updateOrderDate", "setOrderDueDate",
+  "listDesignVerifications", "setShippingInfo", "setShippingPaidAmount", "createShippingPaymentLink", "sendInvoice", "getInvoiceDocument", "updateOrderDate", "setOrderDueDate",
   "bulkSetDueDate", "listClosedPeriods",
 ];
 const ACTION_ROLE = Object.create(null);   // no prototype: "constructor" is not an action
@@ -311,8 +311,10 @@ const FEATURE_ACTIONS = {
     "listExpenseCategories", "saveExpenseCategory", "deleteExpenseCategory",
     "listExpenses", "saveExpense", "deleteExpense", "getExpenseReport", "previewExpenseImport", "importExpenses",
   ],
+  // (Reading the ship-from address isn't behind the switch: Global settings shows it as soon as
+  // Shipping is ticked, before it's saved on.)
   shipping: [
-    "getShipFromAddress", "updateShipFromAddress", "getBoxPresets", "setBoxPresets",
+    "updateShipFromAddress", "getBoxPresets", "setBoxPresets",
     "getOrderForShipping", "checkDeliveries", "checkBlankShipments",
   ],
   designVerification: [
@@ -321,6 +323,27 @@ const FEATURE_ACTIONS = {
 };
 const ACTION_FEATURE = {};
 for (const [feature, actions] of Object.entries(FEATURE_ACTIONS)) for (const a of actions) ACTION_FEATURE[a] = feature;
+// The desktop edition (hostConfig.js isDesktopEdition): actions that only work by reaching a service
+// on the internet — sending email, Stripe, attaching a shop's web address. The desktop program
+// leaves them out of its pages; these are refused (403) in case anything still asks.
+const DESKTOP_REFUSED_ACTIONS = new Set([
+  "createShippingPaymentLink", "backfillStripeFees",
+  "setupOrgDomain", "getOrgDomainStatus", "getPreviewLink",
+]);
+const DESKTOP_REFUSED_MSG = "This needs the internet, so it isn't part of the desktop version.";
+// …and sending email: refused until the owner sets up their mailbox in the program (hostConfig.js
+// desktopEmailOn). An invoice is then the email itself, with no page to pay on (sendInvoice below).
+const DESKTOP_EMAIL_ACTIONS = new Set(["sendTestEmail", "resendEmail", "sendInvoice"]);
+const DESKTOP_EMAIL_OFF_MSG = "Email isn't set up. Add your mailbox under Global settings → Email.";
+// …and supplier connections (PromoStandards: the directory, a supplier's live product data, ordering,
+// shipment tracking) and fetching a supplier's pictures from the web: refused until the owner turns
+// supplier connections on in the program (hostConfig.js desktopSuppliersOn). Importing a supplier's
+// files (CSV, PDF invoices, product files) is always there: that reads a file on this computer.
+const DESKTOP_SUPPLIER_ACTIONS = new Set([
+  "copyVendorImage", "vendorDirectorySearch", "vendorDirectoryEndpoints", "saveVendorConnection", "testVendorConnection",
+  "linkVendorConnectionBlanks", "fetchVendorProducts", "previewSupplierOrder", "placeSupplierOrder", "checkSupplierOrderShipments",
+]);
+const DESKTOP_SUPPLIERS_OFF_MSG = "Supplier connections need the internet — turn them on under Global settings → Supplier connections.";
 const featureLabel_ = (key) => (FEATURES.find(f => f.key === key) || { label: key }).label;
 const NO_SHIPPING_FEATURE_MSG = "Carrier shipping is turned off (Global settings → Features → Shipping). Use Local pickup or a custom delivery option with a flat fee instead.";
 
@@ -516,6 +539,13 @@ export async function onRequestPost(context) {
     const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
     if (denied) return denied;
     return featureOffResponse(ACTION_FEATURE[body.action], featureLabel_(ACTION_FEATURE[body.action]));
+  }
+  if (isDesktopEdition(env) && (DESKTOP_REFUSED_ACTIONS.has(body.action) || (DESKTOP_SUPPLIER_ACTIONS.has(body.action) && !desktopSuppliersOn(env))
+    || (DESKTOP_EMAIL_ACTIONS.has(body.action) && !desktopEmailOn(env)))) {
+    const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
+    if (denied) return denied;
+    return jsonResponse({ status: "error", code: "desktop", message: DESKTOP_REFUSED_ACTIONS.has(body.action) ? DESKTOP_REFUSED_MSG
+      : DESKTOP_EMAIL_ACTIONS.has(body.action) ? DESKTOP_EMAIL_OFF_MSG : DESKTOP_SUPPLIERS_OFF_MSG }, 403);
   }
 
   // ---- listOrgs — admin org picker -------------------------------------------
@@ -1917,6 +1947,20 @@ export async function onRequestPost(context) {
       if (ac.error) return jsonResponse({ status: "error", message: ac.error }, 400);
       order.shippingAddress = ac.address;
     }
+    // Ship this order: the shipping charge (dollars, part of what the customer owes — shipping is never
+    // taxed) and how it goes ("UPS Ground"; the carrier also picks the tracking link and lookup).
+    // Either needs an address to ship to.
+    const hasShipCost = body.shippingCost !== undefined && body.shippingCost !== null && body.shippingCost !== "";
+    const shipMethod = String(body.shippingMethod || "").replace(/\s+/g, " ").trim().slice(0, 100);
+    if (hasShipCost || shipMethod) {
+      const a = order.shippingAddress;
+      if (!a || !a.line1 || !a.city || !a.zip) return jsonResponse({ status: "error", message: "A shipping charge or method needs the address to ship to." }, 400);
+      const cost = hasShipCost ? Number(body.shippingCost) : 0;
+      if (!Number.isFinite(cost) || cost < 0 || cost > 10000) return jsonResponse({ status: "error", message: "The shipping charge must be between $0 and $10,000." }, 400);
+      order.shippingCost = cost;
+      order.shippingMethod = shipMethod;
+      order.total = subtotal + cost;
+    }
 
     // Lines for stocked products come out of the shop's finished stock (migrations/0060) — handed over
     // now, so they're pulled at once.
@@ -2030,6 +2074,7 @@ export async function onRequestPost(context) {
     const now = new Date().toISOString();
     const res = await setFulfillmentStage(env.DB, body.orderId, body.stage, extras);
     if (body.stage === "shipped" && res && res.changed) sendShippedEmailLater_(body.orderId);
+    if (body.stage === "designApproved" && isDesktopEdition(env)) await approvePendingDesignVerifications(env.DB, body.orderId, now);
     audit({ orgId: body.org, orderId: body.orderId, action: "order.fulfillment_stage",
       detail: { stage: body.stage, ...extras } });
     return jsonResponse({ status: "ok", timestamp: now });
@@ -2148,6 +2193,7 @@ export async function onRequestPost(context) {
         const perOrderExtras = itemsByOrder[orderId] ? { ...extras, itemIds: itemsByOrder[orderId] } : extras;
         const res = await setFulfillmentStage(env.DB, orderId, body.stage, perOrderExtras);
         if (body.stage === "shipped" && res && res.changed) sendShippedEmailLater_(orderId);
+        if (body.stage === "designApproved" && isDesktopEdition(env)) await approvePendingDesignVerifications(env.DB, orderId, new Date().toISOString());
         updated++;
       } catch (e) {
         errors.push(orderId + ": " + e.message);
@@ -3048,8 +3094,13 @@ export async function onRequestPost(context) {
       return jsonResponse({ status: "ok", locale, effectiveTimeZone: await resolveTimeZone(env), envTimeZone: env.TIMEZONE ? String(env.TIMEZONE) : "" });
     }
     // ---- Features: which optional parts of the site are on (db.js FEATURES) ----
+    // The desktop edition (hostConfig.js): the switches that need the internet are shown as locked
+    // off, and turning one on is refused below — carrier shipping only until a Shippo key is set.
+    const lockedFeatures_ = isDesktopEdition(env) ? desktopLockedFeatures(env) : [];
+    // shippoKey: whether this install has a Shippo key (never the key) — Shipping can't be on without
+    // one, and the Global settings page checks that before it saves anything.
     if (body.action === "getFeatures") {
-      return jsonResponse({ status: "ok", features: await getFeatures(env.DB), list: FEATURES });
+      return jsonResponse({ status: "ok", features: await getFeatures(env.DB), list: FEATURES, locked: lockedFeatures_, shippoKey: !!env.SHIPPO_API_KEY });
     }
     if (body.action === "updateFeatures") {
       const before = await getFeatures(env.DB);
@@ -3057,6 +3108,33 @@ export async function onRequestPost(context) {
       for (const k of Object.keys(want)) {
         if (!FEATURES.some(f => f.key === k)) return jsonResponse({ status: "error", message: `"${String(k).slice(0, 40)}" isn't a feature.` }, 400);
         if (typeof want[k] !== "boolean") return jsonResponse({ status: "error", message: "Each feature is either on (true) or off (false)." }, 400);
+        if (want[k] && lockedFeatures_.includes(k)) return jsonResponse({ status: "error", message: k === "shipping"
+          ? "Carrier shipping needs a Shippo key — add it under Global settings → Carrier shipping (Shippo)."
+          : k === "designVerification" ? "Design approval needs email — set up your mailbox under Global settings → Email."
+          : `${featureLabel_(k)} isn't part of the desktop version.` }, 400);
+      }
+      // Shipping on (asked for in this request) needs what buying a label needs: a Shippo key and a
+      // complete ship-from address. The address can come with the request (Global settings sends
+      // it here, so the two are saved together), else the saved one is checked. Nothing is saved
+      // while either is missing. A request that doesn't mention Shipping isn't held up by it.
+      let shipFromToSave = null;
+      if (want.shipping === true) {
+        const { country } = await getLocaleSettings(env.DB);
+        const sent = body.shipFrom && typeof body.shipFrom === "object" ? body.shipFrom : null;
+        if (sent) { const bad = shipFromFormatError_(sent, country); if (bad) return jsonResponse({ status: "error", message: "Ship-from address: " + bad }, 400); }
+        const missing = shipFromMissing(sent || await getShipFromAddress(env.DB, env), country);
+        if (!env.SHIPPO_API_KEY || missing.length) {
+          const need = [!env.SHIPPO_API_KEY ? (isDesktopEdition(env) ? "a Shippo key (Global settings → Carrier shipping (Shippo))" : "a Shippo key (the SHIPPO_API_KEY secret — see docs/configuration.md)") : "",
+            missing.length ? "in the Ship-from address: " + missing.join(", ") : ""].filter(Boolean).join(", and ");
+          return jsonResponse({ status: "error", code: "shipping_setup", shippoKey: !!env.SHIPPO_API_KEY, missing,
+            message: `Shipping needs ${need}. Fill ${missing.length && env.SHIPPO_API_KEY ? "them" : "it"} in, or untick Shipping.` }, 400);
+        }
+        shipFromToSave = sent ? { a: sent, country } : null;
+      }
+      if (shipFromToSave) {
+        const before = await getShipFromAddress(env.DB, env);
+        const shipFrom = await setShipFromAddress(env.DB, shipFromToSave.a, shipFromToSave.country);
+        audit({ orgId: null, orderId: null, action: "settings.ship_from_set", detail: { from: before, to: shipFrom } });
       }
       const changes = {};
       for (const f of FEATURES) if (typeof want[f.key] === "boolean" && want[f.key] !== before[f.key]) changes[f.key] = { from: before[f.key], to: want[f.key] };
@@ -3068,7 +3146,7 @@ export async function onRequestPost(context) {
       const features = await setFeatures(env.DB, want);
       // Everything reads the switches from the cached catalog — refresh it.
       try { await bumpCatalogVersion(env.DB); invalidateCatalogVersionCache(); } catch (e) { console.error("catalog version bump failed:", e); }
-      return jsonResponse({ status: "ok", features, list: FEATURES });
+      return jsonResponse({ status: "ok", features, list: FEATURES, locked: lockedFeatures_, shippoKey: !!env.SHIPPO_API_KEY });
     }
     if (body.action === "getShipFromAddress") {
       const shipFrom = await getShipFromAddress(env.DB, env);
@@ -3076,17 +3154,9 @@ export async function onRequestPost(context) {
     }
     if (body.action === "updateShipFromAddress") {
       const a = body.shipFrom || {};
-      // US formats only when the install is in the US (Region); elsewhere both are free text.
       const { country } = await getLocaleSettings(env.DB);
-      if (country === "US" && a.zip && !/^\d{5}(-\d{4})?$/.test(String(a.zip).trim())) {
-        return jsonResponse({ status: "error", message: "ZIP must be 5 digits (or ZIP+4)" }, 400);
-      }
-      if (country === "US" && a.state && !/^[A-Za-z]{2}$/.test(String(a.state).trim())) {
-        return jsonResponse({ status: "error", message: "State must be a 2-letter code" }, 400);
-      }
-      if (a.email && !/^\S+@\S+\.\S+$/.test(String(a.email).trim())) {
-        return jsonResponse({ status: "error", message: "That doesn't look like a valid email" }, 400);
-      }
+      const bad = shipFromFormatError_(a, country);
+      if (bad) return jsonResponse({ status: "error", message: bad }, 400);
       const before = await getShipFromAddress(env.DB, env);
       const shipFrom = await setShipFromAddress(env.DB, a, country);
       audit({ orgId: null, orderId: null, action: "settings.ship_from_set", detail: { from: before, to: shipFrom } });
@@ -4887,6 +4957,11 @@ export async function onRequestPost(context) {
     const imageUrls = Array.isArray(body.imageUrls)
       ? body.imageUrls.filter(u => typeof u === "string" && /^https?:\/\//i.test(u)).slice(0, 5)
       : [];
+    // The desktop program: the customer can't open its pictures or a page on this computer, so the
+    // pictures uploaded here go in the email as attachments, and the customer replies to it.
+    const desktop = isDesktopEdition(env);
+    const proof = desktop ? await proofAttachments_(env, imageUrls) : { linked: imageUrls, attachments: [] };
+    if (proof.error) return jsonResponse({ status: "error", message: proof.error }, 400);
 
     let sent = 0, skipped = 0;
     const skippedReasons = [];
@@ -4934,14 +5009,48 @@ export async function onRequestPost(context) {
         orderId,
         orgName: order.orgId,
         message,
-        imageUrls,
-        verifyUrl,
+        imageUrls: proof.linked,
+        attachments: proof.attachments,
+        verifyUrl: desktop ? "" : verifyUrl,
       });
 
       if (emailSent) sent++; else { skipped++; skippedReasons.push(orderId + ": email failed"); }
     }
 
     return jsonResponse({ status: "ok", sent, skipped, skippedReasons });
+  }
+
+  // The pictures for an emailed proof, in the desktop program: those stored here (R2_PUBLIC_BASE, the
+  // IMAGES bucket) become attachments; any other https picture stays a link. At most 15 MB in all,
+  // so the email stays inside what mailboxes accept (about 25 MB once encoded).
+  async function proofAttachments_(env, urls) {
+    const base = String(env.R2_PUBLIC_BASE || "").replace(/\/+$/, "") + "/";
+    const attachments = [], linked = [];
+    let total = 0;
+    for (const u of urls) {
+      if (!env.IMAGES || base === "/" || !u.startsWith(base)) { linked.push(u); continue; }
+      const key = decodeURIComponent(u.slice(base.length).split(/[?#]/)[0]);
+      const obj = await env.IMAGES.get(key);
+      if (!obj) return { error: "A picture for the proof isn't stored any more: " + key + ". Upload it again." };
+      const bytes = new Uint8Array(await obj.arrayBuffer());
+      total += bytes.length;
+      if (total > 15 * 1024 * 1024) return { error: "The pictures add up to more than 15 MB, too big for one email. Use smaller or fewer pictures." };
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      const type = (obj.httpMetadata && obj.httpMetadata.contentType) || "image/jpeg";
+      attachments.push({ filename: "proof-" + (attachments.length + 1) + "." + (type.split("/")[1] || "jpg").replace(/[^a-z0-9]/g, ""),
+        contentType: type, contentBase64: btoa(bin), cid: "proof" + (attachments.length + 1) });
+    }
+    return { attachments, linked };
+  }
+
+  // A ship-from address's format, by Region: US ZIP and 2-letter state only in the US (elsewhere both
+  // are free text), and an email that looks like one. "" when fine.
+  function shipFromFormatError_(a, country) {
+    if (country === "US" && a.zip && !/^\d{5}(-\d{4})?$/.test(String(a.zip).trim())) return "ZIP must be 5 digits (or ZIP+4)";
+    if (country === "US" && a.state && !/^[A-Za-z]{2}$/.test(String(a.state).trim())) return "State must be a 2-letter code";
+    if (a.email && !/^\S+@\S+\.\S+$/.test(String(a.email).trim())) return "That doesn't look like a valid email";
+    return "";
   }
 
   // ---- listDesignVerifications — latest verification per order for an org -----
@@ -5112,6 +5221,22 @@ export async function onRequestPost(context) {
   // owed, lets the customer choose how they'll get the order (unless `allowDelivery` is false) and
   // pay the balance. Sending again reuses the order's token, so an earlier email's link still works.
   // If the email can't be sent the invoice still exists — the answer carries the link to pass on.
+  // ---- getInvoiceDocument — the desktop program's "Save invoice PDF…": the invoice as a printable
+  // page (email.js invoiceDocument), which the program makes into a PDF and saves where it's asked.
+  if (body.action === "getInvoiceDocument") {
+    const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
+    if (denied) return denied;
+    if (!isDesktopEdition(env)) return jsonResponse({ status: "error", message: "Saving an invoice as a PDF is part of the desktop program." }, 400);
+    const orderId = String(body.orderId || "").trim();
+    if (!ORDER_ID_RE.test(orderId)) return jsonResponse({ status: "error", message: "Invalid order ID" }, 400);
+    const order = await getOrderById(env.DB, orderId);
+    if (!order || (body.org && order.orgId !== body.org)) return jsonResponse({ status: "error", message: "Order not found" }, 404);
+    if (order.voidedAt) return jsonResponse({ status: "error", message: "This order was voided — there's nothing to invoice" }, 400);
+    if (!(order.items || []).some(it => !it.cancelDate)) return jsonResponse({ status: "error", message: "Every item on this order is cancelled — there's nothing to invoice" }, 400);
+    const org = await getOrgById(env.DB, order.orgId);
+    return jsonResponse({ status: "ok", document: await invoiceDocument(env, order, { orgName: (org && org.name) || "" }) });
+  }
+
   if (body.action === "sendInvoice") {
     const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
     if (denied) return denied;
@@ -5130,10 +5255,13 @@ export async function onRequestPost(context) {
     if (typed && typed !== order.contact) { await updateOrderCustomerInfo(env.DB, orderId, { contact: typed }); order = await getOrderById(env.DB, orderId); }
     const org = await getOrgById(env.DB, order.orgId);
     if (!org) return jsonResponse({ status: "error", message: "Unknown org" }, 404);
-    const allowDelivery = body.allowDelivery !== false;
+    // The desktop program isn't on the web, so its invoice has no page to open: the email carries
+    // the whole invoice and how to pay, and the customer can't choose delivery online.
+    const desktop = isDesktopEdition(env);
+    const allowDelivery = !desktop && body.allowDelivery !== false;
     const inv = await sendOrderInvoice(env.DB, { orderId, orgId: order.orgId, sentTo: email, message: body.message, allowDelivery });
     const base = org.subdomain ? `https://${org.subdomain}.${rootDomain(env)}` : new URL(request.url).origin;
-    const url = `${base}/?invoice=${inv.token}`;
+    const url = desktop ? "" : `${base}/?invoice=${inv.token}`;
     const emailSent = await sendInvoiceEmail(env, { order: { ...order, manualShipping: inv.deliveryChoice === "shipping-quote" },
       orgName: org.name || "", invoiceUrl: url, message: inv.message, allowDelivery });
     audit({ orgId: order.orgId, orderId, action: "order.invoice_sent",

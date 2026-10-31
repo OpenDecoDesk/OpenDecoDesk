@@ -85,6 +85,16 @@ and the tax and shipping features are built around a US business (see [Region](#
 - An admin panel on its own address, with a sign-in for each person, three roles (back office, manager, admin), two-step sign-in that can be required, and an audit log.
 - [Feature switches](#feature-switches), so the parts you don't use are out of the way.
 
+## The desktop version
+
+For a shop that doesn't sell online: the back office as a program on one computer, for Windows and
+Mac, with no Cloudflare account, no domain and no web shop. Email is optional, through your own
+mailbox (Gmail, iCloud, your web host's mail). It is the same code, run by
+Cloudflare's local runtime inside a desktop window, with the database and files in your user
+folder. On first start it asks for your account, then opens Global settings for your business's
+details; a default shop is there for the orders you enter. Backups, restoring one and getting back
+in when locked out are in its menu. Early: see [docs/desktop.md](docs/desktop.md).
+
 ## Requirements
 
 - A **Cloudflare account**. R2 (file storage) is optional: without it the installer carries on,
@@ -168,7 +178,9 @@ change is written to the audit log.
   Package sizes, the ship-from address, the tracking checks in the morning roll-up and the "your order has
   shipped" email. Off: a shop's "Shipping" delivery option isn't offered (local pickup and the shop's own
   flat-fee options still are), and an order can still be marked shipped by hand. Carrier shipping also
-  needs the country in Region to be `US`; either one being off turns it off.
+  needs the country in Region to be `US`; either one being off turns it off. It can only be saved on
+  with a Shippo key (`SHIPPO_API_KEY`) and a complete ship-from address (every field): in Global
+  settings each feature opens to show what it needs when ticked, and nothing saves until it's there.
 - **Design approval** — emailing a customer a design proof to approve, and the "Design approved" stage.
   Off: no order waits for an approval, the stage can't be set, and a link already emailed tells the
   customer that approval isn't available.
@@ -221,6 +233,7 @@ accepted, so the check catches a clearly wrong state, not every possible mismatc
 | [docs/email.md](docs/email.md) | Cloudflare email or Resend, verifying your domain, which inbox gets what |
 | [docs/sales-tax.md](docs/sales-tax.md) | The rate and home state, prices with or without tax, what is taxed, the reports |
 | [docs/operations.md](docs/operations.md) | The morning roll-up, backups and restoring, migrations, upgrading |
+| [docs/desktop.md](docs/desktop.md) | The desktop version: what it leaves out, where its data is, backups, building it |
 | [docs/architecture.md](docs/architecture.md) | How a request flows, the files, the data, the security model |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Running the tests, how they're written, the rules the code keeps |
 | [SECURITY.md](SECURITY.md) | Reporting a vulnerability |
