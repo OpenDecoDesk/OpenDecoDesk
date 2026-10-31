@@ -204,7 +204,13 @@ export async function onRequestGet(context){
     // as hostConfig's rootDomain() does, written out here because older tests load this file with
     // its hostConfig import line removed.
     const siteRoot = env && env.ROOT_DOMAIN ? String(env.ROOT_DOMAIN).trim().toLowerCase().replace(/\.$/, "").replace(/^www\./, "") : "";
-    return jsonResponse({status:"admin", business: catalogData.business || {}, country, features, site: { rootDomain: siteRoot }});
+    // edition: "desktop" tells the admin it runs inside the desktop program (hostConfig.js), so it
+    // leaves out what needs the internet; desktopSuppliers / desktopEmail: the owner turned supplier
+    // connections on there, or set up email (hostConfig.js desktopSuppliersOn / desktopEmailOn,
+    // repeated here to keep this file's one import).
+    return jsonResponse({status:"admin", business: catalogData.business || {}, country, features, site: { rootDomain: siteRoot },
+      ...(host.desktop ? {edition:"desktop", ...(String(env.DESKTOP_SUPPLIERS || "") === "on" ? {desktopSuppliers:true} : {}),
+        ...(String(env.DESKTOP_EMAIL || "") === "on" ? {desktopEmail:true} : {})} : {})});
   } else {
     // Unknown hostname — refuse rather than treating it like a known host.
     return jsonResponse({status:"error", message:"Unrecognized host", business: catalogData.business || {}, country, features}, 404);

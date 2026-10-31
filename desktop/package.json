@@ -1,0 +1,97 @@
+{
+  "name": "opendecodesk-desktop",
+  "productName": "OpenDecoDesk",
+  "version": "0.1.0",
+  "description": "OpenDecoDesk's back office as a program on one computer: orders, inventory, expenses and production, with no web shop and no email.",
+  "private": true,
+  "main": "main.js",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "electron .",
+    "serve": "node server.js",
+    "dist:win": "electron-builder --win zip --x64",
+    "dist:mac": "electron-builder --mac zip --arm64 --x64"
+  },
+  "dependencies": {
+    "miniflare": "4.20260708.1",
+    "nodemailer": "10.1.0"
+  },
+  "devDependencies": {
+    "electron": "44.10.0",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "org.opendecodesk.desktop",
+    "productName": "OpenDecoDesk",
+    "asar": false,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "server.js",
+      "migrate.js",
+      "files.js",
+      "mailer.js",
+      "r2-files-binding.mjs",
+      "log.js",
+      "icons/icon.png",
+      "package.json",
+      "!node_modules/workerd/bin/**",
+      "!node_modules/sharp/**",
+      "!node_modules/@img/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../src",
+        "to": "src"
+      },
+      {
+        "from": "../functions",
+        "to": "functions"
+      },
+      {
+        "from": "../public",
+        "to": "public"
+      },
+      {
+        "from": "../migrations",
+        "to": "migrations"
+      },
+      {
+        "from": "../schema.sql",
+        "to": "schema.sql"
+      },
+      {
+        "from": "../LICENSE",
+        "to": "LICENSE"
+      },
+      {
+        "from": "../NOTICE",
+        "to": "NOTICE"
+      },
+      {
+        "from": "licenses",
+        "to": "licenses"
+      }
+    ],
+    "win": {
+      "target": "zip",
+      "icon": "icons/icon.ico",
+      "artifactName": "OpenDecoDesk-${version}-windows-x64.zip"
+    },
+    "mac": {
+      "target": "zip",
+      "category": "public.app-category.business",
+      "icon": "icons/icon.icns",
+      "identity": null,
+      "artifactName": "OpenDecoDesk-${version}-mac-${arch}.zip"
+    }
+  },
+  "repository": "github:opendecodesk/opendecodesk",
+  "author": "OpenDecoDesk contributors"
+}

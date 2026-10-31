@@ -9,9 +9,7 @@
 <meta property="og:title" content="Order shop">
 <meta property="og:description" content="Order custom embroidered and decorated apparel. Each organization gets its own shop with its own colors and pricing.">
 <meta property="og:type" content="website">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..900&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="/vendor/fonts/fonts.css" rel="stylesheet">
 <style>
   :root{
     --canvas: #1B1D22;
@@ -342,6 +340,28 @@
   .admin-nav-menu .admin-nav-btn{display:block; width:100%; text-align:left; border-color:transparent; background:#fff; white-space:nowrap;}
   .admin-nav-menu .admin-nav-btn:hover{background:var(--accent-soft);}
   .admin-nav-menu .admin-nav-btn.active{background:var(--accent); color:#fff;}
+  /* Global settings → Features (globalFeaturesHtml_ in admin.js): a switch per row; a ticked one opens
+     its panel underneath — what it needs, with the required fields marked. */
+  .g-feat{border-top:1px solid var(--line,#e5e5e5);padding:10px 0 4px}
+  .g-feat-sub{margin-left:26px;border-top:1px dashed var(--line,#e5e5e5)}
+  .g-feat-head{margin-bottom:2px}
+  .g-feat-desc{margin:0 0 8px 26px}
+  .g-feat-panel{margin:4px 0 12px 26px;padding:12px 14px;border-left:3px solid var(--accent,#1f5f8b);background:rgba(127,127,127,.06);border-radius:0 6px 6px 0}
+  .g-feat-panel[hidden]{display:none}
+  .g-feat-req{font-size:13px;font-weight:600;margin:0 0 10px}
+  .g-req{color:#b03a2e;font-weight:700}
+  /* Small action menus on admin screens (adminMenuHtml_ in admin.js): a button that opens a short list.
+     The list is fixed-positioned when it opens, so a scrolling table can't cut it off. */
+  .admin-menu{display:inline-block;}
+  .admin-menu > .admin-btn::after{content:" \25be"; font-size:9px; opacity:.7;}
+  .admin-menu.admin-menu-dots > .admin-btn::after{content:none;}
+  .admin-menu-list{position:fixed; z-index:960; background:#fff; border:1px solid var(--card-line); border-radius:6px; box-shadow:0 6px 18px rgba(0,0,0,.16); min-width:210px; padding:5px; display:none; flex-direction:column; gap:2px;}
+  .admin-menu.open .admin-menu-list{display:flex;}
+  .admin-menu-item{display:block; width:100%; text-align:left; font-size:13px; padding:6px 10px; border:0; border-radius:4px; background:#fff; color:#111; cursor:pointer; white-space:nowrap;}
+  .admin-menu-item:hover{background:var(--accent-soft);}
+  .admin-menu-item:focus-visible{background:var(--accent-soft); outline:2px solid var(--accent); outline-offset:-2px;}
+  .admin-menu-item.danger{color:#b03a2e;}
+  .admin-menu-sep{border-top:1px solid var(--card-line); margin:4px 2px;}
   .admin-summary{font-family:'IBM Plex Mono',monospace; font-size:13px; margin-bottom:14px; color:var(--ink-soft);}
   .admin-summary strong{color:var(--ink);}
   textarea.export-box{
@@ -951,6 +971,20 @@ function applyCountry_(c){ siteCountry = String(c || "").toUpperCase() === "OTHE
 let siteFeatures = {};
 function applyFeatures_(f){ siteFeatures = (f && typeof f === "object") ? f : {}; }
 function featureOn_(key){ return siteFeatures[key] !== false; }
+// "desktop" when the admin runs inside the desktop program (desktop/, /api/catalog's edition): the
+// admin then leaves out what needs the internet. Only the admin answer carries it.
+let siteEdition = "", siteDesktopSuppliers = false, siteDesktopEmail = false;
+function applyEdition_(e, suppliers, email){ siteEdition = e === "desktop" ? "desktop" : ""; siteDesktopSuppliers = siteEdition === "desktop" && suppliers === true; siteDesktopEmail = siteEdition === "desktop" && email === true; }
+// The admin's tab and home-screen icon: OpenDecoDesk's logo (the website's, and the desktop
+// program's). Only the admin: a shop and its customers' pages are the business's, not ours.
+function applyAdminIcon_(){
+  if(document.querySelector('link[rel="icon"]')) return;
+  for(const [rel, href, type] of [["icon", "/images/icon.svg", "image/svg+xml"], ["apple-touch-icon", "/images/icon-180.png", ""]]){
+    const l = document.createElement("link");
+    l.rel = rel; l.href = href; if(type) l.type = type;
+    document.head.appendChild(l);
+  }
+}
 function applyBusiness_(b){
   if(b && typeof b === "object") business = Object.assign({}, business, b);
   VENMO_USERNAME = business.venmo || "";
@@ -1184,7 +1218,7 @@ async function resolveCurrentOrg(){
     applyBusiness_(data.business);
     applyCountry_(data.country);
     applyFeatures_(data.features);
-    if(data.status === "admin"){ siteInfo_ = data.site || {}; return {admin:true}; }
+    if(data.status === "admin"){ applyEdition_(data.edition, data.desktopSuppliers, data.desktopEmail); applyAdminIcon_(); siteInfo_ = data.site || {}; return {admin:true}; }
     // Global settings → Features → Storefront is off: no shop is served here (see catalog.js).
     if(data.status === "closed") return {closed:true};
     if(data.status !== "ok") return null;

@@ -2396,6 +2396,15 @@ export async function setMachineSettings(db, settings) {
 // to the account) belongs in the secret store; the address itself is printed
 // on every label anyway.
 const SHIP_FROM_DEFAULTS = { name: "", street1: "", city: "", state: "", zip: "", phone: "", email: "" };
+// What a ship-from address still needs while Shipping is on: every field (USPS needs all but the
+// name to sell a label; the name is the sender printed on it). The missing fields' labels, in the
+// form's order and words (by Region), [] when complete.
+export function shipFromMissing(addr, country) {
+  const a = addr || {}, other = localeCountry_(country) === "OTHER";
+  const need = [["name", "Name"], ["street1", "Street address"], ["city", "City"], ["state", other ? "State / region" : "State"],
+    ["zip", other ? "Postal code" : "ZIP"], ["phone", "Phone"], ["email", "Email"]];
+  return need.filter(([k]) => !String(a[k] || "").trim()).map(([, label]) => label);
+}
 
 // Fallback for an install that set the address as environment variables
 // (SHIP_FROM_STREET1 etc.) instead of in Global Settings: quotes keep working
@@ -9096,6 +9105,15 @@ export async function createDesignVerification(db, { token, orgId, orderId, cust
     VALUES (?,?,?,?,?,?,?,?)`)
     .bind(token, orgId, orderId, customerEmail, customerName, message, imagesJson, sentAt)
     .run();
+}
+
+// The desktop program has no page for the customer's answer: they reply to the email, and marking the
+// order Design approved records it on the proofs still waiting (orders.js). Returns how many.
+export async function approvePendingDesignVerifications(db, orderId, respondedAt) {
+  const result = await db.prepare(
+    "UPDATE design_verifications SET status='approved', customerNote='Approved by reply (recorded in the admin)', respondedAt=? WHERE orderId=? AND status='pending'"
+  ).bind(respondedAt, orderId).run();
+  return (result.meta && result.meta.changes) || 0;
 }
 
 // ---- Order invoices (migrations/0053) — a link the customer opens to choose delivery and pay ----

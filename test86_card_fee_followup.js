@@ -59,5 +59,6 @@ const read = (p) => fs.readFileSync(__dirname + "/" + p, "utf8");
   const hook = read("functions/api/stripe-webhook.js"), w = read("src/worker.js");
   console.log("the webhook retries the fee after responding (waitUntil):", /context\.waitUntil\(fillFeeLater_\(env, paymentRef\)\)/.test(hook) && /setCardFeeByRef\(env\.DB, paymentIntentId, fee\)/.test(hook));
   console.log("it only retries when the first read gave 0:", /inserted && feeCents === 0/.test(hook));
-  console.log("the scheduled run fills missing fees before the roll-up:", w.indexOf("fillMissingCardFees(env)") > 0 && w.indexOf("fillMissingCardFees(env)") < w.indexOf("runDailyDigest(env"));
+  // (The cloud path's roll-up is the last call in handleScheduled; the desktop program's, earlier, has no Stripe.)
+  console.log("the scheduled run fills missing fees before the roll-up:", w.indexOf("fillMissingCardFees(env)") > 0 && w.indexOf("fillMissingCardFees(env)") < w.lastIndexOf("runDailyDigest(env"));
 })().catch((e) => { console.log("test86 crashed:", false); console.error(e); process.exit(1); });

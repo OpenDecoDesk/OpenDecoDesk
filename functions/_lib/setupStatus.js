@@ -27,6 +27,16 @@ export function setupStatus(env, settings) {
   const { business = {}, salesTax = {}, locale = {} } = settings || {};
   const items = [];
   const add = (key, label, level, ready, affects, note) => items.push({ key, label, level, ready: !!ready, affects, note: note || "" });
+  // The desktop edition (hostConfig.js isDesktopEdition, repeated so this file keeps no imports): no
+  // domain, email, buckets or online services to set up — the desktop program provides the
+  // database, the files and the secrets itself — so only what the person running it must fill in.
+  if (String(env.EDITION || "").trim().toLowerCase() === "desktop") {
+    add("database", "Database", "required", !!(env.DB && typeof env.DB.prepare === "function"), "Everything: orders, shops, products, settings.");
+    addBusiness_(add, business, env);
+    addSalesTax_(add, salesTax);
+    addTimeZone_(add, locale, env);
+    return items;
+  }
 
   const root = String(env.ROOT_DOMAIN || "").trim().toLowerCase();
   add("rootDomain", "Root domain", "required", set(root) && root !== PLACEHOLDER_ROOT,
@@ -57,19 +67,9 @@ export function setupStatus(env, settings) {
   add("receipts", "Receipts bucket", "optional", !!env.RECEIPTS, "Attaching receipts to expenses and vendor invoices to stock received (private files).", env.RECEIPTS ? "" : NO_STORAGE);
   add("designs", "Designs bucket", "optional", !!env.DESIGNS, "Embroidery design files and files attached to order lines (private files).", env.DESIGNS ? "" : NO_STORAGE);
 
-  const inbox = set(business.ownerEmail) || set(env.OWNER_EMAIL);
-  add("business", "Business profile", "recommended", set(business.name) && inbox,
-    "The name customers see and where notices to you are sent. Without a name the site says “Our shop”; without your inbox, notices go to owner@ your domain.",
-    set(business.name) && inbox ? "" : !set(business.name) ? "No business name yet (Business profile, below)." : "No inbox for yourself yet (Business profile → Your inbox, below).");
-
-  const rate = Number(salesTax.rateBps) || 0, home = set(salesTax.jurisdiction);
-  add("salesTax", "Sales tax", "recommended", rate > 0 && home,
-    "Whether sales tax is collected on orders and shown in the reports.",
-    rate > 0 && home ? "" : rate > 0 ? "A rate is set but no home state, so no order counts as out of state." : "No rate is set, so no sales tax is collected. Leave it this way only if you don't collect any.");
-
-  add("timeZone", "Time zone", "recommended", set(locale.timeZone) || set(env.TIMEZONE),
-    "The hour the morning roll-up arrives and the dates printed in emails.",
-    set(locale.timeZone) ? "" : set(env.TIMEZONE) ? "Using the TIMEZONE variable." : "Not set, so UTC is used (Region, below).");
+  addBusiness_(add, business, env);
+  addSalesTax_(add, salesTax);
+  addTimeZone_(add, locale, env);
 
   const sk = set(env.STRIPE_SECRET_KEY), wh = set(env.STRIPE_WEBHOOK_SECRET);
   add("stripe", "Card payments (Stripe)", "optional", sk && wh,
@@ -105,6 +105,33 @@ export function setupStatus(env, settings) {
     "Only for starting the morning roll-up by hand (POST /api/daily-digest). The scheduled roll-up doesn't need it.");
 
   return items;
+}
+
+// The three settings both editions list. The desktop edition sends no email, so there the business
+// profile only needs a name.
+function addBusiness_(add, business, env) {
+  if (String(env.EDITION || "").trim().toLowerCase() === "desktop") {
+    add("business", "Business profile", "recommended", set(business.name),
+      "Your business's name and address, printed on packing slips, invoices and reports. Without a name they say “Our shop”.",
+      set(business.name) ? "" : "No business name yet (Business profile, below).");
+    return;
+  }
+  const inbox = set(business.ownerEmail) || set(env.OWNER_EMAIL);
+  add("business", "Business profile", "recommended", set(business.name) && inbox,
+    "The name customers see and where notices to you are sent. Without a name the site says “Our shop”; without your inbox, notices go to owner@ your domain.",
+    set(business.name) && inbox ? "" : !set(business.name) ? "No business name yet (Business profile, below)." : "No inbox for yourself yet (Business profile → Your inbox, below).");
+}
+function addSalesTax_(add, salesTax) {
+  const rate = Number(salesTax.rateBps) || 0, home = set(salesTax.jurisdiction);
+  add("salesTax", "Sales tax", "recommended", rate > 0 && home,
+    "Whether sales tax is collected on orders and shown in the reports.",
+    rate > 0 && home ? "" : rate > 0 ? "A rate is set but no home state, so no order counts as out of state." : "No rate is set, so no sales tax is collected. Leave it this way only if you don't collect any.");
+}
+function addTimeZone_(add, locale, env) {
+  const desktop = String(env.EDITION || "").trim().toLowerCase() === "desktop";
+  add("timeZone", "Time zone", "recommended", set(locale.timeZone) || set(env.TIMEZONE),
+    desktop ? "The dates and times printed on orders and reports." : "The hour the morning roll-up arrives and the dates printed in emails.",
+    set(locale.timeZone) ? "" : set(env.TIMEZONE) ? "Using the TIMEZONE variable." : "Not set, so UTC is used (Region, below).");
 }
 
 // Counts for a one-line summary: how many required / recommended things are still missing.
