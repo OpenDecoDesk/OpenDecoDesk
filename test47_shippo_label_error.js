@@ -79,8 +79,8 @@ async function migratedDb(){
   const adminJs = read("public/admin.js");
   // (Global settings sends the address with the Shipping switch, in updateFeatures — saved together or not at all.)
   console.log("form fields present and wired to updateFeatures' shipFrom:",
-    /id="gShipName"/.test(adminJs) && /id="gShipStreet1"/.test(adminJs) && /id="gShipCity"/.test(adminJs) &&
-    /id="gShipState"/.test(adminJs) && /id="gShipZip"/.test(adminJs) && /id="gShipPhone"/.test(adminJs) && /id="gShipEmail"/.test(adminJs) &&
+    /f\("gShipName"/.test(adminJs) && /f\("gShipStreet1"/.test(adminJs) && /f\("gShipCity"/.test(adminJs) &&
+    /id="gShipState"/.test(adminJs) && /id="gShipZip"/.test(adminJs) && /f\("gShipPhone"/.test(adminJs) && /f\("gShipEmail"/.test(adminJs) &&
     /action: "updateFeatures", key: adminKey, features: want, \.\.\.\(shipFrom \? \{ shipFrom \} : \{\}\)/.test(adminJs) && /action:\s*"getShipFromAddress"/.test(adminJs));
   console.log("the old SHIP_FROM_* env vars are referenced ONLY by the temporary bridge in db.js (nowhere in the client or the API handlers):",
     !/SHIP_FROM_(NAME|STREET1|CITY|STATE|ZIP|PHONE|EMAIL)/.test(adminJs) &&

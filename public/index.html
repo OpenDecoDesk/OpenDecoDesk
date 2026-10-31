@@ -340,6 +340,16 @@
   .admin-nav-menu .admin-nav-btn{display:block; width:100%; text-align:left; border-color:transparent; background:#fff; white-space:nowrap;}
   .admin-nav-menu .admin-nav-btn:hover{background:var(--accent-soft);}
   .admin-nav-menu .admin-nav-btn.active{background:var(--accent); color:#fff;}
+  /* Global settings → Features (globalFeaturesHtml_ in admin.js): a switch per row; a ticked one opens
+     its panel underneath — what it needs, with the required fields marked. */
+  .g-feat{border-top:1px solid var(--line,#e5e5e5);padding:10px 0 4px}
+  .g-feat-sub{margin-left:26px;border-top:1px dashed var(--line,#e5e5e5)}
+  .g-feat-head{margin-bottom:2px}
+  .g-feat-desc{margin:0 0 8px 26px}
+  .g-feat-panel{margin:4px 0 12px 26px;padding:12px 14px;border-left:3px solid var(--accent,#1f5f8b);background:rgba(127,127,127,.06);border-radius:0 6px 6px 0}
+  .g-feat-panel[hidden]{display:none}
+  .g-feat-req{font-size:13px;font-weight:600;margin:0 0 10px}
+  .g-req{color:#b03a2e;font-weight:700}
   /* Small action menus on admin screens (adminMenuHtml_ in admin.js): a button that opens a short list.
      The list is fixed-positioned when it opens, so a scrolling table can't cut it off. */
   .admin-menu{display:inline-block;}

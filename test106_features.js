@@ -567,7 +567,8 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
   ok("one checkbox per feature, all ticked, each with its name and sentence", boxes().length === 5 && boxes().every(b => b.checked) && boxes().map(b => b.dataset.feature).join() === ALL.join() &&
     lib.FEATURES.every(f => doc.getElementById("gFeatures").textContent.includes(f.label) && doc.getElementById("gFeatures").textContent.includes(f.description)));
   ok("it says inventory is always on", /Stock of blanks and transfers, and cost of goods, are always on/.test(doc.getElementById("adminPanel").textContent));
-  ok("all on: the ship-from address and Machine Files sections are shown", doc.getElementById("gShipFromSection").style.display !== "none" && doc.getElementById("gMachineSection").style.display !== "none");
+  ok("all on: Shipping's and Production's panels are open (ship-from address, Machine Files)", !doc.getElementById("gPanel-shipping").hidden && !!doc.getElementById("gShipFromSection") &&
+    !doc.getElementById("gPanel-production").hidden && !!doc.getElementById("gMachineSection"));
   const auditBefore = d1.q("SELECT count(*) n FROM audit_log WHERE action='settings.features_set'")[0].n;
   boxes().find(b => b.dataset.feature === "bookkeeping").checked = false;
   boxes().find(b => b.dataset.feature === "shipping").checked = false;
@@ -582,7 +583,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
   sent.length = 0;
   await go("settings"); await settle(() => doc.querySelectorAll("#gFeatures .gFeature").length === 5);
   ok("the form comes back showing what's saved, without the switched-off feature's section", boxes().filter(b => !b.checked).map(b => b.dataset.feature).join() === "bookkeeping,shipping" &&
-    doc.getElementById("gShipFromSection").style.display === "none" && doc.getElementById("gMachineSection").style.display !== "none");
+    doc.getElementById("gPanel-shipping").hidden && !doc.getElementById("gPanel-production").hidden);
   boxes().forEach(b => { b.checked = true; });
   await w.submitGlobalSettings(); await tick(80);
   ok("ticking them again turns everything back on", ALL.every(k => w.eval(`featureOn_("${k}")`)) && Object.values(await lib.getFeatures(d1)).every(Boolean) && desktop().includes("Expenses") && mobile().includes("Package sizes"));
@@ -627,15 +628,17 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
     // The page: ticking Shipping shows the address; Save checks it before sending anything.
     await setF({ shipping: false });
     await go("settings"); await settle(() => doc.querySelectorAll("#gFeatures .gFeature").length === 5);
-    const shipBox = boxes().find(b => b.dataset.feature === "shipping"), section = doc.getElementById("gShipFromSection");
-    ok("Shipping off: no Ship-from section", !shipBox.checked && section.style.display === "none");
+    const shipBox = boxes().find(b => b.dataset.feature === "shipping"), section = doc.getElementById("gPanel-shipping");
+    ok("Shipping off: its panel is closed", !shipBox.checked && section.hidden);
     shipBox.checked = true; shipBox.dispatchEvent(new w.Event("change"));
-    ok("ticking Shipping shows it at once, with what's saved", section.style.display !== "none" && doc.getElementById("gShipStreet1").value === "5 Oak Ave" && /Required while Shipping is on/.test(section.textContent));
+    ok("ticking Shipping opens it at once, with what's saved, saying every field is required", !section.hidden && doc.getElementById("gShipStreet1").value === "5 Oak Ave" &&
+      /All fields below are required while Shipping is on/.test(section.textContent) && section.querySelectorAll(".g-req").length >= 8);
+    ok("on a cloud install the key is the server's secret, shown as set or not — never a box to type it in", /✓ set \(the SHIPPO_API_KEY secret\)/.test(section.textContent) && !doc.getElementById("gShippoKey"));
     doc.getElementById("gShipPhone").value = ""; doc.getElementById("gShipZip").value = "abc";
     sent.length = 0;
     await w.submitGlobalSettings(); await tick(60);
     const err = doc.getElementById("globalSettingsError").textContent;
-    ok("Save with a field missing sends nothing at all, and says what to fill in", sent.length === 0 && /Nothing was saved/.test(err) && /Phone/.test(err) && /ZIP must be 5 digits/.test(err) &&
+    ok("Save with a field missing sends nothing at all, and says what to fill in", sent.length === 0 && /Nothing was saved/.test(err) && /the ship-from phone/.test(err) && /a 5-digit ZIP/.test(err) &&
       doc.getElementById("gShipPhone").style.outline.includes("solid") && doc.getElementById("gShipZip").style.outline.includes("solid") && !doc.getElementById("gShipCity").style.outline);
     doc.getElementById("gShipPhone").value = "614-555-0199"; doc.getElementById("gShipZip").value = "43004";
     w.eval("window._gShippoKey = false");

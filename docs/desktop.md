@@ -83,20 +83,33 @@ certificate, both paid). Signing can be added to the workflow later without chan
 3. Add products under Manage catalog (or Shop setup, which builds them from blanks), then take
    orders with **+ Local sale** on the Orders page.
 
+## Features: what's on, and what each needs
+
+**Settings → Global settings, email and shipping…** opens Global settings. Its **Features** list has
+a box per part of the program: Production, Bookkeeping, Shipping, Email (with Design approval under
+it) and Supplier connections. Ticking one opens its panel right under it, with what it needs;
+every field in an open panel is required (marked `*`). **Save global settings** checks every open
+panel first and saves nothing until they're complete; it names what's missing and outlines it, or
+you untick the feature. Unticking closes the panel and keeps what's in it for next time.
+
+Saving hands the program its part (the Shippo key, the mailbox, supplier connections) all at once:
+it signs in to a new mailbox first, then restarts for a moment and the page reloads.
+
 ## Email
 
 Off until you set it up; then the program sends from your own mailbox, as if you had sent the
 emails yourself: order received, payment confirmed, shipped (with the tracking link), cancelled,
 invoices, design proofs, and your morning roll-up. It needs the internet.
 
-1. **Settings → Global settings, email and shipping…**, then *Email*. Choose your mailbox (Gmail or
-   Google Workspace, iCloud Mail, Fastmail, Zoho Mail, or another provider) and type its address and
-   password. Gmail, iCloud and Fastmail want an **app password**, made in the account's security
-   settings, not your normal one. For another provider (your web host's mail, say), open *Server
-   settings* and type its outgoing (SMTP) server, port and security from its help pages.
-2. **Turn on email**. The program signs in to the server first: a wrong password or server is
-   reported then, and nothing is saved. Once it signs in, the program restarts for a moment.
-3. **Tools → Communications → Send a test email** shows what your mail server answered.
+1. Global settings → Features: tick **Email**. Choose your mailbox (Gmail or Google Workspace,
+   iCloud Mail, Fastmail, Zoho Mail, or another provider) and type its address and password. Gmail,
+   iCloud and Fastmail want an **app password**, made in the account's security settings, not your
+   normal one. For another provider (your web host's mail, say), open *Server settings* and type its
+   outgoing (SMTP) server, port and security from its help pages.
+2. **Save global settings**. The program signs in to the server first: a wrong password or server
+   is reported then, and nothing is saved.
+3. **Send a test email** in the Email panel (or Tools → Communications) shows what your mail server
+   answered.
 
 The password is kept with the program's other secrets in `desktop.json` (encrypted where the system
 has a keychain), never in the database, and the Worker never sees it: it hands each message to the
@@ -121,7 +134,8 @@ What's different from a cloud install:
 - Microsoft 365 and Outlook.com mailboxes need "Sign in with Microsoft", which isn't supported yet.
 - Gmail sends at most about 500 emails a day (Google Workspace 2,000).
 
-**Turn off email** sends nothing more and forgets the password, and switches Design approval off.
+Unticking **Email** (and saving) sends nothing more and switches Design approval off; the mailbox
+and its password are kept for when you tick it again.
 
 ### Invoices on paper
 
@@ -130,7 +144,8 @@ same PDF, saved where you choose, to print or send yourself. A paid order's says
 
 ### Design approval
 
-With email on, **Design approval** can be turned on under Global settings → Features. Then, as on a
+**Design approval** sits under Email in Global settings → Features, and can be ticked once Email
+is. Then, as on a
 cloud install, orders with free-form personalization wait for the customer's approval before they
 are made, and the Orders screen has **✉ Send verification** for the selected orders.
 
@@ -159,25 +174,24 @@ and delivered from the order's stage list. Mailing labels and packing slips prin
 With a key from your Shippo account, the program can get carrier rates, buy and print labels, and
 follow tracking. This needs the internet, and labels are paid to Shippo.
 
-1. **Settings → Global settings, email and shipping…**, then *Carrier shipping (Shippo)*: paste
-   the API token from Shippo (its Settings → API) and choose **Save key**. The program restarts for
-   a moment. The key is kept with the program's other secrets in `desktop.json`, encrypted where
-   the system has a keychain, and never in the database.
-2. Tick **Shipping** under Features: the **Ship-from address** appears below it. Fill it all in
-   (everything but the name: what USPS needs to sell a label) and **Save global settings**.
-   Nothing is saved while the key or any of the address is missing; the page says what to fill in,
-   or you untick Shipping. Region's country must be the US: carrier rates and labels are US-only,
-   as on a cloud install.
+1. Global settings → Features: tick **Shipping**. Its panel asks for the **Shippo key** (the API
+   token from Shippo: its Settings → API) and the **Ship-from address**, every field of it, the
+   sender printed on each label. **Save global settings**. Nothing is saved while the key or any
+   of the address is missing. Region's country must be the US: carrier rates and labels are
+   US-only, as on a cloud install. The key is kept with the program's other secrets in
+   `desktop.json`, encrypted where the system has a keychain, and never in the database or shown
+   again.
 3. For a shop to offer it, add **Shipping** to the shop under Manage catalog → the shop's
    **Edit** → Delivery & pickup.
 4. An order with an address then has a **Ship** button: it gets the rates and buys the label.
 
 Tracking is checked a minute after the program opens and every two hours while it stays open
 (there is no server running in between). Orders the carrier has picked up are marked shipped, and
-delivered ones delivered. **Check tracking now** on the Orders page does it at once. No email goes
-to the customer from the desktop version.
+delivered ones delivered. **Check tracking now** on the Orders page does it at once. With Email on,
+the customer gets the "your order has shipped" email.
 
-**Remove key** puts shipping back to by hand. Labels already bought stay on their orders.
+**Remove key** in the Shipping panel (with Shipping unticked) puts shipping back to by hand. Labels
+already bought stay on their orders.
 
 ## Supplier connections
 
@@ -187,15 +201,14 @@ unless supplier connections are on.
 
 **Vendor integrations** go further: a supplier's live product data and prices (PromoStandards),
 ordering blanks from it from Blanks to order, and its shipment notices. They need the internet,
-so they are off until you turn them on: **Settings → Global settings, email and shipping…**, then
-**Turn on supplier connections** under *Supplier connections*. The program restarts for a moment,
-and Vendor integrations appear under Settings in the menu, where you add each supplier's login
-as on a cloud install. The logins are saved in the database, encrypted with a key only this
-program holds (`desktop.json`).
+so they are off until you turn them on: Global settings → Features, tick **Supplier connections**
+and **Save global settings**. The program restarts for a moment, and the panel then lists your
+vendors, with **+ Connect a vendor** to add each supplier's login as on a cloud install (there is no
+separate Vendor integrations page in the desktop version). The logins are saved in the database,
+encrypted with a key only this program holds (`desktop.json`).
 
 While the program is open, suppliers' shipment notices are checked a minute after it opens and
-every two hours. Turning supplier connections off hides Vendor integrations again and stops
-anything going to your suppliers. Saved connections and orders already placed are kept for when
+every two hours. Unticking Supplier connections stops anything going to your suppliers. Saved connections and orders already placed are kept for when
 it's turned back on.
 
 ## Where your data is

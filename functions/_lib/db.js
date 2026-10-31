@@ -2352,11 +2352,12 @@ export async function setMachineSettings(db, settings) {
 // to the account) belongs in the secret store; the address itself is printed
 // on every label anyway.
 const SHIP_FROM_DEFAULTS = { name: "", street1: "", city: "", state: "", zip: "", phone: "", email: "" };
-// What a ship-from address still needs before a label can be bought (USPS wants all but the name):
-// the missing fields' labels, in the form's order and words (by Region), [] when complete.
+// What a ship-from address still needs while Shipping is on: every field (USPS needs all but the
+// name to sell a label; the name is the sender printed on it). The missing fields' labels, in the
+// form's order and words (by Region), [] when complete.
 export function shipFromMissing(addr, country) {
   const a = addr || {}, other = localeCountry_(country) === "OTHER";
-  const need = [["street1", "Street address"], ["city", "City"], ["state", other ? "State / region" : "State"],
+  const need = [["name", "Name"], ["street1", "Street address"], ["city", "City"], ["state", other ? "State / region" : "State"],
     ["zip", other ? "Postal code" : "ZIP"], ["phone", "Phone"], ["email", "Email"]];
   return need.filter(([k]) => !String(a[k] || "").trim()).map(([, label]) => label);
 }

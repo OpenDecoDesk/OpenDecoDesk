@@ -10,7 +10,7 @@
 const { app, BrowserWindow, Menu, dialog, shell, ipcMain, safeStorage, session, net } = require("electron");
 const fs = require("fs");
 const path = require("path");
-const { startServer, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, setSmtp, savedSmtpPassword, recordBackup, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
+const { startServer, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, setSmtp, setEmailOn, savedSmtpPassword, recordBackup, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
 const { Mailer, cleanSmtpSettings, cleanPdf } = require("./mailer.js");
 const { createLog } = require("./log.js");
 
@@ -132,14 +132,15 @@ function showPage(url) {
 }
 
 // Stops the server, does `work` while nothing is using the database, starts it again and reloads
-// (at `hash`, an admin page such as "settings", when given).
-async function whileStopped(work, hash) {
+// (at `hash`, an admin page such as "settings", when given) — or not, with { reload: false }, when
+// the page carries on itself (Global settings → Save).
+async function whileStopped(work, hash, { reload = true } = {}) {
   if (busy) return false;
   busy = true;
   try {
     await stop();
     try { await work(); }
-    finally { await start(); if (win) showPage(server.url + (hash ? "#" + hash : "")); }
+    finally { await start(); if (win && reload) showPage(server.url + (hash ? "#" + hash : "")); }
     return true;
   } catch (e) {
     log("Failed: " + ((e && e.stack) || e));
@@ -222,44 +223,58 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// Global settings → Carrier shipping (Shippo): whether a key is set, and setting or removing it.
-// The key goes into desktop.json with the other secrets and the server restarts to read it; the
-// page reloads on Global settings.
+// Global settings → Features: what the program itself keeps for the page's Shipping, Email and
+// Supplier connections panels — never a key or password, only whether one is saved.
 ipcMain.handle("odd:has-shippo-key", async (e) => !!(isOurs(e.senderFrame && e.senderFrame.url) && server && server.hasShippoKey()));
-ipcMain.handle("odd:set-shippo-key", async (e, key) => {
-  if (!isOurs(e.senderFrame && e.senderFrame.url)) return { ok: false, message: "Not allowed." };
-  const k = key == null ? null : String(key).trim();
-  if (k !== null && (!k || k.length > 200 || /\s/.test(k))) return { ok: false, message: "That doesn't look like a Shippo API token." };
-  const ok = await whileStopped(async () => { setShippoKey(dataDir, k, crypt()); }, "settings");
-  return { ok };
-});
-
-// Global settings → Supplier connections: on or off. Saved in desktop.json; the server restarts to
-// read it and the page reloads on Global settings.
 ipcMain.handle("odd:suppliers-on", async (e) => !!(isOurs(e.senderFrame && e.senderFrame.url) && server && server.suppliersOn()));
-ipcMain.handle("odd:set-suppliers-on", async (e, on) => {
-  if (!isOurs(e.senderFrame && e.senderFrame.url)) return { ok: false, message: "Not allowed." };
-  const ok = await whileStopped(async () => { setSupplierConnections(dataDir, !!on, crypt()); }, "settings");
-  return { ok };
-});
-
-// Global settings → Email: the mailbox's settings (never the password), and saving or removing
-// them. New settings are tried first (signing in to the server, sending nothing), so a mistake is
-// reported before anything is saved; then the server restarts with email on and the page reloads.
-// An empty password keeps the saved one.
 ipcMain.handle("odd:email-settings", async (e) => (isOurs(e.senderFrame && e.senderFrame.url) && server ? server.emailSettings() : null));
-ipcMain.handle("odd:set-email", async (e, settings, password) => {
+
+// A mailbox's settings, tried before Global settings saves anything: signs in to the server, sends
+// nothing, saves nothing. An empty password tries the saved one. { ok, message }.
+ipcMain.handle("odd:check-email", async (e, settings, password) => {
   if (!isOurs(e.senderFrame && e.senderFrame.url)) return { ok: false, message: "Not allowed." };
-  if (settings == null) return { ok: await whileStopped(async () => { setSmtp(dataDir, null, null, crypt()); }, "settings") };
   let clean;
   try { clean = cleanSmtpSettings(settings); } catch (err) { return { ok: false, message: err.message }; }
   const pass = String(password || "") || savedSmtpPassword(dataDir, crypt());
   if (!pass) return { ok: false, message: "Enter the mailbox's password (or app password)." };
   const tried = await new Mailer(clean, pass).verify();
-  if (!tried.ok) { log("Email settings not saved: " + tried.message); return tried; }
-  const ok = await whileStopped(async () => { setSmtp(dataDir, clean, String(password || ""), crypt()); }, "settings");
-  if (ok) log("Email set up: " + clean.host + ":" + clean.port);
-  return { ok, message: ok ? tried.message : "Not saved." };
+  if (!tried.ok) log("Email settings not saved: " + tried.message);
+  return tried;
+});
+
+// Global settings → Save: the program's part of it, all at once, with one restart of the server (the
+// page then saves the rest, to the restarted server, and reloads itself):
+//   shippoKey   a new key, null to remove it, or left out
+//   email       { on, settings, password } — on with the mailbox (an empty password keeps the saved
+//               one), or { on: false } to stop sending and keep the mailbox — or left out
+//   suppliers   true / false, or left out
+// The page has checked the mailbox first (odd:check-email). { ok, message }.
+ipcMain.handle("odd:apply-settings", async (e, s) => {
+  if (!isOurs(e.senderFrame && e.senderFrame.url)) return { ok: false, message: "Not allowed." };
+  s = s && typeof s === "object" ? s : {};
+  let key;
+  if (s.shippoKey !== undefined) {
+    key = s.shippoKey == null ? null : String(s.shippoKey).trim();
+    if (key !== null && (!key || key.length > 200 || /\s/.test(key))) return { ok: false, message: "That doesn't look like a Shippo API token." };
+  }
+  let mail = null;
+  if (s.email && typeof s.email === "object") {
+    if (s.email.on) {
+      try { mail = { on: true, settings: cleanSmtpSettings(s.email.settings), password: String(s.email.password || "") }; }
+      catch (err) { return { ok: false, message: err.message }; }
+      if (!mail.password && !savedSmtpPassword(dataDir, crypt())) return { ok: false, message: "Enter the mailbox's password (or app password)." };
+    } else mail = { on: false };
+  }
+  const suppliers = typeof s.suppliers === "boolean" ? s.suppliers : undefined;
+  const ok = await whileStopped(async () => {
+    if (key !== undefined) setShippoKey(dataDir, key, crypt());
+    if (mail && mail.on) setSmtp(dataDir, mail.settings, mail.password, crypt());
+    if (mail) setEmailOn(dataDir, mail.on, crypt());
+    if (suppliers !== undefined) setSupplierConnections(dataDir, suppliers, crypt());
+  }, null, { reload: false });
+  if (ok) log("Settings applied:" + [key !== undefined ? (key ? " Shippo key saved" : " Shippo key removed") : "", mail ? (mail.on ? " email on (" + mail.settings.host + ")" : " email off") : "",
+    suppliers !== undefined ? " supplier connections " + (suppliers ? "on" : "off") : ""].join(""));
+  return { ok, message: ok ? "" : "The program's settings couldn't be saved." };
 });
 
 // Orders → Save invoice PDF…: the invoice page the admin got from the server (orders.js

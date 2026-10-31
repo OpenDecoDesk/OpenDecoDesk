@@ -103,16 +103,24 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   const protect = (t) => "P:" + Buffer.from(t).toString("base64"), unprotect = (t) => Buffer.from(t.slice(2), "base64").toString();
   server.setSmtp(tmp, gmail, "secret app pw", { protect, unprotect });
   ok("where the system has a keychain the password is encrypted with the other secrets", !JSON.stringify(cfgOf()).includes("secret app pw") && server.savedSmtpPassword(tmp, { unprotect }) === "secret app pw");
+  server.setEmailOn(tmp, false, { protect, unprotect });
+  ok("turning email off keeps the mailbox for next time, unused", cfgOf().emailOff === true && cfgOf().smtp.host === "smtp.gmail.com" && server.savedSmtpPassword(tmp, { unprotect }) === "secret app pw");
+  server.setEmailOn(tmp, true, { protect, unprotect });
+  ok("…and on again uses it", !("emailOff" in cfgOf()) && cfgOf().smtp.host === "smtp.gmail.com");
   server.setSmtp(tmp, null, null, { protect, unprotect });
   cfg = cfgOf();
-  ok("turning email off forgets both", !cfg.smtp && server.savedSmtpPassword(tmp, { unprotect }) === "");
+  ok("forgetting the mailbox forgets both", !cfg.smtp && server.savedSmtpPassword(tmp, { unprotect }) === "");
   fs.rmSync(tmp, { recursive: true, force: true });
   const serverSrc = read("desktop/server.js");
-  ok("the Worker gets DESKTOP_EMAIL, the address and the MAILER binding — never the password", /\.\.\.withoutMailbox_\(secrets\)/.test(serverSrc) && /delete out\.SMTP_PASSWORD/.test(serverSrc) &&
+  ok("the Worker gets DESKTOP_EMAIL, the address and the MAILER binding — never the password — and only while email is on", /&& !cfg\.emailOff \? new Mailer/.test(serverSrc) && /\.\.\.withoutMailbox_\(secrets\)/.test(serverSrc) && /delete out\.SMTP_PASSWORD/.test(serverSrc) &&
     /DESKTOP_EMAIL: "on", EMAIL_FROM: mailer\.settings\.from/.test(serverSrc) && /serviceBindings: \{ MAILER: \(request\) => mailer\.handle\(request\) \}/.test(serverSrc));
   const mainSrc = read("desktop/main.js");
-  ok("the program signs in with new settings before saving them", /const tried = await new Mailer\(clean, pass\)\.verify\(\);\s*if \(!tried\.ok\)/.test(mainSrc) && /odd:email-settings/.test(mainSrc) && /odd:set-email/.test(mainSrc));
-  ok("…and its preload gives the page those two calls only", /emailSettings: \(\) => ipcRenderer\.invoke\("odd:email-settings"\)/.test(read("desktop/preload.js")) && /setEmail: \(settings, password\)/.test(read("desktop/preload.js")));
+  ok("the program tries a mailbox before Global settings saves anything (signs in, saves nothing)", /ipcMain\.handle\("odd:check-email"[\s\S]{0,600}const tried = await new Mailer\(clean, pass\)\.verify\(\);/.test(mainSrc));
+  ok("…and takes its part of a save — key, mailbox, supplier switch — in one call, with one restart and no reload", /ipcMain\.handle\("odd:apply-settings"/.test(mainSrc) &&
+    /if \(key !== undefined\) setShippoKey[\s\S]{0,300}if \(mail\) setEmailOn[\s\S]{0,200}setSupplierConnections[\s\S]{0,40}\}, null, \{ reload: false \}\)/.test(mainSrc) && !/odd:set-email|odd:set-shippo-key|odd:set-suppliers-on/.test(mainSrc));
+  const preload = read("desktop/preload.js");
+  ok("its preload gives the page those calls and the reads, never a key or password", /checkEmail: \(settings, password\) => ipcRenderer\.invoke\("odd:check-email", settings, password\)/.test(preload) &&
+    /applySettings: \(s\) => ipcRenderer\.invoke\("odd:apply-settings", s\)/.test(preload) && /emailSettings: \(\) => ipcRenderer\.invoke\("odd:email-settings"\)/.test(preload) && !/setEmail|setShippoKey|setSuppliersOn/.test(preload));
   ok("the packaged program carries mailer.js and nodemailer", JSON.parse(read("desktop/package.json")).build.files.includes("mailer.js") && /^\d+\.\d+\.\d+$/.test(JSON.parse(read("desktop/package.json")).dependencies.nodemailer));
 
   console.log("\n=== C. Sending from the back office ===");
@@ -282,16 +290,18 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
     if (url.includes("/admin.js")) return Promise.resolve(Buffer.from(adminJs));
     const local = new URL(url).pathname.match(/^\/vendor\/fonts\/[a-z0-9.-]+$/);
     return local ? Promise.resolve(fs.readFileSync(__dirname + "/public" + local[0])) : super.fetch(url, o); } }
-  const saved = [], asked = [], pdfSaves = [];
+  const saved = [], asked = [], pdfSaves = [], applied = [], sentFetch = [];
   const dom = new JSDOM(read("public/index.html"), { runScripts: "dangerously", resources: new L(), url: "http://localhost:47830/", pretendToBeVisual: true,
     beforeParse(win){
       win.fetch = async (url, opts) => {
+        if (String(url).includes("/api/orders") && opts && !/getInvoiceDocument/.test(opts.body)) sentFetch.push(JSON.parse(opts.body).action);
         if (String(url).includes("/api/catalog")) { const body = await adminAnswer(on); return { ok: true, status: 200, json: async () => body }; }
         if (String(url).includes("/api/orders") && opts && /getInvoiceDocument/.test(opts.body)) { asked.push(JSON.parse(opts.body)); return { ok: true, status: 200, json: async () => ({ status: "ok", document: { filename: "Invoice X1.pdf", html: "<p>x</p>", pageSize: "Letter" } }) }; }
         return { ok: true, status: 200, json: async () => ({ status: "error", message: "n/a" }) };
       };
       win.oddDesktop = { edition: "desktop", firstRunKey: async () => null,
-        setEmail: async (settings, password) => { saved.push({ settings, password }); return password === "wrong" ? { ok: false, message: "The mailbox refused the sign-in." } : { ok: true }; },
+        checkEmail: async (settings, password) => { saved.push({ settings, password }); return password === "wrong" ? { ok: false, message: "The mailbox refused the sign-in." } : { ok: true }; },
+        applySettings: async (s) => { applied.push(s); return { ok: true }; },
         saveInvoicePdf: async (doc) => { pdfSaves.push(doc); return { ok: true, path: "/Users/pat/Documents/Invoice X1.pdf" }; } };
       win.confirm = () => true;
     } });
@@ -308,27 +318,75 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   w.eval("siteDesktopEmail = false");
   ok("without email, Communications and those buttons are gone", w.adminDesktopHides_("comms") === true && !/resendEmail|showSendInvoiceModal/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X1", paid: false, items: [{}], balanceDue: 20 })));
   w.eval("siteDesktopEmail = true");
-  const offHtml = w.desktopEmailSectionHtml_(null);
-  ok("Global settings → Email, off: says so, offers Gmail first, password field hidden as typed", /Email is off: nothing is sent/.test(offHtml) && /<option value="gmail" selected>/.test(offHtml) &&
-    /type="password" id="gEmailPass"/.test(offHtml) && /Turn on email/.test(offHtml) && !/gEmailOff/.test(offHtml) && /Microsoft 365 and Outlook\.com mailboxes aren't supported yet/.test(offHtml));
-  const onHtml = w.desktopEmailSectionHtml_({ host: "smtp.fastmail.com", port: 465, security: "tls", user: "pat@fastmail.com", from: "pat@fastmail.com" });
-  ok("…on: which address and server, Turn off, and the password left out", /sending from <strong>pat@fastmail\.com<\/strong> through smtp\.fastmail\.com/.test(onHtml) && /gEmailOff/.test(onHtml) &&
-    /<option value="fastmail" selected>/.test(onHtml) && /Leave empty to keep the saved one/.test(onHtml) && /value="tls" selected/.test(onHtml));
-  const box = doc.createElement("div");
-  box.innerHTML = offHtml;
-  doc.body.appendChild(box);
-  w.wireDesktopEmailSection_();
+  // Global settings → Features, as the desktop version draws it.
+  const FEATURES_LIST = [["storefront", "Storefront"], ["production", "Production"], ["bookkeeping", "Bookkeeping"], ["shipping", "Shipping"], ["designVerification", "Design approval"]]
+    .map(([key, label]) => ({ key, label, description: label + " does things." }));
+  const ctxFor = (over) => ({ desktop: true, featureList: FEATURES_LIST, features: { storefront: false, shipping: false, designVerification: false }, lockedFeatures: ["storefront", "shipping", "designVerification"],
+    shipFrom: {}, us: true, machineSettings: { showDeleteButton: false }, machineLoaded: true, keySet: false, cloudKey: null, emailSaved: null, suppliersOn: false, ...over });
+  const draw = (over) => {
+    const ctx = w.eval("window")._gSettingsCtx = ctxFor(over);
+    const old = doc.getElementById("gTestForm"); if (old) old.remove();
+    const box = doc.createElement("div"); box.id = "gTestForm";
+    box.innerHTML = w.globalFeaturesHtml_(ctx) + '<input type="checkbox" id="gPayCard"><input type="checkbox" id="gPayVenmo"><input type="checkbox" id="gPayZelle"><input type="checkbox" id="gPayCheck"><div id="globalSettingsError"></div>';
+    doc.body.appendChild(box);
+    w.wireGlobalFeatures_(ctx);
+    return ctx;
+  };
   const $ = (id) => doc.getElementById(id);
+  const tick_ = (id, on) => { const b = doc.querySelector(`#gFeatRow-${id} .g-feat-head input`); b.checked = on; b.dispatchEvent(new w.Event("change")); return b; };
+  draw();
+  const rows = [...doc.querySelectorAll("#gFeatures .g-feat")].filter(r => r.style.display !== "none").map(r => r.id.replace("gFeatRow-", ""));
+  ok("the desktop Features: Production, Bookkeeping, Shipping, Email with Design approval under it, Supplier connections — no Storefront", rows.join() === "production,bookkeeping,shipping,email,designVerification,suppliers" &&
+    $("gFeatRow-designVerification").classList.contains("g-feat-sub"));
+  ok("nothing on yet: the panels are closed, and Design approval waits for Email", $("gPanel-shipping").hidden && $("gPanel-email").hidden && $("gPanel-suppliers").hidden &&
+    doc.querySelector("#gFeatRow-designVerification .gFeature").disabled && /needs Email/.test($("gFeatRow-designVerification").textContent));
+  ok("…and Shipping can be ticked without a key yet (the key goes in its panel)", !doc.querySelector("#gFeatRow-shipping .gFeature").disabled);
+  tick_("email", true);
+  ok("ticking Email opens its panel: required fields marked, Gmail first, the password hidden as typed", !$("gPanel-email").hidden && /Every field marked \* is required while Email is on/.test($("gPanel-email").textContent) &&
+    $("gEmailPreset").value === "gmail" && $("gEmailPass").type === "password" && /No mailbox yet/.test($("gPanel-email").textContent) && /Microsoft 365 and Outlook\.com mailboxes aren't supported yet/.test($("gPanel-email").textContent));
+  ok("…and lets Design approval be ticked", !doc.querySelector("#gFeatRow-designVerification .gFeature").disabled);
   $("gEmailPreset").value = "icloud"; $("gEmailPreset").onchange();
   ok("choosing a mailbox fills in its server and says what password it needs", $("gEmailHost").value === "smtp.mail.me.com" && $("gEmailPort").value === "587" && /app-specific password/.test($("gEmailPresetNote").textContent));
+  tick_("designVerification", true);
+  tick_("email", false);
+  ok("unticking Email closes it and unticks Design approval", $("gPanel-email").hidden && !doc.querySelector("#gFeatRow-designVerification .gFeature").checked && doc.querySelector("#gFeatRow-designVerification .gFeature").disabled);
+  tick_("email", true);
   $("gEmailPreset").value = "other"; $("gEmailPreset").onchange();
   $("gEmailFrom").value = "orders@stitch.example";
-  await $("gEmailSave").onclick();
-  ok("another provider needs its server typed in, and opens the server settings for it", $("gEmailServer").open && /outgoing \(SMTP\) server/.test($("gEmailError").textContent) && saved.length === 0);
+  let problem = w.globalSettingsProblem_();
+  ok("Save checks Email first: another provider needs its server and the password, and the server settings open", /Email needs the outgoing \(SMTP\) server, the password/.test(problem) && $("gEmailServer").open && /Nothing was saved/.test(problem));
   $("gEmailHost").value = "mail.stitch.example"; $("gEmailPort").value = "465"; $("gEmailPort").onchange(); $("gEmailPass").value = "wrong";
-  await $("gEmailSave").onclick();
-  ok("saving hands the settings and password to the program, and shows why it wasn't saved", saved.length === 1 && saved[0].settings.host === "mail.stitch.example" && saved[0].settings.port === 465 &&
-    saved[0].settings.security === "tls" && saved[0].settings.user === "orders@stitch.example" && /refused the sign-in/.test($("gEmailError").textContent));
+  ok("…complete, nothing is wrong", w.globalSettingsProblem_() === "");
+  let ch = w.globalProgramChanges_();
+  ok("the program's part: the mailbox, on, with its password", ch.email && ch.email.on === true && ch.email.settings.host === "mail.stitch.example" && ch.email.settings.port === 465 &&
+    ch.email.settings.security === "tls" && ch.email.settings.user === "orders@stitch.example" && ch.email.password === "wrong" && !("shippoKey" in ch) && !("suppliers" in ch));
+  saved.length = 0; applied.length = 0; sentFetch.length = 0;
+  await w.submitGlobalSettings(); await tick(40);
+  ok("a mailbox that won't sign in stops the save before anything is sent or applied", saved.length === 1 && applied.length === 0 && sentFetch.length === 0 &&
+    /Nothing was saved\. The mailbox didn't sign in: The mailbox refused the sign-in/.test($("globalSettingsError").textContent));
+  tick_("shipping", true);
+  ok("ticking Shipping opens the Shippo key and the ship-from address, all required", !$("gPanel-shipping").hidden && !!$("gShippoKey") && !!$("gShipName") && /All fields below are required while Shipping is on/.test($("gPanel-shipping").textContent));
+  problem = w.globalSettingsProblem_();
+  ok("…and Save says what it needs: the key and every address field, name included", /Shipping needs a Shippo key, the ship-from name, the ship-from street address/.test(problem) && $("gShippoKey").style.outline.includes("solid") && $("gShipName").style.outline.includes("solid"));
+  $("gShipName").value = "Stitch Co"; $("gShipName").dispatchEvent(new w.Event("input"));
+  ok("…an outlined field clears as soon as it's filled in", !$("gShipName").style.outline && $("gShipCity").style.outline.includes("solid"));
+  $("gShippoKey").value = "shippo_test_xyz";
+  ch = w.globalProgramChanges_();
+  ok("a typed key goes to the program with the rest", ch.shippoKey === "shippo_test_xyz");
+  tick_("shipping", false); tick_("suppliers", true);
+  ok("Supplier connections: ticking says Save turns them on, then the vendors are here", !$("gPanel-suppliers").hidden && /Save<\/strong> with this ticked to turn supplier connections on/.test($("gPanel-suppliers").innerHTML) && w.globalProgramChanges_().suppliers === true);
+  draw({ emailSaved: { host: "smtp.fastmail.com", port: 465, security: "tls", user: "pat@fastmail.com", from: "pat@fastmail.com", on: true }, keySet: true, features: { shipping: true, designVerification: true } });
+  ok("with a mailbox in use: Email ticked and open, saying from where, with a test send; Design approval ticked", !$("gPanel-email").hidden && /Email is on: sending from pat@fastmail\.com through smtp\.fastmail\.com/.test($("gPanel-email").textContent) &&
+    !!$("gEmailTest") && $("gEmailPreset").value === "fastmail" && $("gEmailPass").placeholder === "Leave empty to keep the saved one" && doc.querySelector("#gFeatRow-designVerification .gFeature").checked);
+  ok("…unchanged, the program is asked for nothing", Object.keys(w.globalProgramChanges_()).length === 0);
+  ok("a saved Shippo key: never shown, with Remove key", /✓ A key is saved \(never shown\)/.test($("gPanel-shipping").textContent) && !!$("gShippoRemove") && $("gShippoKey").value === "");
+  $("gShippoRemove").onclick();
+  ok("…Remove key with Shipping still ticked can't be saved", /Shipping needs a Shippo key/.test(w.globalSettingsProblem_()) && w.globalProgramChanges_().shippoKey === null);
+  tick_("email", false);
+  ok("unticking Email turns it off and keeps the mailbox", JSON.stringify(w.globalProgramChanges_().email) === JSON.stringify({ on: false }));
+  draw({ emailSaved: { host: "smtp.fastmail.com", port: 465, security: "tls", user: "pat@fastmail.com", from: "pat@fastmail.com", on: false } });
+  ok("a mailbox saved but off says so", /A mailbox is saved \(pat@fastmail\.com\), not in use while Email is off/.test($("gPanel-email").textContent) && $("gPanel-email").hidden);
+  doc.getElementById("gTestForm").remove();
   ok("an order has Save invoice PDF… — paid or not, but not once voided", /saveInvoicePdf_/.test(w.invoiceCell_({ orgId: "shop" }, { orderId: "X1", balanceDue: 20 })) &&
     /Save invoice PDF/.test(w.invoiceCell_({ orgId: "shop" }, { orderId: "X1", balanceDue: 0, paid: true })) && !/Save invoice PDF/.test(w.invoiceCell_({ orgId: "shop" }, { orderId: "X1", balanceDue: 0, voidedAt: "2026-11-01" })));
   w.eval('adminKey = "x"');
@@ -341,6 +399,6 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   doc.getElementById("dvCancel").click();
   ok("…and closes with nothing sent", (await proofModal) === null);
   ok("a proof waiting for an answer reads Awaiting reply", /Awaiting reply/.test(w.verifSentCell({ sentAt: "2026-11-02T10:00:00Z", status: "pending" }, 1)));
-  ok("Global settings shows the Email section first in the desktop version", /\$\{emailSettings === undefined \? "" : desktopEmailSectionHtml_\(emailSettings\)\}\s*\$\{shippoKeySet === null/.test(adminJs));
+  ok("#vendors opens Global settings at Supplier connections in the desktop version", /if \(adminDesktop_\(\) && String\(raw\)\.split\("\/"\)\[0\] === "vendors"\) \{ window\._gScrollTo = "gFeatRow-suppliers"; renderGlobalSettings\(app\); return; \}/.test(adminJs));
   w.close();
 })().catch(e => { console.error(e); process.exit(1); });

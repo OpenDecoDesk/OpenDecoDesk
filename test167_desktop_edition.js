@@ -233,7 +233,7 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
     r = await post(keyed, { action: "getFeatures", key: "x" });
     ok("with a key, Shipping is no longer locked", r.status === 200 && !r.body.locked.includes("shipping") && r.body.locked.includes("storefront"));
     r = await post(keyed, { action: "updateFeatures", key: "x", features: { shipping: true } });
-    ok("with a key but no ship-from address, Shipping is refused until it's filled in", r.status === 400 && /in the Ship-from address: Street address, City, State, ZIP, Phone, Email/.test(r.body.message) &&
+    ok("with a key but no ship-from address, Shipping is refused until it's filled in", r.status === 400 && /in the Ship-from address: Name, Street address, City, State, ZIP, Phone, Email/.test(r.body.message) &&
       !/Shippo key/.test(r.body.message));
     r = await post(keyed, { action: "updateFeatures", key: "x", features: { shipping: true },
       shipFrom: { name: "Stitch Co", street1: "1 Main St", city: "Columbus", state: "OH", zip: "43215", phone: "614-555-0100", email: "ship@stitch.test" } });
@@ -338,10 +338,11 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   ok("an order has no Send received / Resend email or Send invoice button", /Mark as paid/.test(cell) && !/resendEmail|showSendInvoiceModal/.test(cell));
   ok("a paid one has no email button either", !/resendEmail/.test(w.adminActionCell({ orgId: "shop" }, { orderId: "X2", paid: true, items: [{}], shippingAddress: { line1: "1 Main" } })));
   ok("there is nothing to publish", w.publishStateHtml_({ state: "never" }) === "");
-  ok("Global settings offers to turn supplier connections on, and says file imports work either way", /Turn on supplier connections/.test(w.desktopSuppliersSectionHtml_(false)) && /Importing a supplier's files/.test(w.desktopSuppliersSectionHtml_(false)) && /Turn off supplier connections/.test(w.desktopSuppliersSectionHtml_(true)));
-  ok("Vendor integrations stay hidden while they are off", w.adminDesktopHides_("vendors") === true);
+  ok("Global settings → Features → Supplier connections: saving turns them on, and file imports work either way", /<strong>Save<\/strong> with this ticked to turn supplier connections on/.test(w.gSuppliersPanelHtml_(false)) &&
+    /Importing a supplier's files/.test(w.gSuppliersPanelHtml_(false)) && /id="gSuppliersBody"><div class="admin-summary">/.test(w.gSuppliersPanelHtml_(true)));
+  ok("Vendor integrations isn't in the desktop menu", w.adminDesktopHides_("vendors") === true);
   w.eval("siteDesktopSuppliers = true");
-  ok("…and come back once they are on (Communications stays hidden)", w.adminDesktopHides_("vendors") === false && w.adminDesktopHides_("comms") === true);
+  ok("…even with them on: the vendors are in that panel (Communications stays hidden too)", w.adminDesktopHides_("vendors") === true && w.adminDesktopHides_("comms") === true);
   w.eval("siteDesktopSuppliers = false");
 
   // The backup reminder.
@@ -365,9 +366,11 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
   // Wording that only made sense with a web shop.
   ok("the desktop wizard ends with Ready for orders, not Go live", w.wizStepList_({ products: [] }).pop().label === "Ready for orders");
   ok("…and Global settings' notes speak of the business, not a site and its emails", /packing slips, labels, invoices and reports/.test(adminJs) && /dates and times on orders and reports/.test(adminJs));
-  const shippo = w.desktopShippoSectionHtml_(false, false);
-  ok("Global settings explains carrier shipping by hand and with a Shippo key, and takes the key in a password field", /Ship this order/.test(shippo) && /No Shippo key yet/.test(shippo) && /type="password" id="gShippoKey"/.test(shippo) && !/gShippoRemove/.test(shippo));
-  ok("…with a key set it offers to remove it, and never shows the key", /A Shippo key is set — to use it, tick Shipping/.test(w.desktopShippoSectionHtml_(true, false)) && /gShippoRemove/.test(w.desktopShippoSectionHtml_(true, true)));
+  const shippo = w.gShippingPanelHtml_({ shipFrom: {}, us: true, desktop: true, keySet: false });
+  ok("Shipping's panel takes the Shippo key in a password field, then the ship-from address, all required", /All fields below are required while Shipping is on/.test(shippo) && /type="password" id="gShippoKey"/.test(shippo) &&
+    !/gShippoRemove/.test(shippo) && /id="gShipName"/.test(shippo) && /Settings → API/.test(shippo));
+  ok("…with a key saved it offers to remove it, and never shows the key", /✓ A key is saved \(never shown\)/.test(w.gShippingPanelHtml_({ shipFrom: {}, us: true, desktop: true, keySet: true })) &&
+    /gShippoRemove/.test(w.gShippingPanelHtml_({ shipFrom: {}, us: true, desktop: true, keySet: true })));
   ok("a tracking number on an order sent by FedEx links to FedEx", /fedex\.com\/fedextrack\/\?trknbr=7712/.test(w.trackingCell({ orgId: "shop" }, { orderId: "F1", trackingNumber: "7712", shippingMethod: "FedEx Ground", items: [{}], labels: [] })));
   ok("Local sale has a Ship this order section with the address, carrier and charge", ["lsShip", "lsShipLine1", "lsShipCity", "lsShipZip", "lsShipCarrier", "lsShipService", "lsShipCost"].every(id => adminJs.includes(`id="${id}"`)) && !adminJs.includes('id="lsAddress"'));
   w.eval('siteEdition = ""');

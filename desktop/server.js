@@ -141,7 +141,8 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {}, 
   const bucket = (name) => ({ scriptName: "files", bindings: { BUCKET: name } });
   // Email through the owner's mailbox (Global settings → Email), once it is set up: the Worker's
   // MAILER binding is answered here by mailer.js, which alone holds the password.
-  const mailer = cfg.smtp && secrets.SMTP_PASSWORD ? new Mailer(cfg.smtp, secrets.SMTP_PASSWORD, { log, renderPdf }) : null;
+  // Turned off (Global settings → Features → Email unticked) the mailbox is kept for next time, unused.
+  const mailer = cfg.smtp && secrets.SMTP_PASSWORD && !cfg.emailOff ? new Mailer(cfg.smtp, secrets.SMTP_PASSWORD, { log, renderPdf }) : null;
   const options = (p) => ({
     host: "127.0.0.1",
     port: p,
@@ -221,8 +222,9 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {}, 
     hasShippoKey: () => !!secrets.SHIPPO_API_KEY,
     // Whether supplier connections (PromoStandards) are turned on.
     suppliersOn: () => !!cfg.supplierConnections,
-    // Email (Global settings → Email): the mailbox's settings, never its password; null when off.
-    emailSettings: () => (mailer ? { ...mailer.settings } : null),
+    // Email (Global settings → Features → Email): the mailbox's saved settings, never its password,
+    // and whether email is on; null when no mailbox has been saved.
+    emailSettings: () => (cfg.smtp ? { ...cfg.smtp, on: !!mailer } : null),
     // When this data folder was first used and last backed up (File → Back up…), for the reminder.
     backupStatus: () => ({ createdAt: cfg.createdAt || null, lastBackupAt: cfg.lastBackupAt || null }),
     // The Worker's scheduled handler, which in the desktop version only checks tracking (src/worker.js):
@@ -303,6 +305,15 @@ function setSmtp(dataDir, settings, password, { protect, unprotect } = {}) {
   return clean;
 }
 
+// Email on or off, keeping the mailbox (settings and password) either way. Only while stopped.
+function setEmailOn(dataDir, on, { protect, unprotect } = {}) {
+  const { cfg, secrets } = loadConfig(dataDir, { unprotect });
+  if (!secrets) throw new Error("The saved secrets couldn't be read, so the setting can't be saved with them.");
+  const next = { ...cfg };
+  if (on) delete next.emailOff; else next.emailOff = true;
+  saveConfig(dataDir, next, secrets, { protect });
+}
+
 // The saved mailbox password, for checking new settings before they are saved (main.js) when the
 // owner changes the server but not the password. Never given to the page.
 function savedSmtpPassword(dataDir, { unprotect } = {}) {
@@ -343,7 +354,7 @@ function restoreState(dataDir, from) {
   return { aside };
 }
 
-module.exports = { startServer, adminHasUsablePassword, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, setSmtp, savedSmtpPassword, recordBackup, stamp, statePaths, IMAGES_HOST, IMAGES_BASE, desktopCsp };
+module.exports = { startServer, adminHasUsablePassword, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, setSmtp, setEmailOn, savedSmtpPassword, recordBackup, stamp, statePaths, IMAGES_HOST, IMAGES_BASE, desktopCsp };
 
 if (require.main === module) {
   const dataDir = path.resolve(process.argv[2] || path.join(process.cwd(), "desktop-data"));

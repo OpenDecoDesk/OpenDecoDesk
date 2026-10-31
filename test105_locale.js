@@ -294,6 +294,9 @@ const ok = (d, c) => { console.log(d + ":", !!c); c ? pass++ : fail++; };
           if (!body.action) return j({ status: "admin", business: {}, country: savedLocale.country });
           calls.push(body);
           if (body.action === "getGlobalSettings") return j({ status: "ok", globalSettings: { enabledPayments: {} } });
+          // Shipping off: its panel (with the ship-from address) is drawn closed, and isn't checked or sent.
+          if (body.action === "getFeatures") return j({ status: "ok", list: [{ key: "shipping", label: "Shipping", description: "Carrier shipping." }], features: { shipping: false }, locked: [], shippoKey: false });
+          if (body.action === "updateFeatures") return j({ status: "ok", features: body.features });
           if (body.action === "getLocaleSettings") return j({ status: "ok", locale: savedLocale, effectiveTimeZone: savedLocale.timeZone || "America/Chicago", envTimeZone: "America/Chicago" });
           if (body.action === "updateLocaleSettings") {
             if (body.locale.timeZone === "Nowhere/Land") return { ok: false, status: 400, json: async () => ({ status: "error", message: "\"Nowhere/Land\" isn't a time zone this site knows." }) };
@@ -341,6 +344,7 @@ const ok = (d, c) => { console.log(d + ":", !!c); c ? pass++ : fail++; };
     w2.setOrgDeliveryList_([{ type: "pickup" }]);
     const addShip = box.querySelector('[data-dlv-add="shipping"]');
     ok("…and + Shipping is disabled, while + Custom option isn't", !!addShip && addShip.disabled === true && box.querySelector('[data-dlv-add="custom"]').disabled === false);
+    w2.applyFeatures_({});   // Shipping on again (the settings page above had it off)
     w2.applyCountry_("US"); w2.setOrgDeliveryList_([{ type: "pickup" }]);
     ok("in the US + Shipping is offered as before", box.querySelector('[data-dlv-add="shipping"]').disabled === false && !/only available when/.test(box.textContent));
     ok("phone boxes take any format; the US sample number only shows in the US", !/pattern="[^"]*\\d\{3\}/.test(adminJs) && /placeholder="\$\{adminIsUS_\(\) \? "\(555\) 555-5555" : ""\}"/.test(adminJs) && !/placeholder="\(555\) 555-5555"/.test(adminJs));

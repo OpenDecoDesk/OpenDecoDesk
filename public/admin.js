@@ -175,6 +175,9 @@ async function adminRoute() {
 
   // A page of a feature that's switched off (Global settings → Features): say so instead of
   // showing a screen whose every request the server would refuse.
+  // The desktop version has no Vendor integrations page: its vendors are in Global settings →
+  // Features → Supplier connections.
+  if (adminDesktop_() && String(raw).split("/")[0] === "vendors") { window._gScrollTo = "gFeatRow-suppliers"; renderGlobalSettings(app); return; }
   if (adminDesktopHides_(raw)) { renderDesktopOff_(app, raw); return; }
   { const off = adminPageFeature_(raw); if (off && !featureOn_(off)) { renderFeatureOff_(app, off, raw); return; } }
   // A page this user's role can't use: say so (the server would refuse every request it makes).
@@ -1157,72 +1160,33 @@ function adminPageOn_(hash){ const f = adminPageFeature_(hash); return !adminDes
 // DESKTOP_REFUSED_ACTIONS). Everything else is the same screen as a cloud install's.
 function adminDesktop_(){ return typeof siteEdition !== "undefined" && siteEdition === "desktop"; }
 const ADMIN_DESKTOP_HIDDEN_PAGES = ["vendors", "comms"];
-// Vendor integrations is back once the owner turns supplier connections on (Global settings), and
-// Communications (and the buttons that send email) once they set up their mailbox (Global settings → Email).
+// Vendor integrations is never a page of its own there (its vendors are in Global settings → Features
+// → Supplier connections, adminRoute), and Communications (and the buttons that send email) is back
+// once the owner turns Email on there.
 function adminDesktopSuppliers_(){ return adminDesktop_() && typeof siteDesktopSuppliers !== "undefined" && siteDesktopSuppliers === true; }
 function adminDesktopEmail_(){ return adminDesktop_() && typeof siteDesktopEmail !== "undefined" && siteDesktopEmail === true; }
 function adminDesktopNoEmail_(){ return adminDesktop_() && !adminDesktopEmail_(); }
 function adminDesktopHides_(hash){
   const page = String(hash || "").replace(/^#\/?/, "").split("/")[0];
-  return adminDesktop_() && ADMIN_DESKTOP_HIDDEN_PAGES.includes(page) && !(page === "vendors" && adminDesktopSuppliers_()) && !(page === "comms" && adminDesktopEmail_());
+  return adminDesktop_() && ADMIN_DESKTOP_HIDDEN_PAGES.includes(page) && !(page === "comms" && adminDesktopEmail_());
 }
 // The passphrase for the program's own first sign-in, or null (a normal start, or not the program).
 async function adminDesktopFirstRunKey_(){
   if(!adminDesktop_() || !window.oddDesktop || typeof window.oddDesktop.firstRunKey !== "function") return null;
   try{ return (await window.oddDesktop.firstRunKey()) || null; }catch(e){ return null; }
 }
-// Global settings → Carrier shipping (Shippo), in the desktop version only. Shipping is manual
-// without a key (Local sale → Ship this order, a tracking number typed on the order). With one,
-// the Shipping switch can be turned on: carrier rates, buying labels, and tracking checks while the
-// program is open. The key is kept by the program with its other secrets (desktop/server.js),
-// never by the page or the database; saving restarts the program's server and reloads this page.
+// ---- Global settings → Features: each switch opens to show what it needs ---------------------------
+// A ticked feature shows its panel right under it — Production: Machine Files; Shipping: the Shippo key
+// and the ship-from address; in the desktop version also Email (the mailbox, with Design approval
+// under it) and Supplier connections (the vendors, as on the Vendor integrations page). Unticking
+// closes the panel and keeps what's in it. Save (submitGlobalSettings) checks every open panel
+// first and saves nothing while one is incomplete; in the desktop version it then hands the
+// program its part (key, mailbox, supplier switch) in one go, which restarts its server once.
 async function adminDesktopHasShippoKey_(){
   if(!window.oddDesktop || typeof window.oddDesktop.hasShippoKey !== "function") return null;
   try{ return !!(await window.oddDesktop.hasShippoKey()); }catch(e){ return null; }
 }
-function desktopShippoSectionHtml_(keySet, shippingOn){
-  return `<div id="gShippoSection">
-        <h2 style="margin:22px 0 12px;">Carrier shipping (Shippo)</h2>
-        <div class="admin-note" style="margin-bottom:10px;">Without this, shipping is by hand: tick <strong>Ship this order</strong> in Local sale for the address, carrier and charge, and type the tracking number on the order. With a key from your Shippo account, turn on <strong>Shipping</strong> under Features (below) for carrier rates, buying and printing labels from the order's <strong>Ship</strong> button, and tracking checks every two hours while this program is open. Those need the internet; labels are paid to Shippo.</div>
-        <div id="gShippoStatus" style="font-size:14px;margin-bottom:8px;">${keySet ? `A Shippo key is set${shippingOn ? ": Shipping is on. Add it to a shop under Manage catalog → the shop's Edit → Delivery &amp; pickup." : " — to use it, tick Shipping under Features, fill in the Ship-from address that appears, and Save."}` : "No Shippo key yet."}</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
-          <input type="password" id="gShippoKey" maxlength="200" autocomplete="off" spellcheck="false" placeholder="${keySet ? "Paste a new key to replace it" : "shippo_live_… or shippo_test_…"}" style="max-width:320px;">
-          <button class="admin-btn" type="button" id="gShippoSave">Save key</button>
-          ${keySet ? `<button class="admin-btn admin-btn-secondary" type="button" id="gShippoRemove">Remove key</button>` : ""}
-        </div>
-        <div id="gShippoError" class="admin-error"></div>
-      </div>`;
-}
-function wireDesktopShippoSection_(){
-  const save = document.getElementById("gShippoSave");
-  if(!save) return;
-  const errEl = document.getElementById("gShippoError");
-  const send = async (key) => {
-    if(errEl) errEl.textContent = "";
-    showToast(key ? "Saving the key — the program restarts for a moment…" : "Removing the key — the program restarts for a moment…");
-    try{
-      const r = await window.oddDesktop.setShippoKey(key);
-      if(r && r.ok === false && errEl) errEl.textContent = r.message || "Could not save the key.";
-    }catch(e){ if(errEl) errEl.textContent = "Could not save the key."; }
-  };
-  save.onclick = () => {
-    const key = (document.getElementById("gShippoKey").value || "").trim();
-    if(!key){ if(errEl) errEl.textContent = "Paste the API token from your Shippo account (Settings → API) first."; return; }
-    send(key);
-  };
-  const remove = document.getElementById("gShippoRemove");
-  if(remove) remove.onclick = async () => {
-    if(!await askConfirm_("Remove the Shippo key?\n\nShipping goes back to by hand: no rates, labels or tracking checks. Labels already bought stay on their orders.")) return;
-    send(null);
-  };
-}
-
-// Global settings → Email, in the desktop version only: email goes out through the owner's own
-// mailbox (SMTP) — order emails, invoices, the morning roll-up. Off until set up. The program keeps
-// the settings and the password (desktop/server.js, mailer.js); the page never gets the password
-// back. Saving signs in to the server first, so a wrong password is reported before anything is
-// saved, then restarts the program's server and reloads this page. The presets fill in the server
-// settings for the common mailboxes.
+// The mailbox presets fill in the server settings for the common mailboxes.
 const DESKTOP_MAIL_PRESETS = [
   { id: "gmail", label: "Gmail or Google Workspace", host: "smtp.gmail.com", port: 587, security: "starttls", note: "Use an app password: Google Account → Security → 2-Step Verification → App passwords. About 500 emails a day." },
   { id: "icloud", label: "iCloud Mail", host: "smtp.mail.me.com", port: 587, security: "starttls", note: "Use an app-specific password from account.apple.com → Sign-In and Security. The username is your iCloud email address." },
@@ -1230,99 +1194,221 @@ const DESKTOP_MAIL_PRESETS = [
   { id: "zoho", label: "Zoho Mail", host: "smtp.zoho.com", port: 465, security: "tls", note: "With two-factor sign-in on, use an application-specific password." },
   { id: "other", label: "Another provider (your web host's mail…)", host: "", port: 587, security: "starttls", note: "Your provider's help pages list its SMTP (outgoing mail) server, port and security." },
 ];
+// The saved mailbox ({ host, port, security, user, from, on }, never the password), null when none is
+// saved, undefined outside the desktop program.
 async function adminDesktopEmailSettings_(){
   if(!window.oddDesktop || typeof window.oddDesktop.emailSettings !== "function") return undefined;
   try{ return (await window.oddDesktop.emailSettings()) || null; }catch(e){ return undefined; }
 }
-function desktopEmailSectionHtml_(cur){
+const G_REQ_ = `<span class="g-req" aria-hidden="true">*</span>`;
+// One feature: its box and name, what it covers, and its panel (opened while ticked).
+function gFeatureRowHtml_(key, { label, desc, checked, panel = "", sub = false, hidden = false, cls = "gFeature", disabled = false, extra = "" }){
+  return `<div class="g-feat${sub ? " g-feat-sub" : ""}" id="gFeatRow-${key}"${hidden ? ' style="display:none;"' : ""}>
+          <label class="checkbox-row g-feat-head"><input type="checkbox" class="${cls}" data-feature="${key}"${checked ? " checked" : ""}${disabled ? " disabled" : ""}> <strong>${escapeHtml(label)}</strong>${extra}</label>
+          <div class="admin-note g-feat-desc">${desc}</div>
+          ${panel ? `<div class="g-feat-panel" id="gPanel-${key}"${checked ? "" : " hidden"}>${panel}</div>` : ""}
+        </div>`;
+}
+function gRequiredNote_(what, all = true){ return `<div class="g-feat-req">${all ? "All fields below are" : `Every field marked ${G_REQ_} is`} required while ${what} is on.${all ? ` ${G_REQ_} required` : ""}</div>`; }
+function gProductionPanelHtml_(machineSettings, loaded){
+  return `<div id="gMachineSection" data-loaded="${loaded ? "1" : ""}">
+            <div style="font-weight:600;margin-bottom:4px;">Machine Files</div>
+            <div class="admin-note" style="margin-bottom:8px;">The Machine Files screen can show a <strong>Delete</strong> button on each file. Deleting over the machine protocol is currently disabled in the machines' firmware (the command exists but always refuses — see <code>the send-agent's PROTOCOL.md</code>), so the button is hidden by default. Turn it on only if a firmware update enables delete.</div>
+            <label class="checkbox-row"><input type="checkbox" id="gMachShowDelete" ${machineSettings.showDeleteButton ? "checked" : ""}> Show delete buttons on Machine Files</label>
+          </div>`;
+}
+// Shipping: the Shippo key (typed in the desktop version; a server secret on a cloud install), then
+// the ship-from address — all required while Shipping is on.
+function gShippingPanelHtml_({ shipFrom, us, desktop, keySet, cloudKey }){
+  const f = (id, label, key, attrs, style) => `<label${style ? ` style="${style}"` : ""}><span>${label} ${G_REQ_}</span>
+              <input type="${key === "email" ? "email" : "text"}" id="${id}" value="${escapeHtml(shipFrom[key] || "")}" ${attrs || ""}>
+            </label>`;
+  const keyHtml = desktop
+    ? `<label><span>Shippo key ${G_REQ_}</span>
+              <input type="password" id="gShippoKey" maxlength="200" autocomplete="off" spellcheck="false" placeholder="${keySet ? "A key is saved — paste a new one to replace it" : "shippo_live_… or shippo_test_…"}" style="max-width:360px;">
+            </label>
+            <div class="admin-note" id="gShippoStatus" style="margin:-4px 0 12px;">${keySet ? `✓ A key is saved (never shown). ` : ""}From your Shippo account: Settings → API. Labels are paid to Shippo. Carrier rates, labels and tracking need the internet.
+              ${keySet ? `<button type="button" class="admin-btn admin-btn-secondary" id="gShippoRemove" style="padding:2px 10px;font-size:12px;margin-left:6px;">Remove key</button>` : ""}</div>`
+    : `<div style="margin-bottom:12px;"><strong>Shippo key</strong> ${G_REQ_} — ${cloudKey ? `✓ set (the <code>SHIPPO_API_KEY</code> secret)` : `<span style="color:#b03a2e;">not set</span>: add the <code>SHIPPO_API_KEY</code> secret (docs/configuration.md)`}</div>`;
+  return `${gRequiredNote_("Shipping")}
+            ${keyHtml}
+            <div id="gShipFromSection">
+            <div style="font-weight:600;margin:4px 0;">Ship-from address ${G_REQ_}</div>
+            <div class="admin-note" style="margin-bottom:8px;">Printed on every shipping label as the sender, and used for shipping-rate quotes${desktop ? "" : " on the storefront"}.${us ? "" : " <strong>Carrier rates and labels need the country in Region to be the United States.</strong>"}</div>
+            ${f("gShipName", "Name", "name", 'maxlength="100"')}
+            ${f("gShipStreet1", "Street address", "street1", 'maxlength="200"')}
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              ${f("gShipCity", "City", "city", 'maxlength="100"', "flex:2;min-width:160px;")}
+              <label style="${us ? "flex:0 0 80px;" : "flex:1;min-width:120px;"}"><span><span id="gShipStateLabel">${us ? "State" : "State / region"}</span> ${G_REQ_}</span>
+                <input type="text" id="gShipState" maxlength="${us ? 2 : 50}" value="${escapeHtml(shipFrom.state || "")}" style="${us ? "text-transform:uppercase;" : ""}">
+              </label>
+              <label style="flex:0 0 130px;"><span><span id="gShipZipLabel">${us ? "ZIP" : "Postal code"}</span> ${G_REQ_}</span>
+                <input type="text" id="gShipZip" maxlength="12" value="${escapeHtml(shipFrom.zip || "")}">
+              </label>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              ${f("gShipPhone", "Phone", "phone", `maxlength="30" placeholder="${us ? "555-555-0100" : ""}"`, "flex:1;min-width:160px;")}
+              ${f("gShipEmail", "Email", "email", 'maxlength="200"', "flex:1;min-width:200px;")}
+            </div>
+            </div>
+            <div class="admin-note"><a href="#packages">Package sizes</a> — the boxes you ship in, for rates and labels.</div>`;
+}
+// Email (desktop): the mailbox. `saved` is what the program has (or null).
+function gEmailPanelHtml_(saved){
   const presetOf = (c) => (c && DESKTOP_MAIL_PRESETS.find(p => p.host && p.host === c.host)) || (c ? DESKTOP_MAIL_PRESETS.find(p => p.id === "other") : DESKTOP_MAIL_PRESETS[0]);
-  const pre = presetOf(cur), v = cur || { host: pre.host, port: pre.port, security: pre.security, user: "", from: "" };
-  const lbl = "font-size:12px;font-weight:600;display:block;margin-bottom:8px;max-width:360px;";
-  return `<div id="gEmailSection">
-        <h2 style="margin:22px 0 12px;">Email</h2>
-        <div class="admin-note" style="margin-bottom:10px;">Send order emails (received, payment confirmed, shipped, cancelled), invoices, design proofs and your morning roll-up from your own mailbox. They go out from its address, as if you had sent them, and copies land in its Sent folder with Gmail, iCloud and most others. This needs the internet. Microsoft 365 and Outlook.com mailboxes aren't supported yet.</div>
-        <div id="gEmailStatus" style="font-size:14px;margin-bottom:10px;">${cur ? `Email is on: sending from <strong>${escapeHtml(cur.from)}</strong> through ${escapeHtml(cur.host)}. <a href="#comms">Send a test email</a> from Communications. To email design proofs, turn on Design approval under Features.` : "Email is off: nothing is sent."}</div>
-        <label style="${lbl}">Your mailbox<br><select id="gEmailPreset">${DESKTOP_MAIL_PRESETS.map(p => `<option value="${p.id}"${p.id === pre.id ? " selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}</select></label>
-        <div id="gEmailPresetNote" class="admin-note" style="margin:-2px 0 10px;max-width:520px;">${escapeHtml(pre.note)}</div>
-        <label style="${lbl}">Email address<br><input type="email" id="gEmailFrom" maxlength="200" autocomplete="off" spellcheck="false" value="${escapeHtml(v.from || "")}" placeholder="you@example.com"></label>
-        <label style="${lbl}">Password or app password<br><input type="password" id="gEmailPass" maxlength="300" autocomplete="new-password" spellcheck="false" placeholder="${cur ? "Leave empty to keep the saved one" : ""}"></label>
-        <details id="gEmailServer"${pre.id === "other" ? " open" : ""} style="margin:0 0 10px;max-width:520px;"><summary style="cursor:pointer;font-size:13px;">Server settings</summary>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
-            <label style="font-size:12px;font-weight:600;flex:2 1 200px;">Outgoing (SMTP) server<br><input type="text" id="gEmailHost" maxlength="200" spellcheck="false" value="${escapeHtml(v.host || "")}" placeholder="smtp.example.com"></label>
-            <label style="font-size:12px;font-weight:600;flex:0 1 90px;">Port<br><input id="gEmailPort" type="number" min="1" max="65535" value="${escapeHtml(String(v.port || 587))}"></label>
-            <label style="font-size:12px;font-weight:600;flex:1 1 150px;">Security<br><select id="gEmailSecurity"><option value="starttls"${v.security !== "tls" ? " selected" : ""}>STARTTLS (587)</option><option value="tls"${v.security === "tls" ? " selected" : ""}>SSL/TLS (465)</option></select></label>
-            <label style="font-size:12px;font-weight:600;flex:1 1 200px;">Username <span style="font-weight:400;color:#666;">(if not the email address)</span><br><input type="text" id="gEmailUser" maxlength="200" spellcheck="false" autocomplete="off" value="${escapeHtml(cur && cur.user !== cur.from ? cur.user : "")}"></label>
-          </div>
-        </details>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px;">
-          <button class="admin-btn" type="button" id="gEmailSave">${cur ? "Save email settings" : "Turn on email"}</button>
-          ${cur ? `<button class="admin-btn admin-btn-secondary" type="button" id="gEmailOff">Turn off email</button>` : ""}
-        </div>
-        <div id="gEmailError" class="admin-error"></div>
-      </div>`;
+  const pre = presetOf(saved), v = saved || { host: pre.host, port: pre.port, security: pre.security, user: "", from: "" };
+  return `${gRequiredNote_("Email", false)}
+            <div class="admin-note" style="margin-bottom:10px;">They go out from your mailbox's address, as if you had sent them, and copies land in its Sent folder with Gmail, iCloud and most others. Microsoft 365 and Outlook.com mailboxes aren't supported yet.</div>
+            <div id="gEmailStatus" style="font-size:14px;margin-bottom:10px;">${saved ? (saved.on ? `Email is on: sending from <strong>${escapeHtml(saved.from)}</strong> through ${escapeHtml(saved.host)}.` : `A mailbox is saved (${escapeHtml(saved.from)}), not in use while Email is off.`) : "No mailbox yet."}</div>
+            <label style="max-width:360px;"><span>Your mailbox ${G_REQ_}</span><select id="gEmailPreset">${DESKTOP_MAIL_PRESETS.map(p => `<option value="${p.id}"${p.id === pre.id ? " selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}</select></label>
+            <div id="gEmailPresetNote" class="admin-note" style="margin:-4px 0 10px;max-width:520px;">${escapeHtml(pre.note)}</div>
+            <label style="max-width:360px;"><span>Email address ${G_REQ_}</span><input type="email" id="gEmailFrom" maxlength="200" autocomplete="off" spellcheck="false" value="${escapeHtml(v.from || "")}" placeholder="you@example.com"></label>
+            <label style="max-width:360px;"><span>Password or app password ${G_REQ_}</span><input type="password" id="gEmailPass" maxlength="300" autocomplete="new-password" spellcheck="false" placeholder="${saved ? "Leave empty to keep the saved one" : ""}"></label>
+            <details id="gEmailServer"${pre.id === "other" ? " open" : ""} style="margin:0 0 10px;max-width:520px;"><summary style="cursor:pointer;font-size:13px;">Server settings <span style="color:#666;" id="gEmailServerSummary">${escapeHtml([v.host, v.port, v.security === "tls" ? "SSL/TLS" : "STARTTLS"].filter(Boolean).join(" · "))}</span></summary>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                <label style="flex:2 1 200px;"><span>Outgoing (SMTP) server ${G_REQ_}</span><input type="text" id="gEmailHost" maxlength="200" spellcheck="false" value="${escapeHtml(v.host || "")}" placeholder="smtp.example.com"></label>
+                <label style="flex:0 1 90px;"><span>Port ${G_REQ_}</span><input id="gEmailPort" type="number" min="1" max="65535" value="${escapeHtml(String(v.port || 587))}"></label>
+                <label style="flex:1 1 150px;"><span>Security ${G_REQ_}</span><select id="gEmailSecurity"><option value="starttls"${v.security !== "tls" ? " selected" : ""}>STARTTLS (587)</option><option value="tls"${v.security === "tls" ? " selected" : ""}>SSL/TLS (465)</option></select></label>
+                <label style="flex:1 1 200px;">Username <span style="font-weight:400;color:#666;">(if not the email address)</span><input type="text" id="gEmailUser" maxlength="200" spellcheck="false" autocomplete="off" value="${escapeHtml(saved && saved.user !== saved.from ? saved.user : "")}"></label>
+              </div>
+            </details>
+            ${saved && saved.on ? `<div><button type="button" class="admin-btn admin-btn-secondary" id="gEmailTest" style="padding:3px 10px;font-size:12px;">Send a test email</button> <span id="gEmailTestResult" style="font-size:13px;"></span></div>` : `<div class="admin-note">Save signs in to the mailbox first; nothing is saved if it can't.</div>`}`;
 }
-function wireDesktopEmailSection_(){
-  const save = document.getElementById("gEmailSave");
-  if(!save) return;
-  const $ = (id) => document.getElementById(id), errEl = $("gEmailError");
-  $("gEmailPreset").onchange = () => {
-    const p = DESKTOP_MAIL_PRESETS.find(x => x.id === $("gEmailPreset").value) || DESKTOP_MAIL_PRESETS[0];
-    $("gEmailPresetNote").textContent = p.note;
-    if(p.host){ $("gEmailHost").value = p.host; $("gEmailPort").value = p.port; $("gEmailSecurity").value = p.security; }
-    else { $("gEmailHost").value = ""; $("gEmailServer").open = true; }
-  };
-  // The usual pairing, when the port is changed by hand: 465 is SSL/TLS, 587 STARTTLS.
-  $("gEmailPort").onchange = () => { const n = Number($("gEmailPort").value); if(n === 465) $("gEmailSecurity").value = "tls"; else if(n === 587) $("gEmailSecurity").value = "starttls"; };
-  save.onclick = async () => {
-    errEl.textContent = "";
-    const settings = { host: $("gEmailHost").value.trim(), port: Number($("gEmailPort").value), security: $("gEmailSecurity").value,
-      from: $("gEmailFrom").value.trim(), user: $("gEmailUser").value.trim() || $("gEmailFrom").value.trim() };
-    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(settings.from)){ errEl.textContent = "Enter your mailbox's email address."; return; }
-    if(!settings.host){ $("gEmailServer").open = true; errEl.textContent = "Enter the outgoing (SMTP) server, from your provider's help pages."; return; }
-    save.disabled = true; const label = save.textContent; save.textContent = "Signing in…";
-    try{
-      const r = await window.oddDesktop.setEmail(settings, $("gEmailPass").value);
-      if(r && r.ok === false) errEl.textContent = r.message || "Could not save the email settings.";
-      else showToast("Signed in — the program restarts for a moment…");
-    }catch(e){ errEl.textContent = "Could not save the email settings."; }
-    finally{ save.disabled = false; save.textContent = label; }
-  };
-  const off = $("gEmailOff");
-  if(off) off.onclick = async () => {
-    if(!await askConfirm_("Turn off email?\n\nNothing more is sent: no order emails, invoices or morning roll-up. The saved password is forgotten.")) return;
-    errEl.textContent = "";
-    showToast("Turning off email — the program restarts for a moment…");
-    try{ const r = await window.oddDesktop.setEmail(null); if(r && r.ok === false) errEl.textContent = r.message || "Could not turn off email."; }
-    catch(e){ errEl.textContent = "Could not turn off email."; }
-  };
+// Supplier connections (desktop): the vendors, once the program has them on.
+function gSuppliersPanelHtml_(on){
+  return `<div class="admin-note" style="margin-bottom:10px;">Importing a supplier's files (product files, CSV, PDF invoices) always works. These need the internet; your logins with each supplier are saved encrypted on this computer, and shipment notices are checked every two hours while the program is open.</div>
+            <div id="gSuppliersBody">${on ? `<div class="admin-summary">Loading&hellip;</div>` : `<div class="admin-note"><strong>Save</strong> with this ticked to turn supplier connections on; then connect your vendors here.</div>`}</div>`;
 }
-
-// Global settings → Supplier connections, in the desktop version only: Vendor integrations
-// (a supplier's live product data and prices, ordering blanks from it, its shipment notices) need the
-// internet, so they are off until turned on here. Importing a supplier's files works either way.
-// The program keeps the setting (desktop/server.js); turning it on or off restarts its server.
-function desktopSuppliersSectionHtml_(on){
-  return `<div id="gSuppliersSection">
-        <h2 style="margin:22px 0 12px;">Supplier connections</h2>
-        <div class="admin-note" style="margin-bottom:10px;">Importing a supplier's files (product files, CSV, PDF invoices) always works. Turn this on to use <strong>Vendor integrations</strong> as well: a supplier's live product data and prices (PromoStandards), ordering blanks from it, its shipment notices (checked every two hours while this program is open), and copying its product photos. These need the internet; your logins with each supplier are saved encrypted on this computer.</div>
-        <div id="gSuppliersStatus" style="font-size:14px;margin-bottom:8px;">${on ? `Supplier connections are on — set them up under <a href="#vendors">Vendor integrations</a>.` : "Supplier connections are off."}</div>
-        <button class="admin-btn${on ? " admin-btn-secondary" : ""}" type="button" id="gSuppliersToggle" data-on="${on ? "1" : "0"}">${on ? "Turn off supplier connections" : "Turn on supplier connections"}</button>
-        <div id="gSuppliersError" class="admin-error"></div>
-      </div>`;
+// The Features list: cloud rows in the server's order; the desktop version adds Email (with Design
+// approval under it) and Supplier connections, and leaves out the storefront (it can't be on there).
+function globalFeaturesHtml_(c){
+  const desc = (k) => escapeHtml((c.featureList.find(f => f.key === k) || {}).description || "");
+  const on = (k) => c.features[k] !== false;
+  const rows = [];
+  for (const f of c.featureList) {
+    const k = f.key;
+    if (c.desktop && k === "designVerification") continue;   // under Email, below
+    const locked = c.lockedFeatures.includes(k) && !(c.desktop && k === "shipping");
+    const panel = k === "production" ? gProductionPanelHtml_(c.machineSettings, c.machineLoaded)
+      : k === "shipping" ? gShippingPanelHtml_(c) : "";
+    rows.push(gFeatureRowHtml_(k, { label: f.label, desc: desc(k), checked: on(k) && !locked, panel, hidden: c.desktop && locked, disabled: locked }));
+  }
+  if (c.desktop) {
+    const emailOn = !!(c.emailSaved && c.emailSaved.on);
+    rows.push(gFeatureRowHtml_("email", { label: "Email", cls: "gProgramFeature", checked: emailOn, panel: gEmailPanelHtml_(c.emailSaved),
+      desc: "Order emails (received, payment confirmed, shipped, cancelled), invoices with a PDF, design proofs and your morning roll-up — sent from your own mailbox." }));
+    rows.push(gFeatureRowHtml_("designVerification", { label: "Design approval", sub: true, checked: on("designVerification") && emailOn, disabled: !emailOn,
+      extra: ` <span class="g-feat-needs" style="font-size:12px;color:#666;"${emailOn ? " hidden" : ""}>(needs Email)</span>`,
+      desc: "Proofs go out by email with the pictures attached; the customer replies, and you mark the order Design approved. Orders with free-form personalization wait for it." }));
+    rows.push(gFeatureRowHtml_("suppliers", { label: "Supplier connections", cls: "gProgramFeature", checked: !!c.suppliersOn, panel: gSuppliersPanelHtml_(!!c.suppliersOn),
+      desc: "A supplier's live product data and prices (PromoStandards), ordering blanks from it from Blanks to order, and its shipment notices." }));
+  }
+  return `<h2 style="margin:22px 0 6px;">Features</h2>
+        <div class="admin-note" style="margin-bottom:10px;">Tick what you use; each one opens to show what it needs. Turning one off hides its pages and stops its actions; nothing is deleted, and turning it back on brings everything back as it was. Stock of blanks and transfers, and cost of goods, are always on — making an order uses them.${c.desktop ? "" : `<br>
+          <strong>Storefront</strong> is the one switch that hides nothing here: with it off, customers see an “online ordering isn't available” page on every shop address, and you keep entering orders, sending payment links and design proofs, and using Publish, a shop's “ready” box and its custom domain exactly as before (they only matter once it's back on).`}</div>
+        <div id="gFeatures">${rows.join("")}</div>`;
 }
-function wireDesktopSuppliersSection_(){
-  const btn = document.getElementById("gSuppliersToggle");
-  if(!btn) return;
-  btn.onclick = async () => {
-    const turnOn = btn.dataset.on !== "1", errEl = document.getElementById("gSuppliersError");
-    if(!turnOn && !await askConfirm_("Turn off supplier connections?\n\nVendor integrations leave the menu and nothing is sent to your suppliers. Saved connections and orders already placed are kept, and come back when you turn it on again.")) return;
-    if(errEl) errEl.textContent = "";
-    showToast("Saving — the program restarts for a moment…");
-    try{
-      const r = await window.oddDesktop.setSuppliersOn(turnOn);
-      if(r && r.ok === false && errEl) errEl.textContent = r.message || "Could not save.";
-    }catch(e){ if(errEl) errEl.textContent = "Could not save."; }
+// Open / close panels as boxes are ticked, and the panels' own controls.
+function wireGlobalFeatures_(c){
+  const $ = (id) => document.getElementById(id);
+  document.querySelectorAll("#gFeatures .g-feat-head input[type=checkbox]").forEach(box => box.addEventListener("change", () => {
+    const panel = $("gPanel-" + box.dataset.feature);
+    if (panel) { panel.hidden = !box.checked; if (box.checked && panel.scrollIntoView) panel.scrollIntoView({ block: "nearest" }); }
+    if (box.dataset.feature === "production" && $("gProductionExtra")) $("gProductionExtra").style.display = box.checked ? "" : "none";
+    if (box.dataset.feature === "email") {
+      const dv = document.querySelector('#gFeatRow-designVerification .gFeature');
+      if (dv) { dv.disabled = !box.checked; if (!box.checked) dv.checked = false; }
+      const needs = document.querySelector("#gFeatRow-designVerification .g-feat-needs"); if (needs) needs.hidden = box.checked;
+    }
+  }));
+  if ($("gEmailPreset")) {
+    const summary = () => { if ($("gEmailServerSummary")) $("gEmailServerSummary").textContent = [$("gEmailHost").value, $("gEmailPort").value, $("gEmailSecurity").value === "tls" ? "SSL/TLS" : "STARTTLS"].filter(Boolean).join(" · "); };
+    $("gEmailPreset").onchange = () => {
+      const p = DESKTOP_MAIL_PRESETS.find(x => x.id === $("gEmailPreset").value) || DESKTOP_MAIL_PRESETS[0];
+      $("gEmailPresetNote").textContent = p.note;
+      if (p.host) { $("gEmailHost").value = p.host; $("gEmailPort").value = p.port; $("gEmailSecurity").value = p.security; }
+      else { $("gEmailHost").value = ""; $("gEmailServer").open = true; }
+      summary();
+    };
+    // The usual pairing, when the port is changed by hand: 465 is SSL/TLS, 587 STARTTLS.
+    $("gEmailPort").onchange = () => { const n = Number($("gEmailPort").value); if (n === 465) $("gEmailSecurity").value = "tls"; else if (n === 587) $("gEmailSecurity").value = "starttls"; summary(); };
+    $("gEmailHost").oninput = summary; $("gEmailSecurity").onchange = summary;
+  }
+  if ($("gEmailTest")) $("gEmailTest").onclick = async () => {
+    const out = $("gEmailTestResult"); out.textContent = "Sending…";
+    try {
+      const r = await hoopApi_({ action: "sendTestEmail", to: (c.emailSaved && c.emailSaved.from) || "" });
+      const rep = r.report || {};
+      out.textContent = rep.ok ? "✓ Sent to " + rep.to + " — " + (rep.providerMessage || "accepted") : "✗ " + (rep.providerMessage || (rep.hints || []).join(" ") || "Not sent.");
+    } catch (e) { out.textContent = "✗ " + e.message; }
   };
+  if ($("gShippoRemove")) $("gShippoRemove").onclick = () => {
+    const removing = $("gShippoRemove").dataset.remove !== "1";
+    $("gShippoRemove").dataset.remove = removing ? "1" : "";
+    $("gShippoRemove").textContent = removing ? "Keep the key" : "Remove key";
+    $("gShippoKey").placeholder = removing ? "The key is removed when you save" : "A key is saved — paste a new one to replace it";
+    if (removing) $("gShippoKey").value = "";
+  };
+  // A field outlined by a refused save is cleared as soon as it's filled in.
+  document.querySelectorAll("#gFeatures input, #gFeatures select").forEach(e => e.addEventListener("input", () => { e.style.outline = ""; }));
+  if (c.suppliersOn && $("gSuppliersBody")) mountVendorConnections_($("gSuppliersBody"));
+  if (window._gScrollTo && $(window._gScrollTo)) { const t = $(window._gScrollTo); window._gScrollTo = null; if (t.scrollIntoView) t.scrollIntoView({ block: "start" }); }
+}
+// What would make this save invalid, checked before anything is sent: "" or the message (the fields
+// to fill in are outlined, and the first panel with one is scrolled to).
+function globalSettingsProblem_(){
+  const $ = (id) => document.getElementById(id);
+  const val = (id) => (($(id) || {}).value || "").trim();
+  const ticked = (k) => { const b = document.querySelector(`#gFeatRow-${k} .g-feat-head input[type=checkbox]`); return !!b && b.checked && !b.disabled; };
+  document.querySelectorAll("#gFeatures input, #gFeatures select").forEach(e => { e.style.outline = ""; });
+  const c = window._gSettingsCtx || {};
+  const problems = [], flagged = [];
+  const need = (what, missing, bad) => { if (missing.length || bad.length) problems.push(`${what} needs ${[missing.length ? missing.map(m => m[1]).join(", ") : "", ...bad.map(b => b[1])].filter(Boolean).join("; ")}`); flagged.push(...missing.map(m => m[0]), ...bad.map(b => b[0])); };
+  if (ticked("shipping")) {
+    const us = (val("gLocaleCountry") || (adminIsUS_() ? "US" : "OTHER")) !== "OTHER";
+    const fields = [["gShipName", "Name"], ["gShipStreet1", "Street address"], ["gShipCity", "City"], ["gShipState", us ? "State" : "State / region"], ["gShipZip", us ? "ZIP" : "Postal code"], ["gShipPhone", "Phone"], ["gShipEmail", "Email"]];
+    const missing = fields.filter(([id]) => !val(id)).map(([id, l]) => [id, "the ship-from " + (l === "ZIP" ? l : l.toLowerCase())]);
+    const bad = [];
+    if (us && val("gShipZip") && !/^\d{5}(-\d{4})?$/.test(val("gShipZip"))) bad.push(["gShipZip", "a 5-digit ZIP (or ZIP+4)"]);
+    if (us && val("gShipState") && !/^[A-Za-z]{2}$/.test(val("gShipState"))) bad.push(["gShipState", "a 2-letter state"]);
+    if (val("gShipEmail") && !/^\S+@\S+\.\S+$/.test(val("gShipEmail"))) bad.push(["gShipEmail", "a ship-from email that looks like one"]);
+    const removing = $("gShippoRemove") && $("gShippoRemove").dataset.remove === "1";
+    const hasKey = c.desktop ? (!!val("gShippoKey") || (c.keySet && !removing)) : window._gShippoKey !== false;
+    if (!hasKey) { missing.unshift([c.desktop ? "gShippoKey" : "", "a Shippo key"]); }
+    need("Shipping", missing, bad);
+  }
+  if (c.desktop && ticked("email")) {
+    const missing = [["gEmailFrom", "the email address"], ["gEmailHost", "the outgoing (SMTP) server"], ["gEmailPort", "the port"]].filter(([id]) => !val(id));
+    if (!val("gEmailPass") && !c.emailSaved) missing.push(["gEmailPass", "the password"]);
+    const bad = val("gEmailFrom") && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(val("gEmailFrom")) ? [["gEmailFrom", "an email address that looks like one"]] : [];
+    if (missing.some(m => m[0] === "gEmailHost" || m[0] === "gEmailPort") && $("gEmailServer")) $("gEmailServer").open = true;
+    need("Email", missing, bad);
+  }
+  if (c.desktop && ticked("designVerification") && !ticked("email")) problems.push("Design approval needs Email");
+  if (!problems.length) return "";
+  flagged.filter(Boolean).forEach(id => { const e = $(id); if (e) e.style.outline = "2px solid #b03a2e"; });
+  const first = flagged.filter(Boolean).map($).find(Boolean);
+  if (first) { const panel = first.closest(".g-feat-panel"); if (panel) panel.hidden = false; if (first.scrollIntoView) first.scrollIntoView({ block: "center" }); }
+  return `Nothing was saved. ${problems.join(". ")}. Fill ${flagged.length > 1 ? "them" : "it"} in, or untick ${problems.length > 1 ? "those features" : "it"}.`;
+}
+// The desktop program's part of a save: what changed in the Shipping key, Email and Supplier
+// connections. { shippoKey?, email?: { on, settings, password }, suppliers? } — empty when nothing did.
+function globalProgramChanges_(){
+  const $ = (id) => document.getElementById(id), c = window._gSettingsCtx || {};
+  if (!c.desktop) return {};
+  const out = {}, val = (id) => (($(id) || {}).value || "").trim();
+  const box = (k) => document.querySelector(`#gFeatRow-${k} .g-feat-head input[type=checkbox]`);
+  if (val("gShippoKey")) out.shippoKey = val("gShippoKey");
+  else if ($("gShippoRemove") && $("gShippoRemove").dataset.remove === "1") out.shippoKey = null;
+  const email = box("email"), saved = c.emailSaved;
+  if (email && email.checked) {
+    const settings = { host: val("gEmailHost"), port: Number(val("gEmailPort")), security: ($("gEmailSecurity") || {}).value || "starttls", from: val("gEmailFrom"), user: val("gEmailUser") || val("gEmailFrom") };
+    const same = saved && saved.on && saved.host === settings.host.toLowerCase() && Number(saved.port) === settings.port && saved.security === settings.security && saved.from === settings.from && saved.user === settings.user;
+    if (!same || val("gEmailPass")) out.email = { on: true, settings, password: ($("gEmailPass") || {}).value || "" };
+  } else if (email && saved && saved.on) out.email = { on: false };
+  const sup = box("suppliers");
+  if (sup && sup.checked !== !!c.suppliersOn) out.suppliers = sup.checked;
+  return out;
 }
 
 // The desktop version's backup reminder: there is no copy in the cloud, so a slim note under the menu
@@ -1368,9 +1454,7 @@ function renderDesktopOff_(app, hash){
       <div class="stitch stitch-thick"></div>
     </div>
     <div class="admin-panel" style="--org-accent:var(--accent);" id="desktopOffPanel">
-      <div class="admin-empty">${String(hash || "").split("/")[0] === "vendors"
-        ? "Vendor integrations need the internet. Turn them on under Global settings → Supplier connections."
-        : "Communications is about email. Set up your mailbox under Global settings → Email to send order emails, invoices and the morning roll-up."}</div>
+      <div class="admin-empty">Communications is about email. Turn on <a href="#settings">Email under Global settings → Features</a> to send order emails, invoices and the morning roll-up.</div>
       <div class="admin-actions" style="margin-top:14px;"><button class="admin-btn" onclick="location.hash='#orders'">Back to Orders</button></div>
     </div>`;
 }
@@ -2142,11 +2226,16 @@ async function renderVendorIntegrations(app){
   document.title = adminTitle_("Vendor integrations");
   app.innerHTML = `
     ${adminPageHead_("Vendor integrations")}
-    <div class="admin-panel" style="--org-accent:var(--accent);max-width:1000px;margin:8px auto 60px;">
+    <div class="admin-panel" style="--org-accent:var(--accent);max-width:1000px;margin:8px auto 60px;" id="vcPage"></div>`;
+  await mountVendorConnections_(document.getElementById("vcPage"));
+}
+// The vendors and "+ Connect a vendor", drawn into `root`: the Vendor integrations page, and the
+// desktop version's Global settings → Features → Supplier connections panel.
+async function mountVendorConnections_(root){
+  root.innerHTML = `
       <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:1.5;">Connect suppliers through <b>PromoStandards</b>, the industry's shared web services (S&amp;S, SanMar, OTTO Cap and ~1,900 others). A connected vendor's prices, colors, sizes, descriptions and images come in live — reviewed before anything changes — instead of from a downloaded file.</div>
       <div style="margin-bottom:12px;"><button type="button" class="admin-btn" id="vcConnect">+ Connect a vendor</button></div>
-      <div id="vcBody" style="color:#888;font-size:14px;">Loading…</div>
-    </div>`;
+      <div id="vcBody" style="color:#888;font-size:14px;">Loading…</div>`;
   if (!adminKey) { adminKey = (await adminLogin()) || ""; if (!adminKey) return; }
   const draw = async () => {
     const body = document.getElementById("vcBody"); if (!body) return;
@@ -7991,15 +8080,15 @@ async function renderGlobalSettings(app){
       if(pr.ok && pd.status === "ok") pricing = pd.pricing;
     }catch(e){}
     const pv = (v) => v == null ? "" : escapeHtml(String(v));
-    // Desktop: whether the program holds a Shippo key (never the key itself — desktop/preload.js).
-    const shippoKeySet = adminDesktop_() ? await adminDesktopHasShippoKey_() : null;
-    const emailSettings = adminDesktop_() ? await adminDesktopEmailSettings_() : undefined;
+    // Desktop: what the program keeps for the Features panels — whether a Shippo key is saved (never
+    // the key itself), the mailbox (never its password) and whether supplier connections are on.
+    const desktop = adminDesktop_() && !!window.oddDesktop;
+    const ctx = window._gSettingsCtx = { desktop, featureList, features, lockedFeatures, shipFrom, us, machineSettings, machineLoaded: productionOn,
+      keySet: desktop ? !!(await adminDesktopHasShippoKey_()) : false, cloudKey: window._gShippoKey,
+      emailSaved: desktop ? (await adminDesktopEmailSettings_()) || null : null, suppliersOn: desktop && adminDesktopSuppliers_() };
     document.getElementById("adminPanel").innerHTML = `
       <div class="admin-form">
         ${setupStatusHtml_(setupItems)}
-        ${emailSettings === undefined ? "" : desktopEmailSectionHtml_(emailSettings)}
-        ${shippoKeySet === null ? "" : desktopShippoSectionHtml_(shippoKeySet, features.shipping !== false)}
-        ${shippoKeySet === null ? "" : desktopSuppliersSectionHtml_(adminDesktopSuppliers_())}
         <h2 style="margin-bottom:12px;">Business profile</h2>
         <div class="admin-note" style="margin-bottom:14px;">${adminDesktop_()
           ? "Your business. The name appears on packing slips, labels, invoices and reports, and in the window title; the rest is printed where customers need it (how to pay, where to mail a check). Leave anything you don't use blank."
@@ -8040,13 +8129,7 @@ async function renderGlobalSettings(app){
         <div class="admin-note" style="margin:-4px 0 14px;"><strong>United States:</strong> 5-digit ZIP codes, 2-letter states, a check that the ZIP belongs to the state, and carrier shipping rates by ZIP.<br>
           <strong>Other:</strong> postal code and state / region are free text and aren't checked. Carrier shipping rates and labels aren't available — shops offer pickup and flat-fee delivery options instead.</div>
 
-        ${featureList.length ? `<h2 style="margin:22px 0 12px;">Features</h2>
-        <div class="admin-note" style="margin-bottom:14px;">Parts of the site you can do without. Turning one off hides its pages here and stops its actions; nothing is deleted, and turning it back on brings everything back as it was. Stock of blanks and transfers, and cost of goods, are always on — making an order uses them.<br>
-          <strong>Storefront</strong> is the one switch that hides nothing here: with it off, customers see an “online ordering isn't available” page on every shop address, and you keep entering orders, sending payment links and design proofs, and using Publish, a shop's “ready” box and its custom domain exactly as before (they only matter once it's back on).</div>
-        ${lockedFeatures.length ? `<div class="admin-note" style="margin-bottom:14px;"><strong>Desktop version:</strong> the online storefront stays off here. Shipping (carrier rates, labels and tracking) can be turned on once a Shippo key is set above, and Design approval (a proof emailed to the customer, who replies to approve it) once email is set up above.</div>` : ""}
-        <div id="gFeatures">${featureList.map(f => { const locked = lockedFeatures.includes(f.key);
-          return `<label class="checkbox-row"><input type="checkbox" class="gFeature" data-feature="${escapeHtml(f.key)}" ${features[f.key] !== false ? "checked" : ""}${locked ? " disabled data-locked=\"1\"" : ""}> ${escapeHtml(f.label)}${locked ? ` <span style="font-size:12px;color:#666;">${f.key === "shipping" ? "(needs a Shippo key — see Carrier shipping above)" : f.key === "designVerification" ? "(needs email — see Email above)" : "(not in the desktop version)"}</span>` : ""}</label>
-          <div class="admin-note" style="margin:-4px 0 12px 26px;">${escapeHtml(f.description)}</div>`; }).join("")}</div>` : ""}
+        ${featureList.length ? globalFeaturesHtml_(ctx) : ""}
 
         <h2 style="margin:22px 0 12px;">Payment methods</h2>
         <div class="admin-note" style="margin-bottom:14px;">These are site-wide toggles. Disabling a method here removes it for <strong>all shops</strong>, even if that org has it enabled. Org-level settings can further restrict methods but cannot re-enable a globally disabled one.</div>
@@ -8075,36 +8158,7 @@ async function renderGlobalSettings(app){
           <input type="text" id="gTaxJurisdiction" maxlength="${us ? 2 : 50}" value="${escapeHtml(salesTax.jurisdiction || "")}" placeholder="${us ? "e.g. OH" : "e.g. Ontario"}" style="${us ? "max-width:80px;text-transform:uppercase;" : "max-width:320px;"}">
         </label>
 
-        <div id="gShipFromSection"${shippingOn ? "" : ' style="display:none;"'}>
-        <h2 style="margin:22px 0 12px;">Ship-from address</h2>
-        <div class="admin-note" style="margin-bottom:14px;">Printed on every shipping label as the sender, and used for shipping-rate quotes${adminDesktop_() ? "" : " on the storefront"}. <strong>Required while Shipping is on:</strong> everything but Name — what USPS needs to sell a label. Settings aren't saved until it's complete.</div>
-        <label>Name
-          <input type="text" id="gShipName" maxlength="100" value="${escapeHtml(shipFrom.name || "")}">
-        </label>
-        <label>Street address
-          <input type="text" id="gShipStreet1" maxlength="200" value="${escapeHtml(shipFrom.street1 || "")}">
-        </label>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <label style="flex:2;min-width:160px;">City
-            <input type="text" id="gShipCity" maxlength="100" value="${escapeHtml(shipFrom.city || "")}">
-          </label>
-          <label style="${us ? "flex:0 0 80px;" : "flex:1;min-width:120px;"}"><span id="gShipStateLabel">${us ? "State" : "State / region"}</span>
-            <input type="text" id="gShipState" maxlength="${us ? 2 : 50}" value="${escapeHtml(shipFrom.state || "")}" style="${us ? "text-transform:uppercase;" : ""}">
-          </label>
-          <label style="flex:0 0 130px;"><span id="gShipZipLabel">${us ? "ZIP" : "Postal code"}</span>
-            <input type="text" id="gShipZip" maxlength="12" value="${escapeHtml(shipFrom.zip || "")}">
-          </label>
-        </div>
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <label style="flex:1;min-width:160px;">Phone
-            <input type="text" id="gShipPhone" maxlength="30" value="${escapeHtml(shipFrom.phone || "")}" placeholder="${us ? "555-555-0100" : ""}">
-          </label>
-          <label style="flex:1;min-width:200px;">Email
-            <input type="email" id="gShipEmail" maxlength="200" value="${escapeHtml(shipFrom.email || "")}">
-          </label>
-        </div>
-        </div>
-        <div id="gMachineSection"${productionOn ? "" : ' style="display:none;"'}>
+        <div id="gProductionExtra"${productionOn ? "" : ' style="display:none;"'}>
         <h2 style="margin:22px 0 12px;">Pricing</h2>
         <div class="admin-note" style="margin-bottom:14px;">What each product's Pricing panel takes off the price to show what an item leaves. Card processing is counted on every item as if paid by card (the worst case). The targets are optional — leave one blank to not be alerted on it. They're an <strong>or</strong>: an item that meets either one is fine (a $5 cap that makes $40/hr against a $10 / $40/hr pair isn't flagged; the hourly target counts only for products with a run time). An item that misses every target set is flagged on its product, on the Products list, in Price analysis and (once, when it slips) in the 6 AM email.</div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -8131,9 +8185,6 @@ async function renderGlobalSettings(app){
         <div class="admin-note" style="margin-bottom:14px;">When an order from a vendor reaches its amount (or piece count) it ships free. Blanks to Order shows how far each vendor's order is from it, with <strong>Get me to free shipping</strong>. One row per vendor named on a blank; each change is saved at once.</div>
         <div id="gVendorShipping"><div class="admin-summary">Loading&hellip;</div></div>
 
-        <h2 style="margin:22px 0 12px;">Machine Files</h2>
-        <div class="admin-note" style="margin-bottom:14px;">The Machine Files screen can show a <strong>Delete</strong> button on each file. Deleting over the machine protocol is currently disabled in the machines' firmware (the command exists but always refuses — see <code>the send-agent's PROTOCOL.md</code>), so the button is hidden by default. Turn it on only if a firmware update enables delete.</div>
-        <label class="checkbox-row"><input type="checkbox" id="gMachShowDelete" ${machineSettings.showDeleteButton ? "checked" : ""}> Show delete buttons on Machine Files</label>
         </div>
 
         <div id="globalSettingsError" class="admin-error"></div>
@@ -8145,10 +8196,8 @@ async function renderGlobalSettings(app){
       </div>
     `;
     loadVendorShippingSettings_();
-    wireGlobalShippingToggle_();
-    wireDesktopEmailSection_();
-    wireDesktopShippoSection_();
-    wireDesktopSuppliersSection_();
+    wireGlobalFeatures_(ctx);
+    try { if (sessionStorage.getItem("oddSettingsSaved")) { sessionStorage.removeItem("oddSettingsSaved"); showToast("Global settings saved."); } } catch (e) {}
   }catch(e){
     document.getElementById("adminPanel").innerHTML = `<div class="admin-empty">Could not reach the server.</div>`;
   }
@@ -8236,45 +8285,12 @@ function setupStatusHtml_(items){
 function globalSettingsNeedPublish_(){
   return ["gPayCard", "gPayVenmo", "gPayZelle", "gPayCheck"].some(id => { const e = document.getElementById(id); return !!e && e.checked !== e.defaultChecked; });
 }
-// Global settings → Features → Shipping: its Ship-from address shows as soon as the box is ticked
-// (it's filled in and saved in the same Save), and hides when it's unticked.
-function wireGlobalShippingToggle_(){
-  const box = document.querySelector('#gFeatures .gFeature[data-feature="shipping"]'), sec = document.getElementById("gShipFromSection");
-  if (!box || !sec) return;
-  box.addEventListener("change", () => { sec.style.display = box.checked ? "" : "none"; if (box.checked && sec.scrollIntoView) sec.scrollIntoView({ block: "nearest" }); });
-}
-// Shipping ticked needs a Shippo key and a complete ship-from address (functions/api/orders.js
-// updateFeatures refuses otherwise): checked before anything is sent, so nothing is half saved.
-// Returns "" or what's wrong, and outlines the fields to fill in.
-function globalShippingProblem_(){
-  const box = document.querySelector('#gFeatures .gFeature[data-feature="shipping"]');
-  const fields = ["gShipStreet1", "gShipCity", "gShipState", "gShipZip", "gShipPhone", "gShipEmail"];
-  fields.forEach(id => { const e = document.getElementById(id); if (e) e.style.outline = ""; });
-  if (!box || !box.checked || box.disabled) return "";
-  const us = (((document.getElementById("gLocaleCountry") || {}).value) || (adminIsUS_() ? "US" : "OTHER")) !== "OTHER";
-  const val = (id) => ((document.getElementById(id) || {}).value || "").trim();
-  const label = { gShipStreet1: "Street address", gShipCity: "City", gShipState: us ? "State" : "State / region", gShipZip: us ? "ZIP" : "Postal code", gShipPhone: "Phone", gShipEmail: "Email" };
-  const missing = fields.filter(id => !val(id));
-  const bad = [];
-  if (us && val("gShipZip") && !/^\d{5}(-\d{4})?$/.test(val("gShipZip"))) bad.push(["gShipZip", "the ZIP must be 5 digits (or ZIP+4)"]);
-  if (us && val("gShipState") && !/^[A-Za-z]{2}$/.test(val("gShipState"))) bad.push(["gShipState", "the state must be a 2-letter code"]);
-  if (val("gShipEmail") && !/^\S+@\S+\.\S+$/.test(val("gShipEmail"))) bad.push(["gShipEmail", "the email doesn't look like one"]);
-  const noKey = window._gShippoKey === false;
-  if (!noKey && !missing.length && !bad.length) return "";
-  [...missing, ...bad.map(b => b[0])].forEach(id => { const e = document.getElementById(id); if (e) e.style.outline = "2px solid #b03a2e"; });
-  const sec = document.getElementById("gShipFromSection");
-  if (sec && (missing.length || bad.length)) { sec.style.display = ""; if (sec.scrollIntoView) sec.scrollIntoView({ block: "center" }); }
-  const parts = [noKey ? (adminDesktop_() ? "a Shippo key (Carrier shipping (Shippo), above)" : "a Shippo key (the SHIPPO_API_KEY secret — see docs/configuration.md)") : "",
-    missing.length ? "in the Ship-from address: " + missing.map(id => label[id]).join(", ") : "",
-    bad.length ? "in the Ship-from address, " + bad.map(b => b[1]).join("; ") : ""].filter(Boolean);
-  return `Nothing was saved. Shipping needs ${parts.join(", and ")}. Fill ${parts.length > 1 || missing.length > 1 ? "them" : "it"} in, or untick Shipping.`;
-}
-
 async function submitGlobalSettings(){
   const errEl = document.getElementById("globalSettingsError");
   if(errEl) errEl.textContent = "";
-  const problem = globalShippingProblem_();
+  const problem = globalSettingsProblem_();
   if(problem){ if(errEl) errEl.textContent = problem; showToast(problem, true); return; }   // the page has scrolled to the fields: say it there too
+  const program = globalProgramChanges_();   // the desktop program's part: Shippo key, mailbox, supplier switch
   const needPublish = globalSettingsNeedPublish_();
   const body = {
     action: "updateGlobalSettings",
@@ -8289,6 +8305,23 @@ async function submitGlobalSettings(){
     }
   };
   try{
+    // The desktop program's part first, so the features it unlocks (Shipping with a new key, Design
+    // approval with email) can be saved on in the same go: a new mailbox is tried (sign-in only),
+    // then the program takes the key, mailbox and supplier switch at once and restarts its server.
+    if(Object.keys(program).length){
+      if(program.email && program.email.on){
+        const tried = await window.oddDesktop.checkEmail(program.email.settings, program.email.password);
+        if(!tried || !tried.ok){
+          const m = "Nothing was saved. The mailbox didn't sign in: " + ((tried && tried.message) || "no answer") ;
+          if(errEl) errEl.textContent = m; showToast(m, true);
+          const pass = document.getElementById("gEmailPass"); if(pass){ pass.style.outline = "2px solid #b03a2e"; if(pass.scrollIntoView) pass.scrollIntoView({ block: "center" }); }
+          return;
+        }
+      }
+      showToast("Saving — the program restarts for a moment…");
+      const applied = await window.oddDesktop.applySettings(program);
+      if(!applied || !applied.ok){ if(errEl) errEl.textContent = "Nothing was saved. " + ((applied && applied.message) || "The program's settings couldn't be saved."); return; }
+    }
     // Region first: the country decides how the ship-from address, and the tax state below, are checked.
     if(document.getElementById("gLocaleCountry")){
       const locRes = await fetch("/api/orders", {
@@ -8307,7 +8340,7 @@ async function submitGlobalSettings(){
     // Features next, with Shipping's ship-from address in the same request when Shipping is ticked:
     // the server saves the two together, or neither (orders.js updateFeatures). The Machine Files
     // setting is saved only if its section was shown when the page loaded.
-    const machShown = (document.getElementById("gMachineSection") || {style: {}}).style.display !== "none";
+    const machShown = (document.getElementById("gMachineSection") || {dataset: {}}).dataset.loaded === "1";
     let savedFeatures = null;
     const featBoxes = [...document.querySelectorAll("#gFeatures .gFeature")];
     if(featBoxes.length){
@@ -8393,6 +8426,8 @@ async function submitGlobalSettings(){
     }
     // New fees / targets re-check every product: say which are now below a target.
     if((priceData.belowTarget || []).length) setTimeout(() => belowTargetToast_(priceData.belowTarget, "With these settings, "), 1200);
+    // The program restarted with new settings: reload, so the menu and pages follow them.
+    if(Object.keys(program).length){ try { sessionStorage.setItem("oddSettingsSaved", "1"); } catch (e) {} location.hash = "#settings"; location.reload(); return; }
     showToast(adminDesktop_() ? "Global settings saved." : needPublish
       ? "Global settings saved. The payment-method change reaches the storefront when you click Publish on the Manage catalog screen; everything else is already live."
       : "Global settings saved. The changes are already live — no need to Publish.", false);
