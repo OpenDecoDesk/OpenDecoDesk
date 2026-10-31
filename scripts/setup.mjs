@@ -784,8 +784,12 @@ export async function upgrade({ print, run, files, configPath = "wrangler.toml",
     print(cfg.vars.ROOT_DOMAIN === undefined && !site.rootDomain && ci
       ? "   No domain yet: the admin answers on this Worker's workers.dev address until one is set (the admin's Setup page)."
       : `   ${configPath} has no ROOT_DOMAIN setting, so the shops' hostnames can't be worked out. This deploy keeps only the hostnames already listed there.`);
+  } else if (!cfg.vars.ROOT_DOMAIN) {
+    // A Deploy-button site: the app attached the admin's hostname and each shop's through Cloudflare's API
+    // (functions/_lib/cloudflareSetup.js, "Automatic hostnames"). A deploy that lists no hostname leaves
+    // those alone; listing them here would also need the build's own key to reach the domain.
+    print(`   ${root}: the admin's and the shops' hostnames are attached by the app; this deploy leaves them as they are.`);
   } else {
-    if (!cfg.vars.ROOT_DOMAIN) want.push(site.adminSubdomain + "." + root);   // a Deploy-button site: the admin's own hostname is attached by the app
     r = run(commands.d1Query(configPath, SHOP_SUBDOMAINS_SQL));
     if (r.skipped) print("   (every shop in the database gets a line in the hostnames block)");
     else {

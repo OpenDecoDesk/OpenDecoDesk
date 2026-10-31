@@ -29,22 +29,23 @@
  *   Revokes the session in the cookie (server-side) and clears the cookie.
  */
 
-import { classifyHost }       from "../_lib/hostConfig.js";
+import { classifyHost, rootDomain } from "../_lib/hostConfig.js";
 import { getCatalogData }     from "../_lib/catalogCache.js";
 import { rateLimited, rateLimitResponse, rateLimitCheckGlobal, rateLimitHitGlobal } from "../_lib/rateLimit.js";
 import { jsonResponse }       from "../_lib/http.js";
 import {
   timingSafeEqual, issueSession, revokeSession, readCookie, isSameOrigin,
   sessionCookieHeader, clearSessionCookieHeader, SESSION_COOKIE, SESSION_TTL_SEC,
-  bootstrapState, rememberSecret, verifyUserPassword, pendingFor, revokeAllSessions,
+  bootstrapState, rememberSecret, verifyUserPassword, pendingFor, revokeAllSessions, weakSetupPassword,
   looksLikeRecoveryCode, spendRecoveryCode, revokeUserSessionsFor,
   ADMIN_AUTH_GLOBAL_BUCKET, ADMIN_AUTH_GLOBAL_WINDOW, adminAuthGlobalLimit,
 } from "../_lib/adminAuth.js";
 import { accessEnabled, verifyAccess } from "../_lib/access.js";
 import { verifyTOTP }         from "../_lib/totp.js";
+import { disableWorkersDev }  from "../_lib/cloudflareSetup.js";
 import {
   recordFailedAdminLogin, insertAuditLog, getUserByEmail, getUserById, insertFirstAdmin, insertUser, getBootstrapState,
-  updateUser, setUserRoleAndStatus, claimUserTotpCounter,
+  updateUser, setUserRoleAndStatus, claimUserTotpCounter, noteAdminHostSeen, getSiteSetting, noteWorkersDevOff,
 } from "../_lib/db.js";
 
 async function getHost(env, request){
@@ -105,6 +106,11 @@ export async function onRequestPost(context){
   try{
     boot = await bootstrapState(env);
     if(boot.open && timingSafeEqual(key, env.PROXY_ADMIN_PASSPHRASE)){
+      // The setup password is the way in to a new site: refuse one that is the example's placeholder
+      // or too short to be safe on an address anyone can reach.
+      if(weakSetupPassword(env)){
+        return jsonResponse({status:"error", code:"weak_setup_password", message:"The setup password is still the example one, or shorter than 12 characters. Change it first: Cloudflare dashboard → Workers & Pages → this Worker → Settings → Variables and Secrets → PROXY_ADMIN_PASSPHRASE. Then sign in with the new one."}, 403);
+      }
       viaPassphrase = true;
       user = boot.admin;
     }else{
@@ -170,6 +176,24 @@ export async function onRequestPost(context){
   }catch(e){
     console.error("admin-session: could not issue a session:", e);
     return jsonResponse({status:"error", message:"Session storage unavailable — try again."}, 503);
+  }
+
+  // A sign-in on admin.<root domain> (not the workers.dev address) proves the domain works: noted
+  // once, so the next deploy may switch workers.dev off. Never a reason to refuse the sign-in.
+  if(env.ROOT_DOMAIN && !/\.workers\.dev$/i.test(new URL(request.url).hostname)){
+    try{ await noteAdminHostSeen(env.DB, rootDomain(env), new URL(request.url).hostname.split(".")[0].toLowerCase()); }
+    catch(e){ console.error("admin-session: could not note the admin host:", e); }
+    // A site given its domain in the admin (functions/_lib/cloudflareSetup.js) no longer needs its
+    // workers.dev address: switched off now, and tried again at later sign-ins until that works.
+    if(env.CF_API_TOKEN && env.CF_ACCOUNT_ID && env.CF_WORKER_NAME){
+      const off = (async () => {
+        const site = await getSiteSetting(env.DB);
+        if(!site.viaSetup || site.workersDevOff) return;
+        await disableWorkersDev({ token: env.CF_API_TOKEN, accountId: env.CF_ACCOUNT_ID, service: env.CF_WORKER_NAME });
+        await noteWorkersDevOff(env.DB);
+      })().catch(e => console.error("admin-session: could not switch the workers.dev address off:", e && e.message));
+      if(typeof context.waitUntil === "function") context.waitUntil(off); else await off;
+    }
   }
 
   // `session:"cookie"` tells admin.js the credential lives in the cookie; the

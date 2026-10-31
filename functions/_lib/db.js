@@ -2111,6 +2111,50 @@ export async function setSettingRaw(db, key, value) {
   await db.prepare("INSERT OR REPLACE INTO global_settings (key, value) VALUES (?, ?)").bind(key, String(value)).run();
 }
 
+// SIGNING_SECRET for an install that has none: Cloudflare's Deploy page asks only for the setup
+// password. Made once (32 random bytes) and kept here ('signingSecret'), never sent to a page;
+// INSERT OR IGNORE so two first requests at once end up with the same one. src/worker.js passes it
+// on as env.SIGNING_SECRET. A Worker secret set later must be this same value, or links already sent
+// (previews, invoices, receipts) stop working.
+export async function ensureSigningSecret(db) {
+  const have = await getSettingRaw(db, "signingSecret");
+  if (have) return have;
+  const fresh = Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, "0")).join("");
+  await db.prepare("INSERT OR IGNORE INTO global_settings (key, value) VALUES ('signingSecret', ?)").bind(fresh).run();
+  return await getSettingRaw(db, "signingSecret");
+}
+
+// The site's own address ('site'): { rootDomain, adminSubdomain, adminHostSeen }. adminHostSeen is
+// set the first time a sign-in completes on admin.<rootDomain>; `npm run deploy` switches the
+// workers.dev address off only after that (scripts/setup.mjs parseSiteSetting), so a domain whose
+// certificate isn't ready yet can't lock the owner out.
+export async function getSiteSetting(db) {
+  try { const v = JSON.parse(await getSettingRaw(db, "site") || "{}"); return v && typeof v === "object" && !Array.isArray(v) ? v : {}; }
+  catch { return {}; }
+}
+
+// The domain a Deploy-button site was given in its Setup step (functions/_lib/cloudflareSetup.js). A new or
+// changed domain hasn't been reached yet, so the workers.dev address stays on until it is (noteAdminHostSeen).
+export async function setSiteDomain(db, rootDomain, adminSubdomain) {
+  const cur = await getSiteSetting(db);
+  const same = cur.rootDomain === rootDomain && cur.adminSubdomain === adminSubdomain;
+  await setSettingRaw(db, "site", JSON.stringify({ ...cur, rootDomain, adminSubdomain, viaSetup: true,
+    adminHostSeen: same && cur.adminHostSeen === true, workersDevOff: same && cur.workersDevOff === true }));
+}
+
+// Records that the admin was reached on its own domain. Returns true when that changed anything.
+export async function noteAdminHostSeen(db, rootDomain, adminSubdomain) {
+  const cur = await getSiteSetting(db);
+  if (cur.adminHostSeen === true && cur.rootDomain === rootDomain && cur.adminSubdomain === adminSubdomain) return false;
+  await setSettingRaw(db, "site", JSON.stringify({ ...cur, rootDomain, adminSubdomain, adminHostSeen: true }));
+  return true;
+}
+
+// The workers.dev address of a site set up in the admin has been switched off (admin-session.js).
+export async function noteWorkersDevOff(db) {
+  await setSettingRaw(db, "site", JSON.stringify({ ...(await getSiteSetting(db)), workersDevOff: true }));
+}
+
 export async function deleteSettingRaw(db, key) {
   await db.prepare("DELETE FROM global_settings WHERE key = ?").bind(key).run();
 }

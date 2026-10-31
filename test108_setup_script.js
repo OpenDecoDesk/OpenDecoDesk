@@ -19,9 +19,12 @@ const UUID = [hex(8, "1a"), hex(4, "b"), hex(4, "c"), hex(4, "d"), hex(12, "e")]
 (async () => {
   const S = await import("./scripts/setup.mjs");
   const src = read("scripts/setup.mjs");
-  const tomlSrc = read("wrangler.toml");
+  // The file as shipped has file storage off (so the Deploy to Cloudflare button doesn't ask for R2);
+  // the checks of how the installer edits the file start from it switched on, as on an account with R2.
+  const shippedToml = read("wrangler.toml");
+  const tomlSrc = S.rewriteWranglerToml(shippedToml, { fileStorage: true });
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "odd-setup-test-"));
-  const copy = (name) => { const p = path.join(tmp, name); fs.writeFileSync(p, tomlSrc); return p; };
+  const copy = (name) => { const p = path.join(tmp, name); fs.writeFileSync(p, shippedToml); return p; };
 
   console.log("=== Input checks ===");
   const v = (f, x) => f(x).value, e = (f, x) => !!f(x).error;
@@ -46,6 +49,9 @@ const UUID = [hex(8, "1a"), hex(4, "b"), hex(4, "c"), hex(4, "d"), hex(12, "e")]
   ok("with fixed 'random' bytes it is deterministic (the generator has no other input)", S.generatePassphrase(() => Buffer.alloc(24, 0)) === "aaaa-aaaa-aaaa-aaaa-aaaa-aaaa" && S.generateSecret(4, () => Buffer.from([1, 2, 3, 255])) === "010203ff");
 
   console.log("\n=== wrangler.toml ===");
+  ok("as shipped, the three bucket blocks are commented out in the installer's marked block, so a new site needs no R2", S.readWranglerToml(shippedToml).storageOff &&
+    !/^\[\[r2_buckets\]\]/m.test(shippedToml) && shippedToml.includes(S.STORAGE_OFF_BEGIN) && Object.keys(S.readWranglerToml(shippedToml).buckets).sort().join() === "DESIGNS,IMAGES,RECEIPTS");
+  ok("…and switching file storage on gives exactly three live bucket blocks", (tomlSrc.match(/^\[\[r2_buckets\]\]/gm) || []).length === 3 && !S.readWranglerToml(tomlSrc).storageOff);
   const before = S.readWranglerToml(tomlSrc);
   ok("the shipped file is read: name, database, the three buckets, the placeholder id, no hostnames or settings yet", before.name === "opendecodesk" && before.databaseName === "opendecodesk-db" &&
     before.buckets.IMAGES === "opendecodesk-images" && before.buckets.RECEIPTS === "opendecodesk-receipts" && before.buckets.DESIGNS === "opendecodesk-designs" &&
@@ -229,7 +235,7 @@ const UUID = [hex(8, "1a"), hex(4, "b"), hex(4, "c"), hex(4, "d"), hex(12, "e")]
     const text = io.text();
     ok("it finishes", !error && result && result.ok === true && result.deployed === false);
     ok("the only program run is `wrangler --version` (which talks to nobody)", st.calls.join("|") === "npx wrangler --version");
-    ok("wrangler.toml is byte-for-byte unchanged, and no other file appeared", fs.readFileSync(cfgPath, "utf8") === tomlSrc && fs.readdirSync(tmp).join() === "dry.toml");
+    ok("wrangler.toml is byte-for-byte unchanged, and no other file appeared", fs.readFileSync(cfgPath, "utf8") === shippedToml && fs.readdirSync(tmp).join() === "dry.toml");
     const would = io.lines.filter(l => /\[dry run\] would run:/.test(l)).map(l => l.replace(/^.*would run: npx wrangler /, "").replace(cfgPath, "CFG"));
     ok("it prints every command it would run, in order", would.length === 14 && would[0] === "whoami" && would[1] === "r2 bucket list" && would[2] === "d1 list --json" && would[3] === "d1 create opendecodesk-db" &&
       would[4] === "r2 bucket create opendecodesk-images" && would[5] === "r2 bucket create opendecodesk-receipts" && would[6] === "r2 bucket create opendecodesk-designs" &&
@@ -416,7 +422,7 @@ const UUID = [hex(8, "1a"), hex(4, "b"), hex(4, "c"), hex(4, "d"), hex(12, "e")]
     st.db._raw.exec(`INSERT INTO orgs (orgId, subdomain, name, createdAt, updatedAt) VALUES ('league-101', 'league', 'League', 't', 't')`);
     u = await up();
     let t = S.readWranglerToml(st.tomlAtDeploy);
-    ok("the next build lists the admin's own hostname and every shop's — or the deploy would detach them", !u.error && t.hosts.join() === "office.myshop.com,league.myshop.com" && st.files.length === 1);
+    ok("the next build lists no hostname: the app attached the admin's and the shops' itself, and a deploy that lists none leaves them alone", !u.error && t.hosts.length === 0 && st.files.length === 1 && /attached by the app/.test(u.text) && /myshop\.com/.test(u.text));
     ok("…and keeps the workers.dev address on until the admin has been reached on the new domain", u.result.workersDev === true && t.workersDev === true);
     st.db._raw.exec(`UPDATE global_settings SET value = '{"rootDomain":"myshop.com","adminSubdomain":"office","adminHostSeen":true}' WHERE key = 'site'`);
     u = await up();
@@ -435,7 +441,7 @@ const UUID = [hex(8, "1a"), hex(4, "b"), hex(4, "c"), hex(4, "d"), hex(12, "e")]
     ok("the bucket listing fails for some other reason: it stops before asking anything and points at wrangler's own message", x.error instanceof S.SetupError && /Could not list your R2 buckets/.test(x.error.message) && /simulated failure/.test(x.error.message) &&
       /wrangler's message above says why/.test(x.error.message) && /This run changed nothing/.test(x.error.message) && /docs\/accounts-and-keys\.md/.test(x.error.message) && !/isn't switched on/.test(x.error.message) && x.io.asked.length === 0);
     ok("…and nothing was created or written: no database, no bucket, wrangler.toml untouched", x.st.calls.length === 3 && x.st.dbs.length === 0 && x.st.buckets.length === 0 && !x.st.calls.some(c => /create|execute|deploy/.test(c)) &&
-      fs.readFileSync(r2off, "utf8") === tomlSrc && x.error.done.length === 1);
+      fs.readFileSync(r2off, "utf8") === shippedToml && x.error.done.length === 1);
     // Modelled on wrangler's output: the banner on stdout, the error (then a log-file line) on stderr. The R2-off lines are
     // as a real run printed them; the several-accounts ones are wrangler's message, not taken from a run.
     const BANNER = "\n ⛅️ wrangler 4.0.0\n───────────────────\nListing buckets...\n";
@@ -458,7 +464,7 @@ const UUID = [hex(8, "1a"), hex(4, "b"), hex(4, "c"), hex(4, "d"), hex(12, "e")]
     const noPath = copy("r2no.toml");
     x = await go({ answers: { ...BASE, withoutStorage: "n" }, config: noPath, state: r2Off() });
     ok("answering no stops there, having changed nothing, and says where R2 is switched on", x.error instanceof S.SetupError && /isn't switched on for this account/.test(x.error.message) && /Storage & databases → R2 → Overview/.test(x.error.message) &&
-      /This run changed nothing/.test(x.error.message) && x.io.asked.length === 1 && x.st.calls.length === 3 && fs.readFileSync(noPath, "utf8") === tomlSrc);
+      /This run changed nothing/.test(x.error.message) && x.io.asked.length === 1 && x.st.calls.length === 3 && fs.readFileSync(noPath, "utf8") === shippedToml);
     x = await go({ answers: BASE, config: copy("r2multi.toml"), state: cloud({ failOn: "r2 bucket list", failWith: {
       stdout: BANNER + "Getting User settings...\nYou are logged in with an OAuth Token.\n┌──────────────┬────────────┐\n│ Account Name │ Account ID │\n├──────────────┼────────────┤\n│ One          │ aaa        │\n│ Two          │ bbb        │\n└──────────────┴────────────┘\n",
       stderr: "X [ERROR] More than one account available but unable to select one in non-interactive mode.\n" } }) });

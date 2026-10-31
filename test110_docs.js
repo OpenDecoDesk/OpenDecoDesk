@@ -29,6 +29,8 @@ for (const f of DOCS) for (const m of text[f].matchAll(/\]\(([^)\s]+)\)/g)) {
 }
 if (broken.length) console.log("   broken:", broken.join("; "));
 ok("every link between the documents points at a file (and heading) that exists", broken.length === 0);
+ok("the Deploy to Cloudflare button points at this repository, in the README and the one-click guide, and both say what has been tested", [readme, text["docs/install-one-click.md"] || ""].every(t => t.includes("](https://deploy.workers.cloudflare.com/?url=https://github.com/OpenDecoDesk/opendecodesk)") && /has(n't| not) been tried on a real account|Not yet tested on a real account/.test(t)) &&
+  readme.includes("docs/install-one-click.md") && /\*\*Tested:\*\*/.test(text["docs/install-one-click.md"]) && /\*\*Not built yet:\*\*/.test(text["docs/install-one-click.md"]));
 ok("the README links to every guide", ["setup", "accounts-and-keys", "configuration", "shops-and-domains", "email", "sales-tax", "operations", "architecture"].every(n => readme.includes("docs/" + n + ".md")) && /CONTRIBUTING\.md/.test(readme) && /SECURITY\.md/.test(readme));
 
 console.log("\n=== The configuration reference is complete ===");
@@ -77,7 +79,9 @@ const urls = [...new Set([...all.matchAll(/https?:\/\/[^\s)`"'>]+/g)].map(m => m
 // The sign-in pages of the outside services, as accounts-and-keys.md gives them (each checked against that service's documentation).
 const SERVICE_PAGES = ["https://dash.cloudflare.com/sign-up", "https://dash.cloudflare.com/profile/api-tokens", "https://dashboard.stripe.com/register", "https://dashboard.stripe.com/apikeys",
   "https://dashboard.stripe.com/webhooks", "https://apps.goshippo.com/join", "https://portal.goshippo.com/api-config/api", "https://resend.com/domains", "https://resend.com/api-keys"];
-const madeUp = urls.filter(u => !SERVICE_PAGES.includes(u) && !/^https:\/\/(admin|images|league)?\.?(myshop\.com|<[^>]+>)|^https:\/\/(admin|images)\.<|^https:\/\/postalpro\.usps\.com\/ZIP_Locale_Detail$|^http:\/\/(localhost|127\.0\.0\.1):\d+|^https:\/\/…|^https:\/\/$/.test(u));
+// The Deploy to Cloudflare button: its picture and its link to this repository.
+const BUTTON = ["https://deploy.workers.cloudflare.com/button", "https://deploy.workers.cloudflare.com/?url=https://github.com/OpenDecoDesk/opendecodesk"];
+const madeUp = urls.filter(u => !SERVICE_PAGES.includes(u) && !BUTTON.includes(u) && !/^https:\/\/(admin|images|league)?\.?(myshop\.com|<[^>]+>)|^https:\/\/(admin|images)\.<|^https:\/\/postalpro\.usps\.com\/ZIP_Locale_Detail$|^http:\/\/(localhost|127\.0\.0\.1):\d+|^https:\/\/…|^https:\/\/$/.test(u));
 if (madeUp.length) console.log("   URLs:", madeUp.join(" "));
 ok("no invented URLs: only example addresses on a made-up domain, localhost, the one real source the code cites, and the services' own sign-in pages", madeUp.length === 0);
 ok("…and those service pages appear only in the accounts guide", SERVICE_PAGES.every(u => text["docs/accounts-and-keys.md"].includes(u)) && DOCS.filter(f => f !== "docs/accounts-and-keys.md").every(f => !SERVICE_PAGES.some(u => text[f].includes(u))));

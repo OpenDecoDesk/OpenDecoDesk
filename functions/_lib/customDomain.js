@@ -138,6 +138,13 @@ async function ensureWorkerDomain_(cfg, hostname) {
   return { configured: true, hostname, exists: true, steps, status: "active", validation: "", error: "" };
 }
 
+// Attaches any hostname (the admin's own, admin.<domain>) to this Worker — orgHostname refuses the admin
+// label, so the domain step (functions/_lib/cloudflareSetup.js) comes in here with its own settings:
+// cfg = { token, accountId, zoneId, service }. Same rules as a shop's: an existing DNS record is never overwritten.
+export async function ensureWorkerHostname(cfg, hostname) {
+  return ensureWorkerDomain_(cfg, String(hostname || "").trim().toLowerCase());
+}
+
 // Current state of the org's domain on the Pages project (or Worker), without changing anything.
 export async function getOrgDomainStatus(env, subdomain) {
   const cfg = customDomainConfig(env);

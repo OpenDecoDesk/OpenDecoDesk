@@ -33,7 +33,7 @@ import * as stripeWebhook from "../functions/api/stripe-webhook.js";
 import * as uploadVerify from "../functions/api/upload-verify.js";
 import * as upload from "../functions/api/upload.js";
 import * as verify from "../functions/api/verify.js";
-import { recordSystemIssue, resolveTimeZone, getDigestRun } from "../functions/_lib/db.js";
+import { recordSystemIssue, resolveTimeZone, getDigestRun, ensureSigningSecret } from "../functions/_lib/db.js";
 import { isDigestHour, localHour, digestHour } from "../functions/_lib/schedule.js";
 import { isDesktopEdition, desktopSuppliersOn, desktopEmailOn } from "../functions/_lib/hostConfig.js";
 import { ensureDesktopReady } from "../functions/_lib/desktop.js";
@@ -77,6 +77,18 @@ function handlerFor(mod, method) {
   return mod["onRequest" + m] || mod.onRequest || null;
 }
 
+// A site with no SIGNING_SECRET of its own (a Deploy-button install) signs with one it made and keeps in
+// the database (ensureSigningSecret), read once per isolate. Every handler then sees env.SIGNING_SECRET
+// as if it were set. If the database can't be read, the env is passed on as it is.
+let madeSigningSecret = null;
+export async function withSigningSecret(env) {
+  if (!env || env.SIGNING_SECRET || !env.DB) return env;
+  try {
+    if (!madeSigningSecret) madeSigningSecret = await ensureSigningSecret(env.DB);
+    return madeSigningSecret ? { ...env, SIGNING_SECRET: madeSigningSecret } : env;
+  } catch (e) { console.error("Could not read or make the signing secret:", e); return env; }
+}
+
 // The desktop edition's start-up step (functions/_lib/desktop.js), once per process: every request
 // waits for the same promise, and a failure is retried by the next request.
 let desktopReady_ = null;
@@ -100,6 +112,7 @@ export async function handleRequest(request, env, ctx) {
   }
   const handler = handlerFor(mod, request.method);
   if (!handler) return text("Method not allowed", 405);
+  env = await withSigningSecret(env);
   return handler({
     request,
     env,
@@ -127,6 +140,7 @@ async function desktopRollUpDue_(env, when) {
 // configured local hour runs it, so it goes out once a day at the same local time all year. The
 // time zone is the install's one zone: Global settings → Region, else TIMEZONE, else UTC.
 export async function handleScheduled(event, env) {
+  env = await withSigningSecret(env);
   // The desktop program has no cron: desktop/main.js calls this while it is open (a minute after it
   // opens, then every two hours). Of the jobs below only these apply there (no Stripe, no customer
   // uploads): carrier tracking with a Shippo key (both check functions also skip themselves while

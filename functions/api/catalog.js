@@ -173,9 +173,20 @@ export async function onRequestGet(context){
 
   const host = classifyHost(url.hostname, catalogData.subdomainMap, env);
 
+  // A draft preview on a site with no domain yet (a Deploy-button install): the admin's own workers.dev
+  // address serves it, as ?shop=<shop ID>&preview=<token signed for that shop>. Anything short of a valid
+  // token for that very shop gets the admin answer below, so shop IDs can't be probed this way.
+  let previewHere = false;
+  if(host.kind === "admin" && !(env && env.ROOT_DOMAIN) && /\.workers\.dev$/i.test(url.hostname) && env.DB && url.searchParams.get("shop")){
+    try{ previewHere = await verifyPreviewToken(env, url.searchParams.get("shop"), url.searchParams.get("preview")); }
+    catch(e){ previewHere = false; }
+  }
+
   let orgId;
   if(host.kind === "locked"){
     orgId = host.orgId; // ignore any ?org= param entirely — always serve the locked org
+  } else if(previewHere){
+    orgId = url.searchParams.get("shop");
   } else if(host.kind === "root"){
     // The root domain serves no shop at all, and ignores ?org=: answering ?org=<guess> with that
     // shop's catalog would let anyone confirm which org IDs exist. A shop is reached only through
@@ -188,11 +199,16 @@ export async function onRequestGet(context){
     // org names/list here — that stays gated behind the passphrase in
     // orders.js (action: "listOrgs"), so hitting this subdomain alone
     // can't be used to scrape the client list.
+    // site.rootDomain: where shops live (<subdomain>.<root>); "" while the site has no domain yet
+    // (a Deploy-button install on its workers.dev address) — the admin must not guess it. Cleaned up
+    // as hostConfig's rootDomain() does, written out here because older tests load this file with
+    // its hostConfig import line removed.
+    const siteRoot = env && env.ROOT_DOMAIN ? String(env.ROOT_DOMAIN).trim().toLowerCase().replace(/\.$/, "").replace(/^www\./, "") : "";
     // edition: "desktop" tells the admin it runs inside the desktop program (hostConfig.js), so it
     // leaves out what needs the internet; desktopSuppliers / desktopEmail: the owner turned supplier
     // connections on there, or set up email (hostConfig.js desktopSuppliersOn / desktopEmailOn,
     // repeated here to keep this file's one import).
-    return jsonResponse({status:"admin", business: catalogData.business || {}, country, features,
+    return jsonResponse({status:"admin", business: catalogData.business || {}, country, features, site: { rootDomain: siteRoot },
       ...(host.desktop ? {edition:"desktop", ...(String(env.DESKTOP_SUPPLIERS || "") === "on" ? {desktopSuppliers:true} : {}),
         ...(String(env.DESKTOP_EMAIL || "") === "on" ? {desktopEmail:true} : {})} : {})});
   } else {
@@ -213,7 +229,7 @@ export async function onRequestGet(context){
   // unpublished rows (never cached). Anything else — a bad or expired token — is just the published shop.
   let preview = false;
   const previewToken = url.searchParams.get("preview");
-  if(org && previewToken && host.kind === "locked" && env.DB && await verifyPreviewToken(env, orgId, previewToken)){
+  if((org || previewHere) && previewToken && (host.kind === "locked" || previewHere) && env.DB && await verifyPreviewToken(env, orgId, previewToken)){
     try{ const draft = await getDraftCatalogShop(env.DB, orgId); if(draft){ org = draft; preview = true; } }
     catch(e){ console.error("draft preview failed:", e); }
   }

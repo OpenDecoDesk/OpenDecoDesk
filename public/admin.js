@@ -35,9 +35,11 @@ let _boxPresetsCache = null; // cached from DB; null = not yet loaded
 // every same-origin /api call automatically. localStorage only remembers a
 // non-secret marker ({token:"cookie", expires}) so we know not to re-prompt.
 // Sessions last 24 hours.
-// The install's root domain, worked out from where the admin panel itself is served
-// ("admin.myshop.com" → "myshop.com"); shops live at <subdomain>.<root domain>.
-function siteRootDomain_(){ const h = String(location.hostname || ""); const i = h.indexOf("."); return i > 0 ? h.slice(i + 1) : h; }
+// The install's root domain, from /api/catalog's admin answer (index.html keeps it in siteInfo_);
+// shops live at <subdomain>.<root domain>. "" while the site has no domain yet (a Deploy-button
+// install on its workers.dev address): never guessed from this page's own address.
+function siteRootDomain_(){ return String((typeof siteInfo_ !== "undefined" && siteInfo_ && siteInfo_.rootDomain) || ""); }
+const NO_DOMAIN_YET_ = "This shop can't open for orders until your site has its own domain: each shop's address is <name>.<your domain>. Until then you can build it and preview it.";
 const ADMIN_SESSION_STORAGE_KEY = "oddAdminSession";
 
 function loadStoredSession(){
@@ -304,7 +306,13 @@ function promptAdminPassphrase(){
         <input type="email" id="adminEmailInput" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" value="${escapeHtml(rememberedAdminEmail_())}" style="margin-bottom:10px;" />
         <label for="adminPassInput">Password</label>
         <input type="password" id="adminPassInput" name="password" autocomplete="current-password" autocapitalize="off" spellcheck="false" />
-        <p style="font-size:12px;margin:8px 0 0;color:#666;">New install? Leave the email empty and type the passphrase the installer printed.</p>
+        <p style="font-size:12px;margin:8px 0 0;color:#666;">New install? Leave the email empty and type the setup password: the one you chose on Cloudflare's page, or the passphrase the installer printed.</p>
+        <details class="admin-forgot" style="font-size:12px;margin:8px 0 0;color:#444;">
+          <summary style="cursor:pointer;">Forgot your password?</summary>
+          <p style="margin:6px 0 0;">Ask an admin: they can give you a new one under Users.</p>
+          <p style="margin:6px 0 0;">The only admin? Give the site a new setup password: in the Cloudflare dashboard open <strong>Workers &amp; Pages</strong> → this site's Worker → <strong>Settings</strong> → <strong>Variables and Secrets</strong>, and change <strong>PROXY_ADMIN_PASSPHRASE</strong> to something new, 12 characters or more (installed from a terminal? run <code>npm run setup -- --new-passphrase</code> instead). Then sign in here with the email empty and that new setup password, and set your email and password again.</p>
+          <p style="margin:6px 0 0;">This signs everyone out and every user needs a new password. Shops, orders and settings are kept.</p>
+        </details>
         <div class="admin-pass-actions">
           <button type="button" class="admin-pass-cancel">Cancel</button>
           <button type="submit" class="admin-pass-submit">Submit</button>
@@ -2844,7 +2852,7 @@ async function showShippingModal(order){
         `<div style="font-size:14px;font-weight:700;color:#1d4ed8;margin-bottom:10px;">Shipping Payment</div>` +
         `<div style="font-size:13px;line-height:1.7;">${safeHtml}</div>` +
         `<div style="margin:14px 0 8px;text-align:center;"><span style="display:inline-block;background:#1d4ed8;color:#fff;font-size:13px;font-weight:700;padding:9px 22px;border-radius:5px;">Pay Shipping →</span></div>` +
-        `<div style="font-size:11px;color:#555;padding-top:8px;border-top:1px solid #e5e7eb;margin-top:8px;">${escapeHtml(bizName_())} — ${escapeHtml(siteRootDomain_())}</div>`;
+        `<div style="font-size:11px;color:#555;padding-top:8px;border-top:1px solid #e5e7eb;margin-top:8px;">${escapeHtml(bizName_())}${siteRootDomain_() ? " — " + escapeHtml(siteRootDomain_()) : ""}</div>`;
     }
     function refreshEmailBody(){
       const el = document.getElementById("shipEmailBody");
@@ -3599,7 +3607,7 @@ function changeRequestCell(verif, rowspan, org){
   const m = String(verif.respondedAt).match(/^(\d{4})-(\d{2})-(\d{2})/);
   const d = m ? `${+m[2]}/${+m[3]}/${m[1]}` : new Date(verif.respondedAt).toLocaleDateString();
   const orgSubdomain = (org && org.subdomain) || (window._adminOrgRegistry||[]).find(o=>o.orgId===verif.orgId)?.subdomain;
-  const verifyUrl = orgSubdomain
+  const verifyUrl = orgSubdomain && siteRootDomain_()
     ? `https://${orgSubdomain}.${siteRootDomain_()}/?verify=${encodeURIComponent(verif.token)}`
     : `/?verify=${encodeURIComponent(verif.token)}`;
   return `<td rowspan="${rowspan}"><a href="${escapeHtml(verifyUrl)}" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline;cursor:pointer;">${d}</a></td>`;
@@ -7236,17 +7244,18 @@ function wizScreen_(step){
   const picked = (name) => [...document.querySelectorAll(`input[name="${name}"]:checked`)].map(x => x.value);
   switch (step.id) {
     case "name": {
-      const made = !!_wiz.orgId;
+      const made = !!_wiz.orgId, noDomain = !siteRootDomain_() && !adminDesktop_();   // the desktop version has no web addresses at all
       return { title: "What's the shop called?", help: "Usually the group it's for — a club, a team, a school. You can change it later.",
-        html: `<input type="text" id="wizName" class="wiz-input" maxlength="80" value="${escapeHtml(o.name || "")}" placeholder="e.g. Northside Rowing Club" autofocus>
-          <div class="wiz-sub-line" id="wizAddr">${made ? `Web address: <strong>${escapeHtml(o.subdomain)}</strong>.${escapeHtml(location.hostname.split(".").slice(1).join("."))}` : ""}</div>
+        ...(noDomain && !made ? { nextLabel: "Continue in preview mode" } : {}),
+        html: `${noDomain ? `<div class="wiz-warn">${escapeHtml(NO_DOMAIN_YET_)}</div>` : ""}<input type="text" id="wizName" class="wiz-input" maxlength="80" value="${escapeHtml(o.name || "")}" placeholder="e.g. Northside Rowing Club" autofocus>
+          <div class="wiz-sub-line" id="wizAddr">${made ? `Web address: <strong>${escapeHtml(o.subdomain)}</strong>.${escapeHtml(siteRootDomain_() || "<your domain>")}` : ""}</div>
           <details class="wiz-more"><summary>Change the web address</summary>
             ${made ? "" : `<label>Shop ID <input type="text" id="wizId" class="wiz-input" maxlength="40"></label>`}
             <label>Web address <input type="text" id="wizSub" class="wiz-input" maxlength="40" value="${made ? escapeHtml(o.subdomain || "") : ""}"></label>
             ${made ? `<div class="wiz-note">The old address stops working for this shop. Links already shared with customers will need the new one.</div>` : ""}</details>`,
         wire: (root) => {
           const n = root.querySelector("#wizName"), id = root.querySelector("#wizId"), sub = root.querySelector("#wizSub"), addr = root.querySelector("#wizAddr");
-          const host = escapeHtml(location.hostname.split(".").slice(1).join("."));
+          const host = escapeHtml(siteRootDomain_() || "<your domain>");
           const show = () => { addr.innerHTML = sub.value ? `Web address: <strong>${escapeHtml(sub.value)}</strong>.${host}` : ""; };
           if (made) { sub.oninput = show; return; }
           let idTouched = false, subTouched = false;
@@ -7926,8 +7935,8 @@ function wizLiveScreen_(){
   // The desktop version has no shop page for anyone to see: the last step only makes the products made
   // here available for orders (the same saves: visible, open, published — which changes nothing a customer sees).
   if (adminDesktop_()) return wizDesktopFinish_(o, st);
-  const root = location.hostname.split(".").slice(1).join(".");
-  const url = o.subdomain && root && !adminDesktop_() ? `https://${o.subdomain}.${root}/` : "";
+  const root = siteRootDomain_();
+  const url = o.subdomain && root ? `https://${o.subdomain}.${root}/` : "";
   if (st.live && o.ready) return {
     title: "Your shop is open 🎉", noNext: true,
     html: `<div class="wiz-ok">${escapeHtml(o.name)} is open for orders and published.</div>
@@ -7936,6 +7945,12 @@ function wizLiveScreen_(){
         <a class="admin-btn admin-btn-secondary" href="#catalog/orgs/${encodeURIComponent(o.orgId)}/products">Its products</a>
         <a class="admin-btn admin-btn-secondary" href="#wizard/${encodeURIComponent(o.orgId)}/products">Add more products</a></div>
       <div class="wiz-note">Changes you make from now on are drafts until you publish the shop again (Manage catalog → Publish).</div>`,
+    save: async () => "" };
+  if (!root) return {
+    title: "Ready to open the shop?", noNext: true,
+    html: `<div class="wiz-warn">${escapeHtml(NO_DOMAIN_YET_)}</div>
+      <div class="wiz-actions"><button type="button" class="admin-btn" onclick="previewShop_(${escapeHtml(JSON.stringify(o.orgId || ""))})">Preview the shop</button></div>
+      <div class="wiz-note">When your site has its own domain, come back to this step to open the shop for orders.</div>`,
     save: async () => "" };
   return {
     title: "Ready to open the shop?",
@@ -7968,6 +7983,64 @@ function blankWeightText_(p) {
   return lo === hi ? `${lo} oz` : `${lo}–${hi} oz`;
 }
 
+// Global settings → Your domain: the domain step of a site installed with the Deploy to Cloudflare button
+// (functions/_lib/cloudflareSetup.js). Shown only on the admin's workers.dev address: before the site has a
+// domain, the steps to connect one; after, where the admin has moved to.
+async function loadDomainSetup_(){
+  const box = document.getElementById("domainSetupBox");
+  if (!box || !adminCan_("admin")) return;
+  let d;
+  try { d = (await hoopApi_({ action: "getCloudflareSetup" })).cloudflare; } catch (e) { return; }
+  if (!d || !d.onWorkersDev) { box.innerHTML = ""; return; }
+  if (d.hasDomain) { box.innerHTML = domainMovedHtml_(d.adminSubdomain + "." + d.rootDomain, null); return; }
+  box.innerHTML = `<div class="admin-form domain-setup" style="max-width:none;border:1px solid #fed7aa;border-radius:6px;padding:12px 14px;margin-bottom:14px;background:#fff;color:#111;">
+    <h2 style="margin:0 0 8px;">Your domain</h2>
+    <div class="admin-note" style="margin-bottom:10px;">This admin is on Cloudflare's own address for now. You can build shops and preview them, but they can take orders only once the site has its own domain: the admin moves to <b>${escapeHtml(d.adminSubdomain)}.</b><i>your domain</i>, and each shop gets <i>its name</i>.<i>your domain</i>.</div>
+    <ol style="margin:0 0 10px 18px;padding:0;line-height:1.5;font-size:14px;">
+      <li style="margin-bottom:8px;"><b>Put your domain on Cloudflare</b>, if it isn't already: in <a href="https://dash.cloudflare.com/" target="_blank" rel="noopener">Cloudflare</a>, Domains → Add a domain. Cloudflare walks you through it; the last step is changing the domain's nameservers where you bought it. Wait until Cloudflare shows the domain as Active.</li>
+      <li style="margin-bottom:8px;"><b>Make a key for this site.</b> <a class="admin-btn" id="cfTokenLink" href="${escapeHtml(d.tokenLink)}" target="_blank" rel="noopener">Make the key on Cloudflare</a>
+        <div class="admin-note">Cloudflare opens with the permissions filled in. Scroll to the bottom, click <b>Continue to summary</b>, then <b>Create Token</b>, and copy the key it shows.</div></li>
+      <li><b>Paste the key here.</b>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;"><input type="password" id="cfToken" autocomplete="off" spellcheck="false" placeholder="The key from Cloudflare" style="flex:1 1 240px;min-width:0;">
+        <button class="admin-btn" id="cfConnectBtn" onclick="connectDomain_()">Connect</button></div></li>
+    </ol>
+    <div id="cfDomainChoose"></div>
+    <div class="admin-error" id="cfDomainError" role="alert"></div>
+    <div class="admin-note" style="margin-top:8px;">What the key can do: change this Cloudflare account's Workers, their web addresses and your domain's DNS records (and, later, file storage for pictures). It is kept as a secret on this site's Worker and never shown again. Deleting it in Cloudflare (My Profile → API Tokens) stops the site attaching new shops' addresses; nothing else breaks.</div>
+  </div>`;
+}
+async function connectDomain_(domain){
+  const err = document.getElementById("cfDomainError"), btn = document.getElementById("cfConnectBtn"), choose = document.getElementById("cfDomainChoose");
+  const token = (document.getElementById("cfToken") || {}).value || "";
+  if (err) err.textContent = "";
+  if (!token.trim()) { if (err) err.textContent = "Paste the key Cloudflare showed you first."; return; }
+  if (btn) { btn.disabled = true; btn.textContent = "Connecting…"; }
+  let d;
+  try { d = await hoopApi_({ action: "connectCloudflare", token: token.trim(), domain: domain || "" }); }
+  catch (e) { if (err) err.textContent = e.message; if (btn) { btn.disabled = false; btn.textContent = "Connect"; } return; }
+  if (btn) { btn.disabled = false; btn.textContent = "Connect"; }
+  if (d.choose) {
+    choose.innerHTML = `<div style="margin:8px 0;"><label for="cfDomainPick"><b>Which domain is this site's?</b></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;"><select id="cfDomainPick">${d.choose.map(z => `<option value="${escapeHtml(z.name)}">${escapeHtml(z.name)}${z.active ? "" : " (waiting for its nameservers)"}</option>`).join("")}</select>
+      <button class="admin-btn" onclick="connectDomain_(document.getElementById('cfDomainPick').value)">Use this domain</button></div></div>`;
+    return;
+  }
+  const box = document.getElementById("domainSetupBox");
+  if (box && d.connected) box.innerHTML = domainMovedHtml_(d.connected.adminHost, d.connected.shops);
+}
+// After the domain step: where the admin is now, and how each existing shop's address went.
+function domainMovedHtml_(adminHost, shops){
+  const url = "https://" + adminHost + "/";
+  const failed = (shops || []).filter(x => !x.ok);
+  return `<div class="admin-form domain-setup" style="max-width:none;border:1px solid #bbf7d0;border-radius:6px;padding:12px 14px;margin-bottom:14px;background:#fff;color:#111;">
+    <h2 style="margin:0 0 8px;">Your domain is connected</h2>
+    <div style="font-size:14px;line-height:1.5;">The admin's address is now <a href="${escapeHtml(url)}"><b>${escapeHtml(adminHost)}</b></a>. Open it and sign in with the same email and password. Its security certificate can take a few minutes to arrive: if the page doesn't open yet, wait and try again.</div>
+    <div class="admin-note" style="margin-top:6px;">Once you have signed in there, this address (workers.dev) is switched off.${(shops || []).length ? ` ${shops.length - failed.length} of ${shops.length} shop address${shops.length === 1 ? "" : "es"} set up.` : ""}</div>
+    ${failed.length ? `<div class="wiz-warn" style="margin-top:8px;">${failed.map(x => `<div><b>${escapeHtml(x.hostname)}</b>: ${escapeHtml(x.error || "not set up")}</div>`).join("")}<div style="margin-top:4px;">Fix that in Cloudflare, then open the shop's settings and click Set up domain.</div></div>` : ""}
+    <div class="admin-actions" style="margin-top:10px;"><a class="admin-btn" href="${escapeHtml(url)}">Open ${escapeHtml(adminHost)}</a></div>
+  </div>`;
+}
+
 async function loadSetupStatus_(){
   const box = document.getElementById("setupStatusBox");
   if (!box || !adminCan_("admin")) return;
@@ -7992,11 +8065,13 @@ async function renderGlobalSettings(app){
       <h1>Global settings</h1>
       <div class="stitch stitch-thick"></div>
     </div>
+    <div id="domainSetupBox"></div>
     <div id="setupStatusBox"></div>
     <div class="admin-panel" style="--org-accent:var(--accent);" id="adminPanel">
       <div class="admin-summary">Loading&hellip;</div>
     </div>
   `;
+  loadDomainSetup_();
   loadSetupStatus_();
   try{
     const res = await fetch("/api/orders", {
@@ -9290,7 +9365,7 @@ function renderOrgForm(app, org){
         <label>Web address <span class="req" title="Required">*</span>
           <input type="text" id="orgFormSubdomain" value="${escapeHtml(org ? org.subdomain : "")}" placeholder="e.g. club404">
         </label>
-        <div class="admin-note">Filled in from the name. Lowercase letters / numbers only — becomes &lt;address&gt;.${escapeHtml(siteRootDomain_())}. Creating the shop also sets that address up in Cloudflare.</div>
+        <div class="admin-note">${siteRootDomain_() || adminDesktop_() ? `Filled in from the name. Lowercase letters / numbers only — becomes &lt;address&gt;.${escapeHtml(siteRootDomain_())}. Creating the shop also sets that address up in Cloudflare.` : escapeHtml(NO_DOMAIN_YET_)}</div>
         ${isEdit && !adminDesktop_() ? `<div id="orgDomainBox" data-org="${escapeHtml(org.orgId)}" style="margin:-4px 0 12px;padding:8px 10px;border:1px solid #ddd;border-radius:6px;background:#fff;color:#111;font-size:13px;">Checking custom domain&hellip;</div>` : ""}
         <label>Small heading above the name (optional)
           <input type="text" id="orgFormEyebrow" value="${escapeHtml(org ? org.eyebrow : "")}" placeholder="e.g. Team store">
@@ -9448,7 +9523,8 @@ async function loadOrgTierBox_(orgId){
 // One line describing an org's custom-domain state, from a getOrgDomainStatus / setupOrgDomain /
 // createOrg `domain` result.
 function orgDomainText_(d, subdomain){
-  const host = (d && d.hostname) || (subdomain ? subdomain + "." + siteRootDomain_() : "the shop's subdomain");
+  const host = (d && d.hostname) || (subdomain && siteRootDomain_() ? subdomain + "." + siteRootDomain_() : "the shop's subdomain");
+  if (d && d.noDomain) return "This shop gets its web address when your site has its own domain.";
   if (!d || !d.configured) return `Automatic domain setup isn't configured — add ${host} under Workers & Pages → Custom domains in Cloudflare.`;
   if (d.error) return `Custom domain for ${host} was NOT set up: ${d.error}`;
   if (!d.exists) return `${host} hasn't been added to Cloudflare yet.`;

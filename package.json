@@ -1,5 +1,6 @@
 {
   "name": "opendecodesk",
+  "version": "0.9.0",
   "private": true,
   "scripts": {
     "test": "bash run-tests.sh",
@@ -9,6 +10,23 @@
     "db:pending": "npx wrangler d1 migrations list DB --remote",
     "db:backup:now": "bash scripts/d1-backup.sh",
     "scan": "bash scripts/scan-private.sh"
+  },
+  "cloudflare": {
+    "label": "OpenDecoDesk",
+    "products": [
+      "Workers",
+      "D1",
+      "R2",
+      "Durable Objects"
+    ],
+    "categories": [
+      "storage"
+    ],
+    "bindings": {
+      "PROXY_ADMIN_PASSPHRASE": {
+        "description": "A **setup password you choose**, 12 characters or more. After deploying, open the address Cloudflare shows (it ends in `workers.dev`), leave the email empty and sign in with this. You then set your own email and password, and this stops opening anything. Not your Cloudflare password."
+      }
+    }
   },
   "dependencies": {
     "jsdom": "^24.1.3"

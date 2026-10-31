@@ -6,6 +6,9 @@
 > simulated `wrangler`. Expect to hit something on those. Run `npm run setup -- --dry-run`
 > first, and if a step fails, the "by hand" section below shows what that step was trying to do.
 
+No terminal? [install-one-click.md](install-one-click.md) installs with the Deploy to Cloudflare
+button instead (early; it says what has been tested).
+
 ## Before you start
 
 New to these services? [accounts-and-keys.md](accounts-and-keys.md) walks through creating each
@@ -43,9 +46,10 @@ It works through nine steps and says what it is doing at each one.
    - *Time zone* — an IANA name such as `Europe/London`; it suggests your computer's.
    - *Public address of the images bucket* — leave blank the first time (see "Afterwards").
 3. **Database.** Finds the D1 database named in `wrangler.toml` (`opendecodesk-db`) or creates it.
-4. **File storage.** Finds or creates the three R2 buckets: images, receipts, designs. Skipped
-   when R2 is off: the three bucket blocks in `wrangler.toml` are commented out inside a marked
-   block, and a later run puts them back and makes the buckets once R2 is on.
+4. **File storage.** Finds or creates the three R2 buckets: images, receipts, designs. The
+   repository ships with the three bucket blocks in `wrangler.toml` commented out inside a marked
+   block, so a site without R2 deploys. When R2 is on, this step puts them back. When it's off,
+   they stay commented out, and a later run puts them back and makes the buckets once R2 is on.
 5. **Writes `wrangler.toml`**: the database id, your admin hostname, and the plain settings
    (`ROOT_DOMAIN`, `ADMIN_SUBDOMAIN`, `TIMEZONE`, and `R2_PUBLIC_BASE` if you gave one). Every
    comment and every other line of the file is kept. The installer only touches the database id

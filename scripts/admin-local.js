@@ -25,6 +25,12 @@
 // account, users and two-step endpoints and the role checks are the real ones, and the first
 // sign-in is with the "installer's passphrase" this prints. For looking at the sign-in screens,
 // the Users page, or the admin as a Back office user or a manager.
+//
+//   node scripts/admin-local.js --no-domain → the admin as a Deploy-button install sees it before its
+//                                             Setup step: the site has no domain (shops wait for one). The admin
+//                                             is "on" opendecodesk.someone.workers.dev, and Global settings →
+//                                             Your domain talks to a stand-in Cloudflare that takes any key-shaped
+//                                             text (nothing is sent to Cloudflare).
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
@@ -38,6 +44,23 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
 const strip = (src) => src
   .replace(/import\s*\{[\s\S]*?\}\s*from\s*["'][^"']+["'];?\n?/g, "")
   .replace(/export (async function|function|const)/g, "$1");
+const NO_DOMAIN = process.argv.includes("--no-domain");
+const ADMIN_HOST = NO_DOMAIN ? "opendecodesk.someone.workers.dev" : "admin.example.com";
+if (NO_DOMAIN) {
+  // A stand-in for Cloudflare's API, for the domain step: one active domain (example.com) on the account this
+  // "Worker" runs on. Every other address is fetched as usual.
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = new URL(String(url));
+    if (u.origin !== "https://api.cloudflare.com") return realFetch(url, init);
+    const p = u.pathname.replace(/^\/client\/v4/, "");
+    const result = p === "/user/tokens/verify" ? { status: "active" }
+      : p === "/zones" ? [{ id: "local-zone", name: "example.com", status: "active", account: { id: "local-account" } }]
+      : /\/workers\/subdomain$/.test(p) ? { subdomain: "someone" }
+      : /\/settings$/.test(p) ? { bindings: [] } : {};
+    return new Response(JSON.stringify({ success: true, result, errors: [] }), { headers: { "Content-Type": "application/json" } });
+  };
+}
 const SHOP_MAP = "{ demo: 'demo' }";   // demo.example.com is the demo shop
 // Communications → Send a test email runs the real one (with no provider set locally, it says so).
 const buildTestEmail = () => new Function(strip(read("functions/_lib/db.js")) + "\n" + strip(read("functions/_lib/email.js")) + "\nreturn sendTestEmail;")();
@@ -49,7 +72,8 @@ const buildHandler = () => new Function("sendTestEmail",
   "const invalidateCatalogVersionCache = () => {}; const getCatalogData = async (env) => ({ subdomainMap: " + SHOP_MAP + ", orgs: {}, features: await getFeatures(env.DB) });\n" +
   "const sendInvoiceEmail = async () => false;\n" +
   "const sendOrderReceivedEmail = async () => false, sendOrderNotificationEmail = async () => false, sendPaymentConfirmedEmail = async () => false, sendCancellationEmail = async () => false, sendDesignVerificationEmail = async () => false, sendShippingPaymentEmail = async () => false, sendShippedEmail = async () => false;\n" +
-  "const ensureOrgDomain = async () => ({}), getOrgDomainStatus = async () => ({ configured: false });\n" +
+  "const ensureOrgDomain = async () => ({}), getOrgDomainStatus = async () => ({ configured: false }), ensureWorkerHostname = async () => ({ steps: ['custom domain added'] });\n" +
+  strip(read("functions/_lib/cloudflareSetup.js")) + "\n" +
   // Vendor blanks / connections: the image-fallback copy, the PromoStandards adapter, encrypted logins.
   strip(read("functions/_lib/fileUpload.js")) + "\n" + strip(read("functions/_lib/vendorImages.js")) + "\n" + strip(read("functions/_lib/orphanImages.js")) + "\n" +
   strip(read("functions/_lib/promostandards.js")) + "\n" + strip(read("functions/_lib/vendorCredentials.js")) + "\n" + strip(read("functions/_lib/supplierOrders.js")) + "\n" +
@@ -149,7 +173,8 @@ const SESSION = `<script>try{localStorage.setItem("oddAdminSession",JSON.stringi
         // The switches under Global settings → Features, as the real /api/catalog sends them.
         const row = await d1.prepare("SELECT value FROM global_settings WHERE key='features'").first();
         let features = {}; try { features = row ? JSON.parse(row.value) : {}; } catch (e) {}
-        return send(res, 200, JSON.stringify({ status: "admin", features }));
+        // site.rootDomain as on an install with a domain (--no-domain: as a Deploy-button install before its Setup step).
+        return send(res, 200, JSON.stringify({ status: "admin", features, site: { rootDomain: NO_DOMAIN ? "" : "example.com" } }));
       }
       if (real && real.raw[url.pathname] && real.raw[url.pathname][req.method]) {
         let raw = ""; for await (const chunk of req) raw += chunk;
@@ -170,7 +195,7 @@ const SESSION = `<script>try{localStorage.setItem("oddAdminSession",JSON.stringi
         const body = JSON.parse(raw || "{}");
         // VENDOR_CREDENTIALS_KEY: a throwaway key so Vendor integrations can save a (test) login on this computer.
         const out = await api({ env: { DB: d1, DESIGNS, VENDOR_CREDENTIALS_KEY: "local-preview-only-vendor-key" }, waitUntil: (p) => { Promise.resolve(p).catch(() => {}); },
-          request: { url: "https://" + (shopMode(req) ? "demo" : "admin") + ".example.com/api/orders", json: async () => body, headers: { get: () => null } } });
+          request: { url: "https://" + (shopMode(req) ? "demo.example.com" : ADMIN_HOST) + "/api/orders", json: async () => body, headers: { get: () => null } } });
         return send(res, out.status, await out.text());
       }
       if (url.pathname.startsWith("/api/")) return send(res, 404, JSON.stringify({ status: "error", message: "Not wired in the local admin (" + url.pathname + ")" }));

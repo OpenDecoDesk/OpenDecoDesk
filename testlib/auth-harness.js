@@ -19,12 +19,15 @@ const ORIGIN = "https://admin.example.com";
 // The sources every endpoint needs, with the real adminAuth.js. `extra` is appended (an endpoint).
 // `realLimits`: the real rate limiter on the same database instead of the stand-ins (failures are then
 // counted in rate_limits, not in `hits`).
-const prelude = (realLimits) => strip(read("functions/_lib/http.js")) + "\n" + strip(read("functions/_lib/hostConfig.js")) + "\n" + strip(read("functions/_lib/db.js")) + "\n" + strip(read("functions/_lib/totp.js")) + "\n" +
+// `realDomains`: the real Cloudflare calls (customDomain.js, against whatever `fetch` the test puts in place)
+// instead of stand-ins that attach nothing.
+const prelude = (realLimits, realDomains) => strip(read("functions/_lib/http.js")) + "\n" + strip(read("functions/_lib/hostConfig.js")) + "\n" + strip(read("functions/_lib/db.js")) + "\n" + strip(read("functions/_lib/totp.js")) + "\n" +
   (realLimits ? strip(read("functions/_lib/rateLimit.js")) + "\n" :
   "const rateLimitCheck = async () => ({ blocked: false }), rateLimited = async () => ({ blocked: false }), rateLimitResponse = () => null, rateLimitHit = async (env, bucket) => { __hits.push(bucket); };\n" +
   "const rateLimitCheckGlobal = async () => ({ blocked: false }), rateLimitHitGlobal = async () => {};\n") +
   "const accessEnabled = () => false, verifyAccess = async () => ({ ok: true }); const getCatalogData = async () => ({ subdomainMap: {}, business: {} });\n" +
-  strip(read("functions/_lib/adminAuth.js")) + "\n";
+  strip(read("functions/_lib/adminAuth.js")) + "\n" + strip(read("functions/_lib/cloudflareSetup.js")) + "\n" +
+  (realDomains ? strip(read("functions/_lib/customDomain.js")) + "\n" : "const ensureWorkerHostname = async () => ({ steps: [] }), ensureOrgDomain = async () => ({}), getOrgDomainStatus = async () => ({});\n");
 
 function request(path, body, { cookie = "", origin = ORIGIN, headers = {} } = {}) {
   const h = Object.assign({ origin, cookie: cookie ? "__Host-odd_admin=" + cookie : "", "cf-connecting-ip": "203.0.113.9" }, Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v])));
@@ -46,10 +49,10 @@ function totpNow(secret, step = 0) {
   return String((((h[o] & 0x7f) << 24) | (h[o + 1] << 16) | (h[o + 2] << 8) | h[o + 3]) % 1000000).padStart(6, "0");
 }
 
-async function makeAuth({ d1, passphrase = "abcd-efgh-jkmn-pqrs-tuvw-xyz2", realLimits = false } = {}) {
+async function makeAuth({ d1, passphrase = "abcd-efgh-jkmn-pqrs-tuvw-xyz2", realLimits = false, realDomains = false } = {}) {
   if (!d1) { d1 = await createD1(); d1._raw.exec(read("schema.sql")); }
   const hits = [];
-  const load = (file, ret) => new Function("__hits", prelude(realLimits) + (file ? strip(read(file)) : "") + "\nreturn " + ret + ";")(hits);
+  const load = (file, ret) => new Function("__hits", prelude(realLimits, realDomains) + (file ? strip(read(file)) : "") + "\nreturn " + ret + ";")(hits);
   const session = load("functions/api/admin-session.js", "{ post: onRequestPost, del: onRequestDelete }");
   const password = load("functions/api/admin-password.js", "onRequestPost");
   const users = load("functions/api/admin-users.js", "onRequestPost");
@@ -62,9 +65,8 @@ async function makeAuth({ d1, passphrase = "abcd-efgh-jkmn-pqrs-tuvw-xyz2", real
   // AFTER the gate may fail here for want of data; tests of the gate only look at who is let past.
   let ordersPost = null;
   const orders = async (body, cookie, opts) => {
-    if (!ordersPost) ordersPost = new Function("__hits", prelude() + strip(read("functions/_lib/catalogValidation.js")) + "\n" + strip(read("functions/_lib/quoteToken.js")) + "\n" +
+    if (!ordersPost) ordersPost = new Function("__hits", prelude(realLimits, realDomains) + strip(read("functions/_lib/catalogValidation.js")) + "\n" + strip(read("functions/_lib/quoteToken.js")) + "\n" +
       "const verifyTurnstile = async () => ({ ok: true }); const invalidateCatalogVersionCache = () => {}; const selectBox = () => null;\n" +
-      "const ensureOrgDomain = async () => ({}), getOrgDomainStatus = async () => ({});\n" +
       strip(read("functions/_lib/setupStatus.js")) + "\n" + strip(read("functions/_lib/email.js")) + "\n" + strip(read("functions/api/orders.js")) + "\nreturn onRequestPost;")(hits);
     try { return await answer(await ordersPost({ request: request("/api/orders", body, Object.assign({ cookie }, opts)), env, waitUntil: (p) => Promise.resolve(p).catch(() => {}) })); }
     catch (e) { return { status: 0, body: { threw: String(e && e.message) }, cookie: undefined }; }   // got past the gate, then lacked data

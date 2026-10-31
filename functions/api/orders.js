@@ -42,6 +42,7 @@ const vendorPriceAudit_ = (list) => (list || []).slice(0, 200).map(c => ({ color
 import { checkShippedDeliveries, checkBlankShipments } from "../_lib/deliveryCheck.js";
 import { ensureOrgDomain, getOrgDomainStatus } from "../_lib/customDomain.js";
 import { setupStatus, setupSummary } from "../_lib/setupStatus.js";
+import { connectCloudflare, cloudflareTokenLink, workersDevParts } from "../_lib/cloudflareSetup.js";
 import { rateLimited, rateLimitResponse } from "../_lib/rateLimit.js";
 import { readInvoiceWithAi } from "../_lib/invoiceAi.js";
 import { jsonResponse, featureOffResponse, signOrderToken } from "../_lib/http.js";
@@ -106,6 +107,7 @@ import {
   saveExpenseCategory, deleteExpenseCategory, listExpenses, getExpense, saveExpense, deleteExpense, expenseMonth, getExpenseSummary,
   getRefundedCents, getDepositPayments, linkPaymentsToCashout, cashoutNetCents_,
   receiveBlanks, writeOffBlanks, getBlankMovements, markBlankPricesChecked, getBlankVendorPriceHistory, getProductPriceChanges, confirmProductPrices, getBlankPriceReminder, getBlanksNeedingPriceCheck, getBlankProductUses, recomputeBlankAverageCosts, planVendorBlanks, applyVendorBlanks, cleanColorGroups_, suggestColorGroups, listVendorConnections, getVendorConnectionRow, saveVendorConnection, setVendorConnectionStatus, deleteVendorConnection, linkBlanksToVendorConnection,
+  getSiteSetting, setSiteDomain,
   getPublishedOrg, setOrgReady, getShopWizard, saveShopWizard, deleteShopWizard, listShopWizards, setProductLinksFromBlank, publishShop, getPublishState, getDraftCatalogShop, signPreviewToken,
   planDiscardShopChanges, discardShopChanges, applyProductPrices,
   getBrandRules, setBrandRules, DEFAULT_BRAND_RULES, brandRuleFor_, listBrandApprovals, addBrandApproval, revokeBrandApproval, getBrandApproval,
@@ -150,7 +152,7 @@ const CATALOG_ADMIN_ACTIONS = new Set([
   "createOrg", "updateOrg", "listOrgsAdmin", "setupOrgDomain", "getOrgDomainStatus",
   "listProducts", "createProduct", "updateProduct", "setProductVisible", "setProductOrder", "createProductVersion", "copyProductVersionSettings", "separateProductVersion", "copyProductsFromOrg", "importProducts", "importBlanks", "getBlanksToOrder",
   "freeShippingSuggestions", "getVendorShipping", "setVendorShipping", "recordRestockOrder", "cancelRestockOrder",
-  "getGlobalSettings", "updateGlobalSettings", "getSetupStatus", "getMachineSettings", "updateMachineSettings",
+  "getGlobalSettings", "updateGlobalSettings", "getSetupStatus", "getCloudflareSetup", "connectCloudflare", "getMachineSettings", "updateMachineSettings",
   "getShipFromAddress", "updateShipFromAddress", "getBusinessProfile", "updateBusinessProfile",
   "getLocaleSettings", "updateLocaleSettings", "getFeatures", "updateFeatures",
   "getSalesTaxSettings", "updateSalesTaxSettings",
@@ -233,6 +235,8 @@ const ADMIN_ONLY_ACTIONS = [
   // Ordering from a supplier spends the shop's money (the card / terms the supplier has on file): admin only.
   "previewSupplierOrder", "placeSupplierOrder", "listSupplierOrders", "checkSupplierOrderShipments", "cancelSupplierOrder",
   "updateBrandRules",
+  // The domain step (Global settings → Your domain): a Cloudflare key that can change the account's Workers and DNS.
+  "getCloudflareSetup", "connectCloudflare",
 ];
 const MANAGER_ACTIONS = [
   "getPublishState", "getPreviewLink",                            // publish per shop (migrations/0076)
@@ -347,6 +351,8 @@ const DESKTOP_SUPPLIER_ACTIONS = new Set([
 const DESKTOP_SUPPLIERS_OFF_MSG = "Supplier connections need the internet — turn them on under Global settings → Supplier connections.";
 const featureLabel_ = (key) => (FEATURES.find(f => f.key === key) || { label: key }).label;
 const NO_SHIPPING_FEATURE_MSG = "Carrier shipping is turned off (Global settings → Features → Shipping). Use Local pickup or a custom delivery option with a flat fee instead.";
+// A Deploy-button install before its Setup step (noDomainYet in onRequestPost). public/admin.js says the same (NO_DOMAIN_YET_).
+const NO_DOMAIN_MSG = "This shop can't open for orders until your site has its own domain: each shop's address is <name>.<your domain>. Until then you can build it and preview it.";
 
 export async function onRequestPost(context) {
   const { request, env } = context;
@@ -354,6 +360,12 @@ export async function onRequestPost(context) {
   // "passphrase") and from WHERE (client IP).
   const clientIp = request.headers.get("CF-Connecting-IP") || null;
   const auditEntry = (args) => ({ ...args, actor: adminActor(request), ip: clientIp });
+  // A Deploy-button install has no domain until its Setup step, and every shop's address is
+  // <subdomain>.<domain> (rootDomain(env) would say example.com). Until then shops can be built — with
+  // no address set up, and draft previews on the admin's own workers.dev address (catalog.js) — but
+  // none can be opened for orders.
+  const noDomainYet = () => !env.ROOT_DOMAIN && /\.workers\.dev$/i.test(new URL(request.url).hostname);
+  const noDomainResponse = () => jsonResponse({ status: "error", code: "no_domain", message: NO_DOMAIN_MSG }, 409);
   // Costs and margins (pricing awareness, migrations/0067) are a manager's. Staff save products and blanks
   // too, so those replies leave the analysis / below-target list out for them. (No signed-in user — the
   // installer's passphrase — sees everything, as with every other action.)
@@ -2472,6 +2484,7 @@ export async function onRequestPost(context) {
     // Sets up the org's subdomain as a custom domain (customDomain.js). Never throws: the
     // result carries {configured:false} when the CF_* env vars aren't set, or {error} on failure.
     const setUpDomain_ = async (orgId, subdomain) => {
+      if (noDomainYet()) return { configured: false, noDomain: true };   // set up when the site gets its domain
       let domain;
       try { domain = await ensureOrgDomain(env, subdomain); }
       catch (e) {
@@ -2508,6 +2521,7 @@ export async function onRequestPost(context) {
       if (!body.orgId || !body.subdomain || !body.name) {
         return jsonResponse({ status: "error", message: "Missing orgId, subdomain, or name" }, 400);
       }
+      if (noDomainYet() && body.ready) return noDomainResponse();
       const orgCheck = validateOrgFields(body, true);
       if (orgCheck.error) return jsonResponse({ status: "error", message: orgCheck.error }, 400);
       // The admin's own label(s) (ADMIN_SUBDOMAIN) are reserved too — validateOrgFields doesn't know them.
@@ -2575,6 +2589,7 @@ export async function onRequestPost(context) {
       if (!existingOrg) return jsonResponse({ status: "error", message: "Unknown org" }, 404);
       // A blank subdomain keeps the current one. An unchanged subdomain isn't re-checked, so an
       // org whose stored subdomain wouldn't pass today's checks can still be edited.
+      if (noDomainYet() && body.ready && !existingOrg.ready) return noDomainResponse();
       const subdomainChanged = !!body.subdomain && body.subdomain !== existingOrg.subdomain;
       if (!subdomainChanged) body.subdomain = existingOrg.subdomain;
       const orgCheck = validateOrgFields({ ...body, subdomain: subdomainChanged ? body.subdomain : "" }, false);
@@ -3015,6 +3030,48 @@ export async function onRequestPost(context) {
       ]);
       const items = setupStatus(env, { business, salesTax, locale });
       return jsonResponse({ status: "ok", items, summary: setupSummary(items) });
+    }
+
+    // ---- The domain step of a Deploy-button install (functions/_lib/cloudflareSetup.js). Shown while the
+    // site has no ROOT_DOMAIN and the admin is open on its workers.dev address.
+    if (body.action === "getCloudflareSetup") {
+      const site = await getSiteSetting(env.DB).catch(() => ({}));
+      const host = new URL(request.url).hostname;
+      return jsonResponse({ status: "ok", cloudflare: {
+        hasDomain: !!env.ROOT_DOMAIN, onWorkersDev: !!workersDevParts(host),
+        rootDomain: env.ROOT_DOMAIN ? rootDomain(env) : (site.rootDomain || ""),
+        adminSubdomain: adminSubdomains(env)[0], adminHostSeen: site.adminHostSeen === true,
+        tokenLink: cloudflareTokenLink(),
+      } });
+    }
+    if (body.action === "connectCloudflare") {
+      if (env.ROOT_DOMAIN) return jsonResponse({ status: "error", message: "This site already has its domain (" + rootDomain(env) + ")." }, 409);
+      const host = new URL(request.url).hostname;
+      if (!workersDevParts(host)) return jsonResponse({ status: "error", message: "Do this step on the admin's workers.dev address (the one Cloudflare gave you when you deployed)." }, 409);
+      const wanted = String(body.domain || "").trim().toLowerCase().slice(0, 253);
+      const refused = await auditStrict({ orgId: null, orderId: null, action: "site.domain_connect", detail: { domain: wanted || null } });
+      if (refused) return refused;
+      const adminLabel = adminSubdomains(env)[0];
+      let done;
+      try { done = await connectCloudflare({ token: body.token, domain: wanted, hostname: host, adminSubdomain: adminLabel }); }
+      catch (e) {
+        if (!e.userFacing) console.error("connectCloudflare failed:", e && e.message);
+        audit({ orgId: null, orderId: null, action: "site.domain_connect_failed", detail: { domain: wanted || null, error: e.userFacing ? e.message : "unexpected" } });
+        return jsonResponse({ status: "error", code: e.code || null, message: e.userFacing ? e.message : "Couldn't reach Cloudflare. Try again in a minute." }, e.userFacing ? 400 : 502);
+      }
+      if (done.status === "choose") return jsonResponse({ status: "ok", choose: done.zones });
+      await setSiteDomain(env.DB, done.rootDomain, adminLabel);
+      // Shops built in preview mode get their addresses now, with the settings just saved (this request's
+      // env is from before them).
+      const withDomain = { ...env, CF_API_TOKEN: done.cfg.token, CF_ACCOUNT_ID: done.cfg.accountId, CF_ZONE_ID: done.cfg.zoneId, CF_WORKER_NAME: done.cfg.service, ROOT_DOMAIN: done.rootDomain };
+      const shops = [];
+      for (const org of await getAllOrgs(env.DB)) {
+        if (!org.subdomain) continue;
+        try { const d = await ensureOrgDomain(withDomain, org.subdomain); shops.push({ orgId: org.orgId, hostname: d.hostname, ok: true }); }
+        catch (e) { shops.push({ orgId: org.orgId, hostname: org.subdomain + "." + done.rootDomain, ok: false, error: e.userFacing ? e.message : "Couldn't reach Cloudflare." }); }
+      }
+      audit({ orgId: null, orderId: null, action: "site.domain_connected", detail: { rootDomain: done.rootDomain, adminHost: done.adminHost, steps: done.steps, shops } });
+      return jsonResponse({ status: "ok", connected: { rootDomain: done.rootDomain, adminHost: done.adminHost, adminUrl: done.adminUrl, shops } });
     }
 
     if (body.action === "updateGlobalSettings") {
@@ -3507,6 +3564,7 @@ export async function onRequestPost(context) {
       if (!org) return jsonResponse({ status: "error", message: "Shop not found" }, 404);
       const token = await signPreviewToken(env, org.orgId);
       if (!token) return jsonResponse({ status: "error", message: "Set the SIGNING_SECRET variable first — the preview link is signed with it." }, 400);
+      if (noDomainYet()) return jsonResponse({ status: "ok", url: `https://${new URL(request.url).host}/?shop=${encodeURIComponent(org.orgId)}&preview=${encodeURIComponent(token)}`, expiresInMinutes: 60 });
       const root = rootDomain(env);   // the install's root domain (ROOT_DOMAIN), where every shop's address lives
       return jsonResponse({ status: "ok", url: `https://${org.subdomain}.${root}/?preview=${encodeURIComponent(token)}`, expiresInMinutes: 60 });
     }
@@ -3605,6 +3663,7 @@ export async function onRequestPost(context) {
       const before = await getOrgById(env.DB, String(body.orgId || ""));
       if (!before) return jsonResponse({ status: "error", message: "Shop not found" }, 404);
       const ready = !!body.ready;
+      if (ready && !before.ready && noDomainYet()) return noDomainResponse();
       if (!!before.ready !== ready) {
         await setOrgReady(env.DB, before.orgId, ready);
         audit({ orgId: before.orgId, orderId: null, action: "org.updated", detail: { changes: { ready: { from: !!before.ready, to: ready } } } });

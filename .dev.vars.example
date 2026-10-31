@@ -1,0 +1,5 @@
+# What the Deploy to Cloudflare button asks for, and nothing else: a setup password you choose.
+# It opens the admin ONCE, at the address Cloudflare gives you after deploying (…workers.dev); you
+# then set your own email and password, and from then on it opens nothing. Twelve characters or
+# more. The value below is a placeholder, not a password: the site refuses to be set up with it.
+PROXY_ADMIN_PASSPHRASE=choose-a-long-setup-password

@@ -54,9 +54,12 @@ const SAME = { Origin: ADMIN, "CF-Connecting-IP": "203.0.113.7" };
   {
     console.log("\n=== admin-session: login sets a hardened cookie, body carries no token ===");
     const DB = await makePlatformDb();
-    const env = { DB, PROXY_ADMIN_PASSPHRASE: "pw" };
+    // A first sign-in needs a setup password of a real password's length (functions/_lib/adminAuth.js).
+    const env = { DB, PROXY_ADMIN_PASSPHRASE: "a-long-setup-pass" };
     const m = load("functions/api/admin-session.js", ["onRequestPost", "onRequestDelete"]);
-    const res = await m.onRequestPost({ env, request: makeReq(ADMIN + "/api/admin-session", { body: { key: "pw" }, headers: SAME }) });
+    const short = await m.onRequestPost({ env: { DB: await makePlatformDb(), PROXY_ADMIN_PASSPHRASE: "pw" }, request: makeReq(ADMIN + "/api/admin-session", { body: { key: "pw" }, headers: SAME }) });
+    console.log("A setup password that short is refused for a first sign-in, with how to change it:", short.status === 403 && /Variables and Secrets/.test(await short.text()));
+    const res = await m.onRequestPost({ env, request: makeReq(ADMIN + "/api/admin-session", { body: { key: "a-long-setup-pass" }, headers: SAME }) });
     const text = await res.text();
     const cookie = res.headers.get("Set-Cookie") || "";
     const token = (cookie.match(/__Host-odd_admin=(sess_[0-9a-f]{48})/) || [])[1];

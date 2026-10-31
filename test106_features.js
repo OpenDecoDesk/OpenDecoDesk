@@ -424,7 +424,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
     "getAuditLog", "getRevenueReport", "getSalesTaxReport", "getInventoryReport",
     // Shops, products, catalog, settings
     "listOrgsAdmin", "createOrg", "setupOrgDomain", "getOrgDomainStatus", "updateOrg", "listProducts", "createProduct", "updateProduct", "importProducts", "setProductVisible", "setProductOrder", "createProductVersion", "copyProductVersionSettings", "separateProductVersion", "copyProductsFromOrg", "getCatalogIssues", "publish",
-    "getGlobalSettings", "updateGlobalSettings", "getSetupStatus", "getBusinessProfile", "updateBusinessProfile", "getLocaleSettings", "updateLocaleSettings", "getFeatures", "updateFeatures", "getShipFromAddress", "getSalesTaxSettings", "updateSalesTaxSettings",
+    "getGlobalSettings", "updateGlobalSettings", "getSetupStatus", "getCloudflareSetup", "connectCloudflare", "getBusinessProfile", "updateBusinessProfile", "getLocaleSettings", "updateLocaleSettings", "getFeatures", "updateFeatures", "getShipFromAddress", "getSalesTaxSettings", "updateSalesTaxSettings",
     "listLocations", "saveLocation", "deleteLocation", "listProductCategories", "saveProductCategory", "deleteProductCategory", "listProductGraphicImages", "setProductGraphicImage", "deleteProductGraphicImage",
     "listGraphics", "saveGraphic", "setProductGraphicColorBlocked", "deleteGraphic", "getTierPrices", "setTierPrices",
     // Inventory — always on in this release: blanks, transfers, stock movements, cost of goods
