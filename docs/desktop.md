@@ -8,9 +8,14 @@ hand, production, inventory and cost of goods, and the books.
 **Status: early.** The code is the same as a cloud install's, and the desktop parts have been run on
 Linux in testing (the program itself, a first start, backups, restoring one, getting back in after
 being locked out). The Windows and Mac downloads are built by GitHub Actions
-(`.github/workflows/desktop.yml`). The Mac download for Apple silicon (`mac-arm64`) has been run on
-a real Mac: it opens, starts a new data folder, and restored a backup made by a copy run from the
-source. The Windows and Intel Mac (`mac-x64`) downloads haven't been run on a real computer yet.
+(`.github/workflows/desktop.yml`). Two of them have been run:
+
+- **Mac, Apple silicon** (`mac-arm64`), on a real Mac: it opens, starts a new data folder, and
+  restored a backup made by a copy run from the source.
+- **Windows** (`windows-x64.zip`), on Windows 11 for ARM in Parallels on an Apple-silicon Mac,
+  where Windows runs the x64 program through its own emulation: it opens and works.
+
+Not yet run: Windows on an ordinary (Intel or AMD) PC, and the Intel Mac download (`mac-x64`).
 Keep backups.
 
 ## What it is
