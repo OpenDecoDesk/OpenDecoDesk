@@ -31,7 +31,7 @@ export function setupStatus(env, settings) {
   const root = String(env.ROOT_DOMAIN || "").trim().toLowerCase();
   add("rootDomain", "Root domain", "required", set(root) && root !== PLACEHOLDER_ROOT,
     "Which addresses are the admin and the shops, and the links in emails. Without it only the placeholder example.com is recognised.",
-    set(root) ? "" : "ROOT_DOMAIN is not set.");
+    set(root) ? "" : "ROOT_DOMAIN is not set. On a site installed with the Deploy to Cloudflare button, connect your domain under Your domain, above.");
 
   add("database", "Database", "required", !!(env.DB && typeof env.DB.prepare === "function"), "Everything: orders, shops, products, settings.");
 

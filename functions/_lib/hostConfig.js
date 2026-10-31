@@ -59,5 +59,14 @@ export function classifyHost(hostname, subdomainMap, env){
       }
     }
   }
+  // A site installed with the Deploy to Cloudflare button has no domain at first: its admin answers
+  // on the Worker's own <worker>.<account>.workers.dev address — the only workers.dev host that can
+  // reach this Worker, and only while it is switched on. Once the domain is connected (Global settings →
+  // Your domain) and someone has signed in on admin.<domain>, the app switches it off
+  // (functions/api/admin-session.js) and so does every later build (scripts/setup.mjs); the
+  // command-line installer never switches it on.
+  if(/^[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev$/.test(host)){
+    return { kind: "admin" };
+  }
   return { kind: "unknown" };
 }

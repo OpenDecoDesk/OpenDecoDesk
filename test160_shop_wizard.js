@@ -1,6 +1,6 @@
 const fs = require("fs");
 const { autoConfirm } = require("./testlib/confirm.js");
-const { ADMIN_ORIGIN, shopOrigin } = require("./testlib/hosts.js");
+const { ADMIN_ORIGIN, shopOrigin, ROOT } = require("./testlib/hosts.js");
 const { JSDOM, ResourceLoader } = require("jsdom");
 const { createD1 } = require("./testlib/d1-shim.js");
 
@@ -59,7 +59,7 @@ const ok = (d, c) => { console.log(d + ":", !!c); c ? pass++ : fail++; };
   const dom = new JSDOM(read("public/index.html"), { runScripts: "dangerously", resources: new L(), url: ADMIN_ORIGIN + "/#catalog", pretendToBeVisual: true,
     beforeParse(win){ autoConfirm(win, () => true); win.open = () => null; win.scrollTo = () => {}; win.fetch = async (url, init) => {
       if (String(url).includes("/api/orders")) { const b = JSON.parse(init.body); const x = await call(b); return { ok: x.status < 400, status: x.status, json: async () => x.body }; }
-      return { ok: true, status: 200, json: async () => ({ status: "admin" }) }; }; } });
+      return { ok: true, status: 200, json: async () => ({ status: "admin", site: { rootDomain: ROOT } }) }; }; } });
   const w = dom.window, d = w.document;
   await wait(150);
   await w.loadAdminScript();

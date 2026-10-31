@@ -33,7 +33,7 @@ import * as stripeWebhook from "../functions/api/stripe-webhook.js";
 import * as uploadVerify from "../functions/api/upload-verify.js";
 import * as upload from "../functions/api/upload.js";
 import * as verify from "../functions/api/verify.js";
-import { recordSystemIssue, resolveTimeZone } from "../functions/_lib/db.js";
+import { recordSystemIssue, resolveTimeZone, ensureSigningSecret } from "../functions/_lib/db.js";
 import { isDigestHour } from "../functions/_lib/schedule.js";
 import { fillMissingCardFees } from "../functions/_lib/stripeFees.js";
 
@@ -73,6 +73,18 @@ function handlerFor(mod, method) {
   return mod["onRequest" + m] || mod.onRequest || null;
 }
 
+// A site with no SIGNING_SECRET of its own (a Deploy-button install) signs with one it made and keeps in
+// the database (ensureSigningSecret), read once per isolate. Every handler then sees env.SIGNING_SECRET
+// as if it were set. If the database can't be read, the env is passed on as it is.
+let madeSigningSecret = null;
+export async function withSigningSecret(env) {
+  if (!env || env.SIGNING_SECRET || !env.DB) return env;
+  try {
+    if (!madeSigningSecret) madeSigningSecret = await ensureSigningSecret(env.DB);
+    return madeSigningSecret ? { ...env, SIGNING_SECRET: madeSigningSecret } : env;
+  } catch (e) { console.error("Could not read or make the signing secret:", e); return env; }
+}
+
 export async function handleRequest(request, env, ctx) {
   const url = new URL(request.url);
   const match = /^\/api\/([a-z0-9-]+)\/?$/.exec(url.pathname);
@@ -84,6 +96,7 @@ export async function handleRequest(request, env, ctx) {
   }
   const handler = handlerFor(mod, request.method);
   if (!handler) return text("Method not allowed", 405);
+  env = await withSigningSecret(env);
   return handler({
     request,
     env,
@@ -99,6 +112,7 @@ export async function handleRequest(request, env, ctx) {
 // configured local hour runs it, so it goes out once a day at the same local time all year. The
 // time zone is the install's one zone: Global settings → Region, else TIMEZONE, else UTC.
 export async function handleScheduled(event, env) {
+  env = await withSigningSecret(env);
   const when = new Date(event && event.scheduledTime ? event.scheduledTime : Date.now());
   if (!isDigestHour(env, when, await resolveTimeZone(env))) return { ran: false, reason: "not the digest hour" };
   // Safety net: fill in Stripe fees the webhook couldn't read yet (see functions/_lib/stripeFees.js).

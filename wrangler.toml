@@ -63,15 +63,16 @@ class_name = "AgentMailbox"
 tag = "v1"
 new_sqlite_classes = ["AgentMailbox"]
 
-[[r2_buckets]]
-binding = "IMAGES"
-bucket_name = "opendecodesk-images"
-
-[[r2_buckets]]
-binding = "RECEIPTS"
-bucket_name = "opendecodesk-receipts"
-
-[[r2_buckets]]
-binding = "DESIGNS"
-bucket_name = "opendecodesk-designs"
-
+# >>> npm run setup: file storage is off, because R2 isn't switched on for the account. Switch it on and run setup again: it puts these lines back.
+# [[r2_buckets]]
+# binding = "IMAGES"
+# bucket_name = "opendecodesk-images"
+#
+# [[r2_buckets]]
+# binding = "RECEIPTS"
+# bucket_name = "opendecodesk-receipts"
+#
+# [[r2_buckets]]
+# binding = "DESIGNS"
+# bucket_name = "opendecodesk-designs"
+# <<< npm run setup: file storage

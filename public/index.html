@@ -1170,18 +1170,21 @@ let currentOrgId = null;
 // request's Host header server-side. null on the root/generic domain
 // or an unrecognized host; this session then never learns any org exists.
 let currentOrg = null;
+// On the admin host: { rootDomain } from /api/catalog ("" until the site has a domain). admin.js reads it.
+let siteInfo_ = {};
 
 async function resolveCurrentOrg(){
   try{
     // The admin's draft preview (?preview=<signed token>, migrations/0076) is passed through; the server decides.
-    const pv = new URLSearchParams(window.location.search).get("preview");
-    const res = await fetch("/api/catalog" + (pv ? "?preview=" + encodeURIComponent(pv) : ""));
+    // On a site with no domain yet it opens on the admin's workers.dev address and names its shop (?shop=).
+    const qs = new URLSearchParams(window.location.search), pv = qs.get("preview"), pvShop = qs.get("shop");
+    const res = await fetch("/api/catalog" + (pv ? "?preview=" + encodeURIComponent(pv) + (pvShop ? "&shop=" + encodeURIComponent(pvShop) : "") : ""));
     if(!res.ok){ try{ const d = await res.json(); applyBusiness_(d.business); applyCountry_(d.country); applyFeatures_(d.features); }catch(e){} return null; }
     const data = await res.json();
     applyBusiness_(data.business);
     applyCountry_(data.country);
     applyFeatures_(data.features);
-    if(data.status === "admin") return {admin:true};
+    if(data.status === "admin"){ siteInfo_ = data.site || {}; return {admin:true}; }
     // Global settings → Features → Storefront is off: no shop is served here (see catalog.js).
     if(data.status === "closed") return {closed:true};
     if(data.status !== "ok") return null;

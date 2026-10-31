@@ -13,7 +13,7 @@ const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
 // Cloudflare's build (Workers Builds) sets WORKERS_CI; it is where a Deploy-button site is built.
 const ci = !!process.env.WORKERS_CI || args.includes("--ci");
-const diagnose = args.includes("--diagnose");
+const diagnose = args.includes("--diagnose") || ci;   // in the build log it helps whoever reads it; nothing secret
 const at = args.indexOf("--config");
 const configPath = at >= 0 && args[at + 1] ? args[at + 1] : "wrangler.toml";
 const print = (s = "") => console.log(s);

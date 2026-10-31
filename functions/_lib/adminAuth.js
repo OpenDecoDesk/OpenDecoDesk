@@ -285,6 +285,15 @@ export async function bootstrapState(env){
   return { open: !usable, admin, replaced: !!mark && mark !== await secretMark_(env), totp: !!(admin && admin.totpSecret) };
 }
 
+// The placeholder `.dev.vars.example` offers on the Deploy to Cloudflare page. Signing in with it — or
+// with any setup password shorter than a real password may be — is refused: the admin's address is
+// public from the moment it is deployed, so the first sign-in must not be guessable.
+export const SETUP_PASSWORD_PLACEHOLDER = "choose-a-long-setup-password";
+export function weakSetupPassword(env){
+  const p = String(env.PROXY_ADMIN_PASSPHRASE || "");
+  return p.length < MIN_PASSWORD_LENGTH || p.toLowerCase() === SETUP_PASSWORD_PLACEHOLDER;
+}
+
 // Remembers which secret was last used to get in (see `replaced` above).
 export async function rememberSecret(env){
   await setSettingRaw(env.DB, SECRET_MARK_SETTING, await secretMark_(env));
