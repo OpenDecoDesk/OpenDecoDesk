@@ -367,8 +367,9 @@ Artifacts, and the program in them says `dev`. A release can only be made from `
 
 npm and electron-builder need a three-part version, so the build carries it as
 year.month.(day × 100 + build): `2026.11.01.01` is `2026.11.101` in `desktop/package.json` and the
-build files' names, and it is the Mac's bundle version and the Windows file version.
-`desktop/version.js` turns one into the other. The repository's own `desktop/package.json` keeps
+build files' names, and it is the Windows file version. The Mac's own version fields (Finder's Get
+Info) are `2026.11.01` and `2026.11.0101`, as in the other OpenDecoDesk apps, and the About window
+shows `2026.11.01.01`. `desktop/version.js` turns one into the other. The repository's own `desktop/package.json` keeps
 `0.0.0`, which the program shows as `dev`; the workflow stamps the real one into its copy before
 building.
 

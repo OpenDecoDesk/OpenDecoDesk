@@ -5,7 +5,7 @@ const { JSDOM, ResourceLoader } = require("jsdom");
 const { ADMIN_ORIGIN } = require("./testlib/hosts.js");
 const { createD1 } = require("./testlib/d1-shim.js");
 const { readSources, migrate } = require("./desktop/migrate.js");
-const { displayVersion, toSemver, nextVersion } = require("./desktop/version.js");
+const { displayVersion, toSemver, bundleVersions, nextVersion } = require("./desktop/version.js");
 
 // The desktop program's version (2026-11): the date of the release and that day's build number,
 // YYYY.MM.DD.NN, worked out by the release workflow from the tags already there — nobody sets it.
@@ -32,6 +32,8 @@ const ok = (d, c) => { console.log(d + ":", !!c); c ? pass++ : fail++; };
   ok("the Windows file version needs each part under 65536: the largest patch is 3199", Number(toSemver("2099.12.31.99").split(".")[2]) === 3199);
   ok("the source's 0.0.0, a missing version and the old 0.1.1 all show as dev", displayVersion("0.0.0") === "dev" && displayVersion("") === "dev" && displayVersion(undefined) === "dev" && displayVersion("0.1.1") === "dev");
   ok("…and so does anything that isn't a real date and build", ["2026.13.101", "2026.11.3201", "2026.11.100", "2026.0.101", "2026.11.99"].every(v => displayVersion(v) === "dev"));
+  ok("the Mac's version fields are 2026.11.01 and 2026.11.0101, as in the other OpenDecoDesk apps",
+    JSON.stringify(bundleVersions("2026.11.01.01")) === JSON.stringify({ short: "2026.11.01", build: "2026.11.0101" }) && bundleVersions("dev") === null && bundleVersions("2026.13.01.01") === null);
   ok("a version that isn't one has no package.json form", [null, "", "dev", "2026.11.1.1", "2026.13.01.01", "2026.11.32.01", "2026.11.01.00", "26.11.01.01"].every(v => toSemver(v) === null));
 
   console.log("\n=== The next release's version, from the tags ===");
@@ -45,7 +47,8 @@ const ok = (d, c) => { console.log(d + ":", !!c); c ? pass++ : fail++; };
   ok("a hundredth release in one day is refused rather than wrapping round", err && /99 releases/.test(err.message));
   const out = execFileSync(process.execPath, [path.join(__dirname, "desktop/version.js"), "next"], {
     input: "abc\trefs/tags/desktop-v0.1.1\ndef\trefs/tags/desktop-v" + nextVersion([]).slice(0, 10) + ".01\n" }).toString();
-  ok("the workflow's command reads git ls-remote's list and prints the outputs", out === "version=" + nextVersion([]).slice(0, 10) + ".02\nsemver=" + toSemver(nextVersion([]).slice(0, 10) + ".02") + "\n");
+  ok("the workflow's command reads git ls-remote's list and prints the outputs", out === "version=" + nextVersion([]).slice(0, 10) + ".02\nsemver=" + toSemver(nextVersion([]).slice(0, 10) + ".02") +
+    "\nmacshort=" + nextVersion([]).slice(0, 10) + "\nmacbuild=" + nextVersion([]).slice(0, 10) + "02\n");
 
   console.log("\n=== The program ===");
   const pkg = JSON.parse(read("desktop/package.json")), lock = JSON.parse(read("desktop/package-lock.json"));
@@ -53,6 +56,8 @@ const ok = (d, c) => { console.log(d + ":", !!c); c ? pass++ : fail++; };
   ok("version.js goes into the build with the program", pkg.build.files.includes("version.js"));
   const main = read("desktop/main.js"), server = read("desktop/server.js");
   ok("the window's title is OpenDecoDesk and the version", /const VERSION = displayVersion\(app\.getVersion\(\)\);/.test(main) && /title: "OpenDecoDesk " \+ VERSION,/.test(main));
+  ok("the About window shows the same version (not package.json's 2026.11.101)",
+    /app\.setAboutPanelOptions\(\{ applicationName: "OpenDecoDesk", applicationVersion: VERSION, version: "" \}\);/.test(main));
   ok("…and the page's own title doesn't replace it", /win\.on\("page-title-updated", \(e\) => e\.preventDefault\(\)\);/.test(main));
   ok("…the log says which version started", /log\("OpenDecoDesk " \+ VERSION \+ " starting/.test(main) && !/app\.getVersion\(\) \+/.test(main));
   ok("the Worker is given the version (DESKTOP_VERSION) with EDITION=desktop", /bindings: \{ EDITION: "desktop", DESKTOP_VERSION: displayVersion\(require\("\.\/package\.json"\)\.version\),/.test(server));
@@ -65,7 +70,8 @@ const ok = (d, c) => { console.log(d + ":", !!c); c ? pass++ : fail++; };
     /"\$GITHUB_REF" != "refs\/heads\/main"/.test(job("version")) && /version=dev\\nsemver=0\.0\.0/.test(job("version")));
   ok("each build stamps it into package.json before electron-builder, with the Mac's and Windows' versions", /  build:\n    needs: version\n/.test(wf) &&
     job("build").indexOf('npm version "$SEMVER" --no-git-tag-version') > 0 && job("build").indexOf('npm version "$SEMVER"') < job("build").indexOf("npx electron-builder") &&
-    /npm pkg set build\.buildVersion="\$SEMVER" build\.mac\.bundleShortVersion="\$SEMVER"/.test(job("build")) && /if: needs\.version\.outputs\.release == 'true'/.test(job("build")));
+    /npm pkg set build\.buildVersion="\$SEMVER" build\.mac\.bundleShortVersion="\$MAC_SHORT" build\.mac\.bundleVersion="\$MAC_BUILD"/.test(job("build")) &&
+    /MAC_SHORT: \$\{\{ needs\.version\.outputs\.macshort \}\}/.test(job("build")) && /macbuild: \$\{\{ steps\.v\.outputs\.macbuild \}\}/.test(job("version")) && /if: needs\.version\.outputs\.release == 'true'/.test(job("build")));
   ok("the release is desktop-v<version>, titled OpenDecoDesk Desktop <version>, with the website's file names and the notes", /gh release create "desktop-v\$VERSION"/.test(job("release")) &&
     /--title "OpenDecoDesk Desktop \$VERSION" --notes-file desktop\/RELEASE_NOTES\.md/.test(job("release")) && /needs: \[version, build\]/.test(job("release")) &&
     ["OpenDecoDesk-Windows.zip", "OpenDecoDesk-macOS-AppleSilicon.zip", "OpenDecoDesk-macOS-Intel.zip"].every(n => job("release").includes("release/" + n)));

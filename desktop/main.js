@@ -18,6 +18,9 @@ const { displayVersion } = require("./version.js");
 const SOURCE_URL = "https://github.com/opendecodesk/opendecodesk";
 // The release's date and build number (version.js), or "dev" when run from the source.
 const VERSION = displayVersion(app.getVersion());
+// The About window (OpenDecoDesk → About on a Mac) shows the same, "Version 2026.11.01.01", not
+// package.json's 2026.11.101; the empty build number keeps a second number out of it.
+app.setAboutPanelOptions({ applicationName: "OpenDecoDesk", applicationVersion: VERSION, version: "" });
 const argData = process.argv.find(a => a.startsWith("--data-dir="));
 const dataDir = argData ? path.resolve(argData.slice("--data-dir=".length)) : path.join(app.getPath("appData"), "OpenDecoDesk");
 app.setPath("userData", path.join(dataDir, "electron"));   // the window's own storage, kept with the data
