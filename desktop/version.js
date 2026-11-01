@@ -21,6 +21,14 @@ function displayVersion(semver) {
   return m[1] + "." + two(month) + "." + two(day) + "." + two(build);
 }
 
+// The Mac's own version fields, as the other OpenDecoDesk apps have them (Finder's Get Info shows
+// them): "2026.11.01.01" → { short: "2026.11.01", build: "2026.11.0101" }. null for anything else.
+function bundleVersions(version) {
+  if (!toSemver(version)) return null;
+  const [y, m, d, n] = version.split(".");
+  return { short: y + "." + m + "." + d, build: y + "." + m + "." + d + n };
+}
+
 // "2026.11.01.01" → "2026.11.101", for package.json. null for anything else.
 function toSemver(version) {
   const m = /^(\d{4})\.(\d{2})\.(\d{2})\.(\d{2})$/.exec(String(version || ""));
@@ -41,12 +49,13 @@ function nextVersion(tags, now = new Date()) {
   return day + "." + two(next);
 }
 
-module.exports = { DEV, TAG_PREFIX, displayVersion, toSemver, nextVersion };
+module.exports = { DEV, TAG_PREFIX, displayVersion, toSemver, bundleVersions, nextVersion };
 
 // `git ls-remote --tags --refs origin | node desktop/version.js next` prints the next release's
-// version and its package.json form, as the workflow's outputs (version=…, semver=…).
+// version, its package.json form and the Mac's version fields, as the workflow's outputs.
 if (require.main === module && process.argv[2] === "next") {
   const tags = require("fs").readFileSync(0, "utf8").split("\n").map(l => l.trim().split(/\s+/).pop() || "").map(t => t.replace(/^refs\/tags\//, "")).filter(Boolean);
   const version = nextVersion(tags);
-  console.log("version=" + version + "\nsemver=" + toSemver(version));
+  const mac = bundleVersions(version);
+  console.log("version=" + version + "\nsemver=" + toSemver(version) + "\nmacshort=" + mac.short + "\nmacbuild=" + mac.build);
 }

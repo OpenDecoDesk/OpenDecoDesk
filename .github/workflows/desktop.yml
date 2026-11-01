@@ -32,6 +32,8 @@ jobs:
       release: ${{ steps.v.outputs.release }}
       version: ${{ steps.v.outputs.version }}
       semver: ${{ steps.v.outputs.semver }}
+      macshort: ${{ steps.v.outputs.macshort }}
+      macbuild: ${{ steps.v.outputs.macbuild }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 (pinned to a commit, like the other workflows)
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -81,16 +83,19 @@ jobs:
       - run: npm ci ${{ matrix.npm_flags }}   # exact versions from desktop/package-lock.json
         working-directory: desktop
       # A release's version, in package.json's semver form (2026.11.01.01 → 2026.11.101, version.js),
-      # which is also the Mac's bundle version and the Windows file version.
+      # which is also the Windows file version; the Mac's version fields are 2026.11.01 and
+      # 2026.11.0101, like the other OpenDecoDesk apps'. The About window shows 2026.11.01.01 (main.js).
       - name: The version
         if: needs.version.outputs.release == 'true'
         working-directory: desktop
         shell: bash
         env:
           SEMVER: ${{ needs.version.outputs.semver }}
+          MAC_SHORT: ${{ needs.version.outputs.macshort }}
+          MAC_BUILD: ${{ needs.version.outputs.macbuild }}
         run: |
           npm version "$SEMVER" --no-git-tag-version
-          npm pkg set build.buildVersion="$SEMVER" build.mac.bundleShortVersion="$SEMVER"
+          npm pkg set build.buildVersion="$SEMVER" build.mac.bundleShortVersion="$MAC_SHORT" build.mac.bundleVersion="$MAC_BUILD"
       - run: npx electron-builder ${{ matrix.builder }} --publish never
         working-directory: desktop
         env:
