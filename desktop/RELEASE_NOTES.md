@@ -4,8 +4,9 @@ inventory and cost of goods, and the books, with everything kept on your own com
 
 **This is an early release.** Make backups (File → Back up…).
 
-**New in 0.1.1:** the OpenDecoDesk icon, as on the website and the Facebook group (the hoop with
-the D), on the program, its window, the dock and taskbar, and the admin's browser tab.
+**New in this release:** the version is the date of the release and that day's build number (the
+release's title has it, such as 2026.11.01.01; earlier releases were 0.1.0 and 0.1.1). The window's
+title bar shows it, and so does a small line above your business's name at the top of the admin.
 
 ## Downloads
 

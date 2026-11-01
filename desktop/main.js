@@ -13,8 +13,11 @@ const path = require("path");
 const { startServer, copyState, restoreState, resetSignIn, setShippoKey, setSupplierConnections, setSmtp, setEmailOn, savedSmtpPassword, recordBackup, stamp, IMAGES_HOST, desktopCsp } = require("./server.js");
 const { Mailer, cleanSmtpSettings, cleanPdf } = require("./mailer.js");
 const { createLog } = require("./log.js");
+const { displayVersion } = require("./version.js");
 
 const SOURCE_URL = "https://github.com/opendecodesk/opendecodesk";
+// The release's date and build number (version.js), or "dev" when run from the source.
+const VERSION = displayVersion(app.getVersion());
 const argData = process.argv.find(a => a.startsWith("--data-dir="));
 const dataDir = argData ? path.resolve(argData.slice("--data-dir=".length)) : path.join(app.getPath("appData"), "OpenDecoDesk");
 app.setPath("userData", path.join(dataDir, "electron"));   // the window's own storage, kept with the data
@@ -34,7 +37,7 @@ process.on("unhandledRejection", (e) => logFile.write("Unhandled: " + ((e && e.s
 // Two copies of the program on one database would each think they own it: the second one just
 // brings the first one's window forward (and writes nothing to the log).
 const primary = app.requestSingleInstanceLock();
-if (primary) log("OpenDecoDesk " + app.getVersion() + " starting (Electron " + process.versions.electron + ", " + process.platform + " " + process.arch + "), data in " + dataDir);
+if (primary) log("OpenDecoDesk " + VERSION + " starting (Electron " + process.versions.electron + ", " + process.platform + " " + process.arch + "), data in " + dataDir);
 
 if (!primary) app.quit();
 app.on("second-instance", () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
@@ -75,7 +78,7 @@ const isOurs = (u) => { try { const x = new URL(u); return x.hostname === "local
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1280, height: 860, title: "OpenDecoDesk",
+    width: 1280, height: 860, title: "OpenDecoDesk " + VERSION,
     // Windows and Linux show this in the title bar and taskbar; a Mac uses the app's icon.icns.
     ...(process.platform === "darwin" ? {} : { icon: path.join(__dirname, "icons", "icon.png") }),
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, sandbox: true, nodeIntegration: false },
@@ -91,6 +94,9 @@ function createWindow() {
   win.webContents.on("will-navigate", (e, url) => {
     if (!isOurs(url)) { e.preventDefault(); if (/^https?:\/\//i.test(url)) shell.openExternal(url); }
   });
+  // The title bar keeps the program's name and version: the page's own title (the business, the
+  // admin page open) would otherwise replace it.
+  win.on("page-title-updated", (e) => e.preventDefault());
   win.loadURL(server.url);
 }
 

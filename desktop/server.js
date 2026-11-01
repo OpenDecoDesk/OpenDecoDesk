@@ -14,6 +14,7 @@ const crypto = require("crypto");
 const { readSources, migrate } = require("./migrate.js");
 const { FileStore, copyFromR2 } = require("./files.js");
 const { Mailer, cleanSmtpSettings } = require("./mailer.js");
+const { displayVersion } = require("./version.js");
 
 // Pictures are stored with this address (R2_PUBLIC_BASE), whatever port the server is on, so they
 // keep working when the port changes. ".invalid" can never be a real address (RFC 2606); the
@@ -173,7 +174,8 @@ async function startServer({ dataDir, port, protect, unprotect, log = () => {}, 
       // DESKTOP_SUPPLIERS: the owner turned on supplier connections (Global settings), which need the
       // internet — hostConfig.js desktopSuppliersOn. DESKTOP_EMAIL: email is set up (desktopEmailOn),
       // sent from EMAIL_FROM, the mailbox's address. The mailbox password isn't the Worker's.
-      bindings: { EDITION: "desktop", R2_PUBLIC_BASE: IMAGES_BASE, ...withoutMailbox_(secrets), ...(cfg.supplierConnections ? { DESKTOP_SUPPLIERS: "on" } : {}),
+      // DESKTOP_VERSION: the program's version (version.js), shown in the admin's header.
+      bindings: { EDITION: "desktop", DESKTOP_VERSION: displayVersion(require("./package.json").version), R2_PUBLIC_BASE: IMAGES_BASE, ...withoutMailbox_(secrets), ...(cfg.supplierConnections ? { DESKTOP_SUPPLIERS: "on" } : {}),
         ...(mailer ? { DESKTOP_EMAIL: "on", EMAIL_FROM: mailer.settings.from } : {}) },
       ...(mailer ? { serviceBindings: { MAILER: (request) => mailer.handle(request) } } : {}),
     }, {
@@ -359,7 +361,7 @@ module.exports = { startServer, adminHasUsablePassword, copyState, restoreState,
 if (require.main === module) {
   const dataDir = path.resolve(process.argv[2] || path.join(process.cwd(), "desktop-data"));
   startServer({ dataDir, port: 8791, log: (m) => console.log(m) }).then((s) => {
-    console.log("OpenDecoDesk desktop edition, data in " + dataDir);
+    console.log("OpenDecoDesk " + displayVersion(require("./package.json").version) + ", desktop edition, data in " + dataDir);
     console.log(s.migrations.isNew ? "New database." : "Database updates applied: " + (s.migrations.applied.join(", ") || "none"));
     console.log("Open " + s.url);
     const stop = () => s.stop().then(() => process.exit(0));

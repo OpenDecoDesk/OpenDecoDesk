@@ -102,7 +102,8 @@ scripts/setup.mjs         the installer
 scripts/admin-local.js    the admin on your own computer against a throwaway database (`--sign-in` for the real sign-in)
 desktop/                  the desktop version (docs/desktop.md): the Electron window (main.js),
                           the Worker run by Miniflare (server.js), the database set-up (migrate.js),
-                          the R2 buckets as plain files (files.js, r2-files-binding.mjs)
+                          the R2 buckets as plain files (files.js, r2-files-binding.mjs),
+                          the version (version.js)
 test*.js, testlib/        the tests
 ```
 
