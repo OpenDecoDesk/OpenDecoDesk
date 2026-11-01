@@ -1226,7 +1226,7 @@ function gRequiredNote_(what, all = true){ return `<div class="g-feat-req">${all
 function gProductionPanelHtml_(machineSettings, loaded){
   return `<div id="gMachineSection" data-loaded="${loaded ? "1" : ""}">
             <div style="font-weight:600;margin-bottom:4px;">Machine Files</div>
-            <div class="admin-note" style="margin-bottom:8px;">The Machine Files screen can show a <strong>Delete</strong> button on each file. Deleting over the machine protocol is currently disabled in the machines' firmware (the command exists but always refuses — see <code>the send-agent's PROTOCOL.md</code>), so the button is hidden by default. Turn it on only if a firmware update enables delete.</div>
+            <div class="admin-note" style="margin-bottom:8px;">The Machine Files screen can show a <strong>Delete</strong> button on each file. Deleting over the machine protocol is currently disabled in the machines' firmware (the command exists but always refuses — see the machine agent's <a href="${MACHINE_AGENT_HOME}/blob/main/PROTOCOL.md" target="_blank" rel="noopener">PROTOCOL.md</a>), so the button is hidden by default. Turn it on only if a firmware update enables delete.</div>
             <label class="checkbox-row"><input type="checkbox" id="gMachShowDelete" ${machineSettings.showDeleteButton ? "checked" : ""}> Show delete buttons on Machine Files</label>
           </div>`;
 }
@@ -21282,7 +21282,7 @@ function showMachineFormModal_(machine, hoops, onDone, prefill){
 }
 
 // Sweeps the LAN via the local agent's UDP discovery (the machines' own proprietary protocol,
-// not FTP — see the send-agent, a separate project) and lets the operator either create a new
+// not FTP — see the OpenDecoDesk machine agent) and lets the operator either create a new
 // machine record from a discovery result or fill a discovered IP into an existing one, rather
 // than typing an IP address by hand.
 async function showMachineScanModal_(hoops, onDone){
@@ -21301,7 +21301,7 @@ async function showMachineScanModal_(hoops, onDone){
     found = d.machines || [];
   } catch (e) {
     const notRunning = /Failed to fetch|NetworkError|Load failed/i.test(e.message || "");
-    body.innerHTML = `<div style="color:#b03a2e;">${escapeHtml(notRunning ? "Send agent isn't reachable — see the send-agent's README (it's a separate download)." : e.message)}</div>`;
+    body.innerHTML = `<div style="color:#b03a2e;">${escapeHtml(notRunning ? "The machine agent isn't reachable — install or open the OpenDecoDesk Machine Agent on this computer." : e.message)}</div>`;
     return;
   }
   if (!found.length) { body.innerHTML = `<div style="color:#888;">No machines answered. Make sure they're powered on and on the same network.</div>`; return; }
@@ -21370,10 +21370,13 @@ const HOOP_CHANGE_COST_SAME = 0, HOOP_CHANGE_COST_SWAP = 10, HOOP_CHANGE_COST_CA
 // ---- Local send agent — "Send design to machine" ------------------------------
 // A Cloudflare Function can't reach a machine's private LAN IP, so the actual transfer happens
 // through a small standalone program the operator runs on whatever computer drives this screen
-// (a separate project — see its README). This page only ever talks to it
+// (the OpenDecoDesk machine agent — MACHINE_AGENT_HOME). This page only ever talks to it
 // over http://127.0.0.1 — browsers treat localhost as secure, so an HTTPS admin page is allowed
 // to call it (the one carve-out in the mixed-content rules that makes this pattern work at all).
 const EMBROIDERY_AGENT_URL = "http://127.0.0.1:8787";
+// Where the machine agent is downloaded and explained (its README's Install section).
+const MACHINE_AGENT_HOME = "https://github.com/OpenDecoDesk/opendecodesk-machine-agent";
+const machineAgentHelpHtml_ = (what) => `<a href="${MACHINE_AGENT_HOME}#install" target="_blank" rel="noopener">install or open the OpenDecoDesk Machine Agent</a> on this computer ${what}`;
 
 // Two ways to reach the agent, tried in this order:
 //  1. A loopback agent on THIS computer — answers /ping within a moment.
@@ -21527,7 +21530,7 @@ async function sendDesignToMachine_(file, machine){
     return true;
   } catch (e) {
     const notRunning = /Failed to fetch|NetworkError|Load failed/i.test(e.message || "");
-    showToast(notRunning ? "Send agent isn't reachable — see the send-agent's README (it's a separate download)." : e.message, true);
+    showToast(notRunning ? "The machine agent isn't reachable — install or open the OpenDecoDesk Machine Agent on this computer." : e.message, true);
     return false;
   }
 }
@@ -21566,7 +21569,7 @@ async function readMachineFile_(machine, storedName){
   if (!r.ok || d.status !== "ok") {
     // An agent from before /read: the local one answers 404, a relay one "Unknown job type."
     if (r.status === 404 || /unknown job type/i.test((d && d.message) || "")) {
-      throw new Error("The send agent on the shop computer is an older version — update it (see the send-agent's README — it's a separate download) to copy files off a machine.");
+      throw new Error("The machine agent on the shop computer is an older version — update it (download the latest OpenDecoDesk Machine Agent) to copy files off a machine.");
     }
     throw new Error((d && d.message) || "Could not copy the file");
   }
@@ -21865,7 +21868,7 @@ async function renderRunOrder(app, opts){
   if (!soft) checkSendAgent_().then(ok => {
     const el = document.getElementById("roAgentStatus");
     if (el) el.innerHTML = ok ? `<span style="color:#2c6b2f;">● Send agent: connected</span>`
-      : `<span style="color:#b03a2e;">● Send agent: not running</span> — start the send-agent (a separate download) to enable "Send design to machine"`;
+      : `<span style="color:#b03a2e;">● Send agent: not running</span> — ${machineAgentHelpHtml_('to enable "Send design to machine"')}`;
   });
   if (!adminKey) adminKey = (await adminLogin()) || ""; // resolve once before firing these in parallel
   let queue = [], waiting = [], paidUnrun = [], machines = [], hoops = [], threads = [], activeRuns = [], abortReasons = [], needleSizes = [];
@@ -22391,7 +22394,7 @@ async function renderMachineFiles(app){
   checkSendAgent_().then(ok => {
     const el = document.getElementById("mfAgentStatus");
     if (el) el.innerHTML = ok ? `<span style="color:#2c6b2f;">● Send agent: connected</span>`
-      : `<span style="color:#b03a2e;">● Send agent: not running</span> — start the send-agent (a separate download) to browse or send files`;
+      : `<span style="color:#b03a2e;">● Send agent: not running</span> — ${machineAgentHelpHtml_("to browse or send files")}`;
   });
   if (!adminKey) adminKey = (await adminLogin()) || ""; // resolve once before the parallel calls
   let machines = [], orgs = [], showDelete = false;
