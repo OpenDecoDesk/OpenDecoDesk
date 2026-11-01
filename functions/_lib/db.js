@@ -2481,7 +2481,7 @@ export async function deleteAdminSession(db, tokenHash) {
 // Machine Files screen options — kept as their own key (admin-only, not part of the storefront
 // catalog that getGlobalSettings feeds). Currently just whether the per-file Delete button shows.
 // Deleting over the machine protocol is firmware-disabled today (opcode cf24 exists but always
-// refuses — see the send-agent's protocol notes), so the button is HIDDEN by default; this lets the
+// refuses — see the machine agent's PROTOCOL.md §6), so the button is HIDDEN by default; this lets the
 // admin turn it on if a firmware update ever enables delete.
 export async function getMachineSettings(db) {
   const row = await db.prepare("SELECT value FROM global_settings WHERE key='machineSettings'").first();

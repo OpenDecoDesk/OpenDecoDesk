@@ -1,4 +1,4 @@
-// Relay between the admin pages and the local embroidery send-agent (a separate project — embroidery_agent.py
+// Relay between the admin pages and the local embroidery send-agent (the OpenDecoDesk machine agent
 // in --relay mode). The agent runs on the shop LAN and connects OUT to this endpoint; the browser
 // (phone, tablet or laptop) never talks to the agent directly. Jobs and results live only in the
 // relay's short-lived mailbox for ~2 minutes (functions/_lib/agentRelay.js) — nothing is written to

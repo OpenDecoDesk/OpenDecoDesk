@@ -164,9 +164,12 @@ README deliberately doesn't repeat numbers that change.
 
 Sending designs to a machine, listing its files, copying files off it (Machine Files → Download, saved as
 .DSB, several as a .zip) and finding machines on the network are done by a small
-program that runs on a computer in the shop — the **send-agent**. It is a separate project (machine
-protocols differ by maker, and are kept out of this repository), and it has not been published yet; this
-code only contains the admin screens and the relay that talk to it. Everything else works without it.
+program that runs on a computer in the shop: the
+[OpenDecoDesk Machine Agent](https://github.com/OpenDecoDesk/opendecodesk-machine-agent) (the send-agent).
+It is a separate project, because machine protocols differ by maker and are kept out of this repository;
+its README says how to install it. This code only contains the admin screens and the relay that talk to
+it, and the admin links to the agent's install page when it can't reach one. Everything else works
+without it.
 
 ## Feature switches
 

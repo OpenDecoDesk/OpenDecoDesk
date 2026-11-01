@@ -67,7 +67,8 @@ const costs = readme.split("\n## What it costs\n")[1].split("\n## ")[0];
 ok("costs: run on the paid Workers plan; Cloudflare email needs it; Resend is the alternative", /paid Workers plan/.test(costs) && /Cloudflare's own email sending needs the paid Workers plan/.test(costs) && /Resend/.test(costs));
 ok("costs: the free plan is 'being evaluated', explicitly not a supported claim", /free plan is being evaluated and is not yet a supported claim/.test(costs));
 ok("costs: no price or plan limit is stated as fact — it points at Cloudflare's pricing pages", !/\$\s?\d|\d[\d,]*\s*(requests|writes|reads|GB|MB)\b|per (day|month)/i.test(costs) && /Cloudflare's pricing pages/.test(costs));
-ok("the send-agent is described as a separate, unpublished project, with no link", /send-agent/.test(readme) && /separate project/.test(readme) && /not been published yet/.test(readme) && !/\]\([^)]*agent[^)]*\)/i.test(readme));
+ok("the send-agent is described as a separate project, linked to the machine agent's own repository", /send-agent/.test(readme) && /separate project/.test(readme) && !/not been published yet/.test(readme) &&
+  /\[OpenDecoDesk Machine Agent\]\(https:\/\/github\.com\/OpenDecoDesk\/opendecodesk-machine-agent\)/.test(readme));
 ok("the licence: AGPL-3.0, and NOTICE for pdf.js", /Affero General Public License v3\.0/.test(readme) && /NOTICE/.test(readme) && /pdf\.js/.test(readme) && fs.existsSync(path.join(__dirname, "LICENSE")) && fs.existsSync(path.join(__dirname, "NOTICE")));
 ok("requirements and quickstart: a Cloudflare account, a domain on it, Node; npm ci then npm run setup", /Cloudflare account/.test(readme) && /domain whose DNS is on that Cloudflare account/.test(readme) && /Node\.js 22/.test(readme) && /npm ci\n/.test(readme) && /npm run setup\n/.test(readme));
 ok("the installer is described the same way — one real install, the smallest one — in the setup guide and its own header", /has completed one install on a real Cloudflare account, in its smallest\s+> form/.test(text["docs/setup.md"]) && /have run only against a\s+> simulated `wrangler`/.test(text["docs/setup.md"]) &&
@@ -80,7 +81,8 @@ const urls = [...new Set([...all.matchAll(/https?:\/\/[^\s)`"'>]+/g)].map(m => m
 const SERVICE_PAGES = ["https://dash.cloudflare.com/sign-up", "https://dash.cloudflare.com/profile/api-tokens", "https://dashboard.stripe.com/register", "https://dashboard.stripe.com/apikeys",
   "https://dashboard.stripe.com/webhooks", "https://apps.goshippo.com/join", "https://portal.goshippo.com/api-config/api", "https://resend.com/domains", "https://resend.com/api-keys"];
 // The Deploy to Cloudflare button: its picture and its link to this repository.
-const BUTTON = ["https://deploy.workers.cloudflare.com/button", "https://deploy.workers.cloudflare.com/?url=https://github.com/OpenDecoDesk/opendecodesk"];
+const BUTTON = ["https://deploy.workers.cloudflare.com/button", "https://deploy.workers.cloudflare.com/?url=https://github.com/OpenDecoDesk/opendecodesk",
+  "https://github.com/OpenDecoDesk/opendecodesk-machine-agent"];   // and the project's own machine agent
 const madeUp = urls.filter(u => !SERVICE_PAGES.includes(u) && !BUTTON.includes(u) && !/^https:\/\/(admin|images|league)?\.?(myshop\.com|<[^>]+>)|^https:\/\/(admin|images)\.<|^https:\/\/postalpro\.usps\.com\/ZIP_Locale_Detail$|^http:\/\/(localhost|127\.0\.0\.1):\d+|^https:\/\/…|^https:\/\/$/.test(u));
 if (madeUp.length) console.log("   URLs:", madeUp.join(" "));
 ok("no invented URLs: only example addresses on a made-up domain, localhost, the one real source the code cites, and the services' own sign-in pages", madeUp.length === 0);
