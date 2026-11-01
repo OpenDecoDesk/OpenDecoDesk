@@ -182,7 +182,7 @@ const CATALOG_ADMIN_ACTIONS = new Set([
   "listActiveRuns", "startRun", "completeRun", "getRunStats", "abortRun", "markHoopingDone", "getRunReportByDesign",
   "setMachineStitchCount", "listMaintenanceTasks", "saveMaintenanceTask", "deleteMaintenanceTask", "recordMaintenance", "getMaintenanceLog", "setDesignVersionStitches", "fillDesignStitchCounts",
   "receiveBlanks", "receiveBlankOrder", "addBlankSizes", "readInvoiceWithAi", "writeOffBlanks", "getBlankMovements", "voidInventoryMovement", "restoreInventoryMovement", "getInventoryReport", "previewBlankCatchUp", "applyBlankCatchUp",
-  "getBlankLinks", "setBlankLink", "deleteBlankLink",
+  "getBlankLinks", "setBlankLink", "saveBlankLinks", "deleteBlankLink",
   "getReadyToShip", "setReadyToShipQty", "makeForStock", "getFinishedGoodsMovements", "voidFinishedGoodsMovement",
   "listGraphics", "saveGraphic", "deleteGraphic", "setProductGraphicColorBlocked", "getTierPrices", "setTierPrices",
   "listTransfers", "saveTransfer", "deleteTransfer", "receiveTransferSheet", "writeOffTransfers",
@@ -268,7 +268,7 @@ const STAFF_ACTIONS = [
   "listAbortReasons", "saveAbortReason", "deleteAbortReason", "listActiveRuns", "startRun", "completeRun", "getRunStats", "abortRun",
   "setMachineStitchCount", "listMaintenanceTasks", "saveMaintenanceTask", "deleteMaintenanceTask", "recordMaintenance", "getMaintenanceLog", "setDesignVersionStitches", "fillDesignStitchCounts",
   "markHoopingDone", "getRunReportByDesign", "receiveBlanks", "receiveBlankOrder", "addBlankSizes", "readInvoiceWithAi", "markBlankPricesChecked", "confirmProductPrices", "getBlankVendorPriceHistory", "writeOffBlanks", "getBlankMovements", "voidInventoryMovement",
-  "restoreInventoryMovement", "getInventoryReport", "previewBlankCatchUp", "applyBlankCatchUp", "getBlankLinks", "setBlankLink", "deleteBlankLink",
+  "restoreInventoryMovement", "getInventoryReport", "previewBlankCatchUp", "applyBlankCatchUp", "getBlankLinks", "setBlankLink", "saveBlankLinks", "deleteBlankLink",
   "getReadyToShip", "setReadyToShipQty", "makeForStock", "getFinishedGoodsMovements", "voidFinishedGoodsMovement", "listGraphics", "saveGraphic", "deleteGraphic", "setProductGraphicColorBlocked", "getTierPrices",
   "setTierPrices", "listTransfers", "saveTransfer", "deleteTransfer", "receiveTransferSheet", "writeOffTransfers", "getTransferMovements",
   "voidTransferMovement", "restoreTransferMovement", "getTransferQueue", "setTransferReceived", "getGangSheet", "makeTransferLine",
@@ -4880,6 +4880,40 @@ export async function onRequestPost(context) {
         return jsonResponse({ status: "error", code: "belowMap", message: `Not linked — ${why}. Raise the price first.` }, 409);
       }
       return jsonResponse({ status: "ok" });
+    }
+
+    // All of one product's link changes at once (the product form's Save): `set` [{productColor, productSize, blankId,
+    // blankColor, blankSize}] and `remove` [{productColor, productSize}], written in one batch with ONE MAP check
+    // before and after (setBlankLink above runs it per link). A change that would newly put a price below MAP puts
+    // the product's links back exactly as they were and is refused.
+    if (body.action === "saveBlankLinks") {
+      const org = String(body.org || ""), productId = String(body.productId || "");
+      if (!org || !productId) return jsonResponse({ status: "error", message: "org, productId required" }, 400);
+      const set = Array.isArray(body.set) ? body.set : [], remove = Array.isArray(body.remove) ? body.remove : [];
+      if (set.length + remove.length > 5000) return jsonResponse({ status: "error", message: "Too many links in one save." }, 400);
+      const clean = (l) => ({ productColor: String((l && l.productColor) || "").slice(0, 80), productSize: String((l && l.productSize) || "").slice(0, 20),
+        blankId: Number(l && l.blankId) || 0, blankColor: String((l && l.blankColor) || "").slice(0, 80), blankSize: String((l && l.blankSize) || "").slice(0, 20) });
+      const sets = set.map(clean), removes = remove.map(clean);
+      if (sets.some(l => !l.blankId)) return jsonResponse({ status: "error", message: "Every link needs a blank." }, 400);
+      if (!sets.length && !removes.length) return jsonResponse({ status: "ok", saved: 0, removed: 0 });
+      const mapCheck = async () => {
+        const x = (await analyzePricing(env.DB, { orgId: org, productId }).catch(() => ({ products: [] }))).products[0] || { rows: [], mapProblems: [] };
+        return { keys: new Set(x.rows.filter(r => r.flags.includes("map")).map(r => r.group + "|" + r.size)), problems: x.mapProblems || [] };
+      };
+      const before = await mapCheck();
+      const { results: prev } = await env.DB.prepare("SELECT productColor, productSize, blankId, blankColor, blankSize FROM product_blank_links WHERE orgId=? AND productId=?").bind(org, productId).all();
+      const upsert = (l) => env.DB.prepare(`INSERT INTO product_blank_links (orgId, productId, productColor, productSize, blankId, blankColor, blankSize) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (orgId, productId, productColor, productSize) DO UPDATE SET blankId=excluded.blankId, blankColor=excluded.blankColor, blankSize=excluded.blankSize`)
+        .bind(org, productId, l.productColor, l.productSize, Number(l.blankId), String(l.blankColor || ""), String(l.blankSize || ""));
+      const del = (l) => env.DB.prepare("DELETE FROM product_blank_links WHERE orgId=? AND productId=? AND productColor=? AND productSize=?").bind(org, productId, l.productColor, l.productSize);
+      await env.DB.batch([...removes.map(del), ...sets.map(upsert)]);
+      const after = await mapCheck();
+      if ([...after.keys].some(k => !before.keys.has(k))) {
+        await env.DB.batch([env.DB.prepare("DELETE FROM product_blank_links WHERE orgId=? AND productId=?").bind(org, productId), ...prev.map(upsert)]);
+        const why = after.problems.filter(t => !before.problems.includes(t)).join("; ") || "a price would be below a blank's MAP";
+        return jsonResponse({ status: "error", code: "belowMap", message: `Not saved — ${why}. Raise the price first.` }, 409);
+      }
+      return jsonResponse({ status: "ok", saved: sets.length, removed: removes.length });
     }
 
     if (body.action === "deleteBlankLink") {

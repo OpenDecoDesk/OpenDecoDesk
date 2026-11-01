@@ -12003,18 +12003,28 @@ async function loadBlankLinksSection(orgId, product) {
     window._blankLinksSave = { productId: product.productId, save: async () => {
       try {
         readDom();
-        const post = (body) => fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ key: adminKey, org: orgId, productId: product.productId }, body)) });
-        const calls = [];
+        // Only what changed, in ONE request (saveBlankLinks): a product with many colors used to send a request per
+        // color × size — 200+ — each re-running the MAP check.
+        const set = [], remove = [];
+        const same = (a, k) => a && String(a.blankId) === String(k.blankId) && String(a.blankColor || "") === String(k.blankColor || "") && String(a.blankSize || "") === String(k.blankSize || "");
         productColors.forEach(pc => sizes.forEach(size => {
-          const k = picks[pc + "|" + size] || {};
-          if (k.blankId) calls.push(post({ action: "setBlankLink", productColor: pc, productSize: size, blankId: Number(k.blankId), blankColor: k.blankColor || "", blankSize: k.blankSize || "" }));
-          else if (linkMap[pc + "|" + size]) calls.push(post({ action: "deleteBlankLink", productColor: pc, productSize: size }));
+          const key = pc + "|" + size, k = picks[key] || {};
+          if (k.blankId) { if (!same(linkMap[key], k)) set.push({ productColor: pc, productSize: size, blankId: Number(k.blankId), blankColor: k.blankColor || "", blankSize: k.blankSize || "" }); }
+          else if (linkMap[key]) remove.push({ productColor: pc, productSize: size });
         }));
         // A color that's no longer offered takes its links with it.
-        myLinks.filter(l => !productColors.includes(l.productColor || "")).forEach(l => calls.push(post({ action: "deleteBlankLink", productColor: l.productColor || "", productSize: l.productSize })));
-        const results = await Promise.all(calls.map(p => p.then(r => r.json()).catch(() => ({ status: "error", message: "Network error" }))));
-        const failed = results.filter(d => d.status === "error");
-        return failed.length ? "Blank links: " + (failed[0].message || "some saves failed.") : "";
+        Object.keys(linkMap).forEach(key => {
+          const i = key.indexOf("|"), pc = key.slice(0, i), size = key.slice(i + 1);
+          if (!productColors.includes(pc) && !remove.some(r => r.productColor === pc && r.productSize === size)) remove.push({ productColor: pc, productSize: size });
+        });
+        if (!set.length && !remove.length) return "";
+        const r = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: adminKey, action: "saveBlankLinks", org: orgId, productId: product.productId, set, remove }) });
+        const d = await r.json().catch(() => ({ status: "error", message: "Network error" }));
+        if (d.status === "error") return "Blank links: " + (d.message || "the save failed.");
+        // Saved: this is what's on file now (a second Save sends nothing new).
+        remove.forEach(x => { delete linkMap[x.productColor + "|" + x.productSize]; });
+        set.forEach(x => { linkMap[x.productColor + "|" + x.productSize] = { blankId: x.blankId, blankColor: x.blankColor, blankSize: x.blankSize }; });
+        return "";
       } catch (e) {
         return "Blank links: network error.";
       }
