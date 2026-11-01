@@ -112,7 +112,7 @@ import {
   getPublishedOrg, setOrgReady, getShopWizard, saveShopWizard, deleteShopWizard, listShopWizards, setProductLinksFromBlank, publishShop, getPublishState, getDraftCatalogShop, signPreviewToken,
   planDiscardShopChanges, discardShopChanges, applyProductPrices,
   getBrandRules, setBrandRules, DEFAULT_BRAND_RULES, brandRuleFor_, listBrandApprovals, addBrandApproval, revokeBrandApproval, getBrandApproval,
-  nextSupplierPoNumber, insertSupplierOrder, claimSupplierOrderRetry, setSupplierOrderResult, getSupplierOrder, listSupplierOrders, markItemsBlankOrdered, cancelSupplierOrder, getInventoryValuation, getCogsReport, planBlankCatchUp, applyBlankCatchUp, voidInventoryMovement, getInventoryMovementById, restoreInventoryMovement, getInventoryRestoreBlocker, removeBlankColorImages, analyzePricing, getPricingSettingsView, pricingBelowTargetForBlanks, setPricingSettings,
+  nextSupplierPoNumber, insertSupplierOrder, claimSupplierOrderRetry, setSupplierOrderResult, getSupplierOrder, listSupplierOrders, markItemsBlankOrdered, cancelSupplierOrder, getInventoryValuation, getCogsReport, planBlankCatchUp, applyBlankCatchUp, voidInventoryMovement, getInventoryMovementById, restoreInventoryMovement, getInventoryRestoreBlocker, removeBlankColorImages, analyzePricing, planProductPreview, getPricingSettingsView, pricingBelowTargetForBlanks, setPricingSettings,
   voidOrder, voidPayment, getClosedPeriods, isMonthClosed, closePeriod, reopenPeriod, monthOf,
   orderMonth, itemOrderMonth, paymentMonth, movementMonth, getCashReport, getAccountantExport,
   bumpCatalogVersion, listStockPurchases,
@@ -160,7 +160,7 @@ const CATALOG_ADMIN_ACTIONS = new Set([
   "getBoxPresets", "setBoxPresets",
   "getInventory", "createInventoryItem", "updateInventoryItem", "deleteInventoryItem",
   "getBlanks", "createBlank", "updateBlank", "deleteBlank", "mergeBlanks", "markBlankPricesChecked", "getBlankVendorPriceHistory", "recomputeBlankAverageCosts", "confirmProductPrices",
-  "previewVendorBlanks", "applyVendorBlanks", "copyVendorImage", "getPricingSettings", "updatePricingSettings", "analyzePricing", "removeBlankImages", "findOrphanImages", "deleteOrphanImages", "suggestColorGroups",
+  "previewVendorBlanks", "applyVendorBlanks", "copyVendorImage", "getPricingSettings", "updatePricingSettings", "analyzePricing", "previewProductHoopings", "removeBlankImages", "findOrphanImages", "deleteOrphanImages", "suggestColorGroups",
   "vendorDirectorySearch", "vendorDirectoryEndpoints", "listVendorConnections", "saveVendorConnection", "deleteVendorConnection", "testVendorConnection", "linkVendorConnectionBlanks", "fetchVendorProducts",
   "previewSupplierOrder", "placeSupplierOrder", "listSupplierOrders", "checkSupplierOrderShipments", "cancelSupplierOrder", "listVendorApiLog", "getVendorApiLogEntry",
   "getBrandRules", "updateBrandRules", "listBrandApprovals", "addBrandApproval", "revokeBrandApproval",
@@ -268,7 +268,7 @@ const STAFF_ACTIONS = [
   "listAbortReasons", "saveAbortReason", "deleteAbortReason", "listActiveRuns", "startRun", "completeRun", "getRunStats", "abortRun",
   "setMachineStitchCount", "listMaintenanceTasks", "saveMaintenanceTask", "deleteMaintenanceTask", "recordMaintenance", "getMaintenanceLog", "setDesignVersionStitches", "fillDesignStitchCounts",
   "markHoopingDone", "getRunReportByDesign", "receiveBlanks", "receiveBlankOrder", "addBlankSizes", "readInvoiceWithAi", "markBlankPricesChecked", "confirmProductPrices", "getBlankVendorPriceHistory", "writeOffBlanks", "getBlankMovements", "voidInventoryMovement",
-  "restoreInventoryMovement", "getInventoryReport", "previewBlankCatchUp", "applyBlankCatchUp", "getBlankLinks", "setBlankLink", "saveBlankLinks", "deleteBlankLink",
+  "restoreInventoryMovement", "getInventoryReport", "previewBlankCatchUp", "applyBlankCatchUp", "getBlankLinks", "setBlankLink", "saveBlankLinks", "deleteBlankLink", "previewProductHoopings",
   "getReadyToShip", "setReadyToShipQty", "makeForStock", "getFinishedGoodsMovements", "voidFinishedGoodsMovement", "listGraphics", "saveGraphic", "deleteGraphic", "setProductGraphicColorBlocked", "getTierPrices",
   "setTierPrices", "listTransfers", "saveTransfer", "deleteTransfer", "receiveTransferSheet", "writeOffTransfers", "getTransferMovements",
   "voidTransferMovement", "restoreTransferMovement", "getTransferQueue", "setTransferReceived", "getGangSheet", "makeTransferLine",
@@ -300,7 +300,7 @@ const FEATURE_ACTIONS = {
     "getNeedleSettings", "saveNeedleSize", "deleteNeedleSize", "saveNeedleType", "deleteNeedleType",
     "listHoops", "saveHoop", "deleteHoop",
     "listDesigns", "getDesign", "saveDesign", "deleteDesign", "saveDesignVersion", "updateDesignVersionColors",
-    "setProductDesign", "listProductDesigns", "setProductDesigns", "getOrderItemDesigns", "saveOrderItemDesign",
+    "setProductDesign", "listProductDesigns", "setProductDesigns", "previewProductHoopings", "getOrderItemDesigns", "saveOrderItemDesign",
     "listMachines", "getMachine", "saveMachine", "deleteMachine", "setMachineHoop", "setMachineNeedle", "recordMachineDiscovery",
     "getMachineSettings", "updateMachineSettings",
     "getProductionQueue", "markManufacturedOnMachine",
@@ -3167,6 +3167,14 @@ export async function onRequestPost(context) {
       return jsonResponse({ status: "ok", pricing: all.settings, belowTarget: below });
     }
     // The analysis of one product (productId, optionally with the form's unsaved `draft`), one shop (org) or every shop.
+    // What Run Order will do for a product (the product form's box), from planHoopings_ on made-up lines.
+    if (body.action === "previewProductHoopings") {
+      if (!body.org || !body.productId) return jsonResponse({ status: "error", message: "Missing shop or product" }, 400);
+      const preview = await planProductPreview(env.DB, String(body.org), String(body.productId));
+      if (!preview) return jsonResponse({ status: "error", message: "No such product" }, 404);
+      return jsonResponse({ status: "ok", preview });
+    }
+
     if (body.action === "analyzePricing") {
       const draft = body.draft && typeof body.draft === "object" && body.productId ? body.draft : null;
       if (draft) { const why = checkCosting_(draft); if (why) return jsonResponse({ status: "error", message: why }, 400); }

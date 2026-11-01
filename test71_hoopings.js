@@ -132,6 +132,26 @@ const migrationsUpTo = (upTo) => fs.readdirSync(__dirname + "/migrations").filte
     console.log("a pick-list option adds its own hooping with the option's design on a flat hoop:",
       job.steps.length === 3 && job.steps[2].label === "Personalization: COACH" && job.steps[2].designName === "Closure COACH" &&
       job.steps[2].hoopIds.join() === String(flat) && job.steps[2].threadColors[0].threadId === gold);
+    // A product whose ONLY designs are pick-list option designs, with no base product_designs —
+    // but products.designId is still set (e.g., from a migration backfill or a prior setProductDesign
+    // call before the options were added). The fallback in planHoopings_ used to create a spurious base
+    // step from products.designId, pushing the chosen option to step 2. Now it is skipped when
+    // isOption is true, so the option design is the sole step.
+    await lib.createProduct(d1, "prime", { productId: "closure-only", type: "cap", name: "Closure Only Cap", pricingMode: "flat", flatPrice: 20, visible: true });
+    // Set a product design (sets products.designId AND creates a product_designs row)
+    await lib.setProductDesign(d1, "prime", "closure-only", coach);
+    // Then clear the product_designs list (sets products.designId = null AND removes product_designs)
+    // That simulates the clean state — but the BUG scenario is when designId stays non-null.
+    // Force the buggy state: clear product_designs but leave products.designId pointing to coach.
+    d1._raw.run("DELETE FROM product_designs WHERE orgId='prime' AND productId='closure-only'");
+    // Add pick-list option designs directly (setProductPersonalization not exported in test lib)
+    d1._raw.run(`UPDATE products SET personalizationOptions='["COACH","CAPTAIN"]', personalizationOptionDesigns='{"COACH":${coach},"CAPTAIN":${captain}}' WHERE orgId='prime' AND productId='closure-only'`);
+    await order("CAP-CLOSUREONLY", [line("closure-only", { personalized: true, persName: "COACH" })]);
+    const closureOnlyItem = Number(d1.q("SELECT id FROM order_items WHERE orderId='CAP-CLOSUREONLY'")[0].id);
+    job = await jobOf(closureOnlyItem);
+    console.log("option-only product with stale products.designId: option is the ONLY step (no spurious base step):",
+      job.steps.length === 1 && job.steps[0].label === "Personalization: COACH" && job.steps[0].designName === "Closure COACH" && !job.steps[0].blocked);
+
     const shirtName = await order("SHIRT-NAME", [line("shirt", { personalized: true, persName: "SAMWISE" })]);
     job = await jobOf(shirtName);
     console.log("typed-in text combined: ONE hooping, the main design + name, on the design's with-a-name hoop:",

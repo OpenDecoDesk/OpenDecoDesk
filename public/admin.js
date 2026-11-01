@@ -4337,7 +4337,7 @@ function orderRowsHtml_(shownOrders, getOrg, getVerif, showShop){
         </td>` : ""}
         <td data-date-td data-order="${escapeHtml(o.orderId)}" style="white-space:nowrap;">${new Date(o.placedAt).toLocaleDateString()} <button type="button" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="editOrderDate(this)" style="font-size:11px;padding:1px 5px;margin-left:2px;cursor:pointer;border:1px solid #ccc;border-radius:3px;background:var(--surface,#fff);color:var(--ink-soft,#666);" title="Edit date">✎</button></td>
         <td data-due-td data-order="${escapeHtml(o.orderId)}" style="white-space:nowrap;">${o.dueDate ? escapeHtml(new Date(o.dueDate + "T00:00:00").toLocaleDateString()) : "<span style='color:var(--ink-soft,#999);'>—</span>"} <button type="button" data-org="${escapeHtml(org.orgId)}" data-order="${escapeHtml(o.orderId)}" onclick="editOrderDueDate(this)" style="font-size:11px;padding:1px 5px;margin-left:2px;cursor:pointer;border:1px solid #ccc;border-radius:3px;background:var(--surface,#fff);color:var(--ink-soft,#666);" title="Set due date">✎</button></td>
-        <td>${escapeHtml(o.customerName)}${o.voidedAt ? ` <span title="${escapeHtml(o.voidReason || "")}" style="font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;background:#fee2e2;color:#b03a2e;">VOID</span>` : ""}${o.isTest ? ` <span style="font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;background:#e0e7ff;color:#3730a3;">TEST</span>` : ""}${brandReviewPills_(o)}</td>
+        <td>${escapeHtml(o.customerName)}${o.voidedAt ? ` <span title="${escapeHtml(o.voidReason || "")}" style="font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;background:#fee2e2;color:#b03a2e;">VOID</span>` : ""}${o.isTest ? ` <span style="font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;background:#e0e7ff;color:#3730a3;">TEST</span>` : ""}${brandReviewPills_(o)}${catalogDriftPill_(o)}</td>
         <td>${escapeHtml(o.orderId)}</td>
         <td>${escapeHtml(it.name)}</td>
         <td>${itemHasSize_(it) ? escapeHtml(it.size) : "OSFA"}</td>
@@ -4445,7 +4445,7 @@ function orderCardHtml_(o, org, verif, showShop){
     <div class="oc-head">
       ${!showShop && active.length ? `<input type="checkbox" class="order-select" ${ids} data-keep-check="ord:${escapeHtml(org.orgId)}|${escapeHtml(o.orderId)}" onchange="updateBulkBar(this.dataset.org)" aria-label="Select order ${escapeHtml(o.orderId)}">` : ""}
       <div class="oc-who">
-        <div class="oc-name">${escapeHtml(o.customerName)}${o.voidedAt ? ` <span class="oc-tag oc-tag-void">VOID</span>` : ""}${o.isTest ? ` <span class="oc-tag oc-tag-test">TEST</span>` : ""}${brandReviewPills_(o)}</div>
+        <div class="oc-name">${escapeHtml(o.customerName)}${o.voidedAt ? ` <span class="oc-tag oc-tag-void">VOID</span>` : ""}${o.isTest ? ` <span class="oc-tag oc-tag-test">TEST</span>` : ""}${brandReviewPills_(o)}${catalogDriftPill_(o)}</div>
         <div class="oc-dim">${escapeHtml(o.orderId)} · ${new Date(o.placedAt).toLocaleDateString()} <button type="button" class="oc-icon-btn" ${ids} onclick="editOrderDate(this)" title="Edit date" aria-label="Edit order date">✎</button></div>
         <div class="oc-dim">Due: ${o.dueDate ? escapeHtml(new Date(o.dueDate + "T00:00:00").toLocaleDateString()) : "—"} <button type="button" class="oc-icon-btn" ${ids} onclick="editOrderDueDate(this)" title="Set due date" aria-label="Set due date">✎</button></div>
         ${showShop ? `<div class="oc-dim">${escapeHtml(org.name || org.orgId)}</div>` : ""}
@@ -10273,6 +10273,9 @@ function renderProductForm(app, orgId, product){
       <div class="admin-form">
         ${isEdit ? `<div id="prodFormIssues"></div><div id="prodFormBrandApprovals"></div>` : ""}
         ${isEdit ? versionsBoxHtml_(orgId, product) : ""}
+        <section class="prod-card" id="prodCardBasics" data-card="prodCardBasics">
+          <div class="prod-card-head"><h3>Basics</h3><span class="prod-card-flag"></span></div>
+          
         <label>Product ID
           <input type="text" id="prodFormId" value="${escapeHtml(product ? product.productId : "")}" ${isEdit ? "disabled" : ""} placeholder="e.g. club-tee (lowercase letters, numbers, hyphens)">
         </label>
@@ -10287,10 +10290,91 @@ function renderProductForm(app, orgId, product){
         <label>Subtitle
           <input type="text" id="prodFormSub" value="${escapeHtml(product ? product.sub : "")}" placeholder="e.g. Cotton pique, three-button placket">
         </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="prodFormVisible" ${product && product.visible ? "checked" : ""}>
+          Visible on the storefront${product ? "" : ` <span style="font-weight:400;color:#666;">(a new product starts hidden — tick it once it's ready)</span>`}
+        </label>
+        <label>Sort order (lower shows first)
+          <input type="number" step="1" id="prodFormSortOrder" value="${product && product.sortOrder != null ? product.sortOrder : 0}">
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="prodFormTaxable" ${!product || product.taxable !== false ? "checked" : ""}>
+          Subject to sales tax
+        </label>
+        <div class="admin-note" style="margin-top:-6px;">Uncheck for non-taxable work — e.g. embroidery on a garment the customer supplies can be a non-taxable service in some states (you may then owe use tax on the thread instead). Confirm with your CPA.</div>
+        </section>
+        ${isEdit ? `
+        <section class="prod-card" id="prodCardMode" data-card="prodCardMode">
+          <div class="prod-card-head"><h3>What does the customer choose?</h3><span class="prod-card-flag"></span></div>
+          <div class="prod-card-note">Pick one — the rest of this page only shows what that kind of product uses.</div>
+          <div class="prod-mode-choices" role="radiogroup" aria-label="What does the customer choose?">
+            <label class="pick-row prod-mode-choice"><input type="radio" name="prodMode" value="plain"> <span><b>Nothing — every piece is the same</b><br><span class="prod-mode-sub">One look, made from its designs and printed transfers below.</span></span></label>
+            <label class="pick-row prod-mode-choice"><input type="radio" name="prodMode" value="colors"> <span><b>A color</b><br><span class="prod-mode-sub">The customer picks the garment color; every piece gets the same decoration.</span></span></label>
+            <label class="pick-row prod-mode-choice"><input type="radio" name="prodMode" value="options"> <span><b>A color and a graphic</b><br><span class="prod-mode-sub">The customer picks the color and a graphic at one or more decoration locations — added to whatever every piece gets.</span></span></label>
+          </div>
+          <div id="prodRunPreview" class="prod-run-preview"><em style="color:#888;font-size:13px;">Working out what Run Order will do&hellip;</em></div>
+        </section>
+        ` : ""}
+        <section class="prod-card" id="prodCardBlank" data-card="prodCardBlank">
+          <div class="prod-card-head"><h3>Blank &amp; colors</h3><span class="prod-card-flag"></span></div>
+          <div class="prod-card-note">The blanks it's made on (for stock and cost). For a product the customer picks a color on, its colors come from these blanks. Saved with Save changes.</div>
+        ${isEdit ? `
+          <div id="productCfgHead"></div>
+          <div style="font-size:13px;font-weight:700;margin:12px 0 6px;">Blank links <span style="font-weight:400;color:#666;font-size:12px;">(each product size &rarr; a blank size, for stock and cost)</span></div>
+          <div id="blankLinksSection"><em style="color:#888;font-size:13px;">Loading blank links&hellip;</em></div>` : `<div class="admin-note">Link blanks once the product is created.</div>`}
+        <label class="checkbox-row">
+          <input type="checkbox" id="prodFormNoBlank" ${product && product.noBlankNeeded ? "checked" : ""}>
+          No blank needed (e.g. a patch) — it's made from shop supplies, so nothing is ordered, received or counted for it
+        </label>
+        <div class="admin-note" style="margin-top:-6px;">Orders for it skip the blank-ordered / received steps and go straight to Run Order once paid and the design is ready. Record its materials (patch twill, thread) under Expenses as supplies.</div>
         <label>Weight per item (oz) — optional; leave blank to use the blank's weight
           <input type="number" min="0" step="0.1" id="prodFormWeight" value="${product && product.weightOz != null ? product.weightOz : ""}" placeholder="${product && product.blankWeightOz ? `blank: ${product.blankWeightOz} oz` : "e.g. 12"}">
           <span style="font-size:12px;color:#666;font-weight:400;">${product && product.blankWeightOz ? `Its blank weighs ${escapeHtml(blankWeightText_(product))} — shipping uses that unless a weight is typed here.` : "Shipping uses the linked blank's weight (Inventory → Blanks → Edit → Weight). Type one here only to override it, or when the product has no blank."}</span>
         </label>
+        </section>
+        <section class="prod-card" id="prodCardEvery" data-card="prodCardEvery">
+          <div class="prod-card-head"><h3>On every piece</h3><span class="prod-card-flag"></span></div>
+          <div class="prod-card-note">What every piece gets, whatever the customer picks. Saved with Save changes.</div>
+        ${isEdit ? `
+          <div class="prod-sub-head" id="productDesignsBlock"${adminFeatureOn_("production") ? "" : ' style="display:none;"'}>Stitched on every piece (designs)</div>
+          <div class="admin-note" style="margin-top:0;${adminFeatureOn_("production") ? "" : "display:none;"}">Each design is its own hooping, run in this order (e.g. Front, then Back). On a product where the customer picks a graphic, these are stitched <b>as well as</b> the pick. The Main design is the one a typed-in name is combined with.</div>
+          <div id="productDesignSection"><em style="color:#888;font-size:13px;">Loading&hellip;</em></div>
+          <div class="prod-slot" data-slot="cfgFixedWrap"></div>
+          <div class="prod-slot prod-slot-emb" data-slot="cfgEmbWrap"></div>
+          <div class="prod-emb-options-note admin-note">Usually not needed when the customer picks a graphic — their picks already show on the mockups.</div>
+          <div class="prod-slot" data-slot="cfgQrWrap"></div>` : ""}
+        <label class="checkbox-row"${adminFeatureOn_("production") ? "" : ' style="display:none;"'}>
+          <input type="checkbox" id="prodFormNoDesign" ${product && product.noDesignNeeded ? "checked" : ""}>
+          No embroidery design needed (e.g. DTF-pressed) — Run Order won't expect a design
+        </label>
+        </section>
+        ${isEdit ? `
+        <section class="prod-card" id="prodCardOptions" data-card="prodCardOptions">
+          <div class="prod-card-head"><h3>The customer's pick</h3><span class="prod-card-flag"></span></div>
+          <div class="prod-card-note">Which <a href="#graphics/${escapeHtml(orgId)}">graphics</a> the customer can pick at each decoration location. Each pick adds its own hooping (embroidery) or transfer. Saved with Save changes.</div>
+          <div id="productConfigSection"><em style="color:#888;font-size:13px;">Loading&hellip;</em></div>
+        </section>
+        ` : ""}
+        <section class="prod-card" id="prodCardCustom" data-card="prodCardCustom">
+          <div class="prod-card-head"><h3>Customer's own design</h3><span class="prod-card-flag"></span></div>
+          
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+          <label style="flex:2;min-width:240px;">Customer's own design
+            <select id="prodFormCustomDesign">
+              <option value="">Off</option>
+              <option value="embroidery"${product && product.customDesign === "embroidery" ? " selected" : ""}>Embroidery (you upload the stitch file before Digitizing complete)</option>
+              <option value="transfer"${product && product.customDesign === "transfer" ? " selected" : ""}>Transfer (printed from their image)</option>
+            </select>
+          </label>
+          <label style="flex:1;min-width:140px;">Add-on per piece (blank = free)
+            <input type="number" step="0.01" min="0" max="1000" id="prodFormCustomDesignPrice" value="${product && product.customDesignPrice != null ? product.customDesignPrice : ""}">
+          </label>
+        </div>
+        <div class="admin-note" style="margin-top:-6px;">Lets the customer upload an image on the shop page — an upload box on this product, or “Custom — upload your own” at each location of a configurable product. With no design of its own the upload is required; otherwise it replaces the product's design on that item.</div>
+        </section>
+        <section class="prod-card" id="prodCardPers" data-card="prodCardPers">
+          <div class="prod-card-head"><h3>Personalization</h3><span class="prod-card-flag"></span></div>
+          
         <label>Personalization price (optional — blank disables personalization for this item)
           <input type="number" min="0" step="0.01" id="prodFormPersPrice" value="${product && product.personalizationPrice != null ? product.personalizationPrice : ""}" placeholder="e.g. 2">
         </label>
@@ -10298,6 +10382,10 @@ function renderProductForm(app, orgId, product){
           <textarea id="prodFormPersOptions" placeholder="e.g.&#10;COACH&#10;CAPTAIN&#10;VOLUNTEER" oninput="drawProductPersSetup_()">${escapeHtml((product && product.personalizationOptions && product.personalizationOptions.length ? product.personalizationOptions : []).join("\n"))}</textarea>
         </label>
         <div id="prodFormPersSetup" style="font-size:13px;"><em style="color:#888;">Loading personalization setup&hellip;</em></div>
+        </section>
+        <section class="prod-card" id="prodCardPrices" data-card="prodCardPrices">
+          <div class="prod-card-head"><h3>Prices &amp; costs</h3><span class="prod-card-flag"></span></div>
+          
         <label>Pricing
           <select id="prodFormPricingMode" onchange="toggleProductPricingModeFields()">
             <option value="sized" ${pricingMode === "sized" ? "selected" : ""}>By size</option>
@@ -10334,6 +10422,10 @@ function renderProductForm(app, orgId, product){
             : isEdit ? `<div class="admin-note">A manager sees what each item costs and leaves here.</div>`
             : `<div class="admin-note">Costs and income show here once the product is saved and linked to its blank.</div>`}
         </div>
+        </section>
+        <section class="prod-card" id="prodCardPictures" data-card="prodCardPictures">
+          <div class="prod-card-head"><h3>Pictures &amp; shop page</h3><span class="prod-card-flag"></span></div>
+          
         <div class="prod-images-field" style="margin:14px 0;">
           <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px;">Product images</div>
           <div class="admin-note" style="margin:0 0 8px;">Shown first on the storefront, in this order. Drag a picture to move it, or use the arrows. The linked blank's photos follow them.</div>
@@ -10347,59 +10439,12 @@ function renderProductForm(app, orgId, product){
           <textarea id="prodFormImages" aria-hidden="true" tabindex="-1" style="display:none;">${escapeHtml((product && product.images ? product.images : []).join("\n"))}</textarea>
           <div id="prodBlankImages" style="margin-top:10px;"></div>
         </div>
+        ${isEdit ? `<div class="prod-slot" data-slot="cfgMockups"></div>` : ""}
         <label>Features (optional, one per line)
           <textarea id="prodFormFeatures">${escapeHtml((product && product.features ? product.features : []).join("\n"))}</textarea>
         </label>
         <div id="prodCopyFromBlank"></div>
-        <label class="checkbox-row">
-          <input type="checkbox" id="prodFormVisible" ${product && product.visible ? "checked" : ""}>
-          Visible on the storefront${product ? "" : ` <span style="font-weight:400;color:#666;">(a new product starts hidden — tick it once it's ready)</span>`}
-        </label>
-        <label class="checkbox-row"${adminFeatureOn_("production") ? "" : ' style="display:none;"'}>
-          <input type="checkbox" id="prodFormNoDesign" ${product && product.noDesignNeeded ? "checked" : ""}>
-          No embroidery design needed (e.g. DTF-pressed) — Run Order won't expect a design
-        </label>
-        <label class="checkbox-row">
-          <input type="checkbox" id="prodFormNoBlank" ${product && product.noBlankNeeded ? "checked" : ""}>
-          No blank needed (e.g. a patch) — it's made from shop supplies, so nothing is ordered, received or counted for it
-        </label>
-        <div class="admin-note" style="margin-top:-6px;">Orders for it skip the blank-ordered / received steps and go straight to Run Order once paid and the design is ready. Record its materials (patch twill, thread) under Expenses as supplies.</div>
-        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
-          <label style="flex:2;min-width:240px;">Customer's own design
-            <select id="prodFormCustomDesign">
-              <option value="">Off</option>
-              <option value="embroidery"${product && product.customDesign === "embroidery" ? " selected" : ""}>Embroidery (you upload the stitch file before Digitizing complete)</option>
-              <option value="transfer"${product && product.customDesign === "transfer" ? " selected" : ""}>Transfer (printed from their image)</option>
-            </select>
-          </label>
-          <label style="flex:1;min-width:140px;">Add-on per piece (blank = free)
-            <input type="number" step="0.01" min="0" max="1000" id="prodFormCustomDesignPrice" value="${product && product.customDesignPrice != null ? product.customDesignPrice : ""}">
-          </label>
-        </div>
-        <div class="admin-note" style="margin-top:-6px;">Lets the customer upload an image on the shop page — an upload box on this product, or “Custom — upload your own” at each location of a configurable product. With no design of its own the upload is required; otherwise it replaces the product's design on that item.</div>
-        <label class="checkbox-row">
-          <input type="checkbox" id="prodFormTaxable" ${!product || product.taxable !== false ? "checked" : ""}>
-          Subject to sales tax
-        </label>
-        <div class="admin-note" style="margin-top:-6px;">Uncheck for non-taxable work — e.g. embroidery on a garment the customer supplies can be a non-taxable service in some states (you may then owe use tax on the thread instead). Confirm with your CPA.</div>
-        <label>Sort order (lower shows first)
-          <input type="number" step="1" id="prodFormSortOrder" value="${product && product.sortOrder != null ? product.sortOrder : 0}">
-        </label>
-        ${isEdit ? `
-        <div style="margin-top:20px;${adminFeatureOn_("production") ? "" : "display:none;"}" id="productDesignsBlock">
-          <div style="font-size:14px;font-weight:700;margin-bottom:8px;">Designs <span style="font-weight:400;color:#666;font-size:13px;">(each is its own hooping, run in this order — e.g. Front, then Back; the Main design is the one a typed-in name is combined with. Saved with Save changes.)</span></div>
-          <div id="productDesignSection"><em style="color:#888;font-size:13px;">Loading&hellip;</em></div>
-        </div>
-        <div style="margin-top:20px;">
-          <div style="font-size:14px;font-weight:700;margin-bottom:8px;">Blanks &amp; colors <span style="font-weight:400;color:#666;font-size:13px;">(the blanks this product is made on — optional. A configurable product's colors come from its blanks: pick the blanks, tick the colors, and each color and size is linked for you; with no blank, type the colors in. Saved with Save changes.)</span></div>
-          <div id="productCfgHead"></div>
-          <div style="font-size:13px;font-weight:700;margin:12px 0 6px;">Blank links <span style="font-weight:400;color:#666;font-size:12px;">(each product size &rarr; a blank size, for stock and cost)</span></div>
-          <div id="blankLinksSection"><em style="color:#888;font-size:13px;">Loading blank links&hellip;</em></div>
-        </div>
-        <div style="margin-top:20px;">
-          <div style="font-size:14px;font-weight:700;margin-bottom:8px;">Graphic options, printed transfers &amp; reorder QR <span style="font-weight:400;color:#666;font-size:13px;">(for a configurable product: which <a href="#graphics/${escapeHtml(orgId)}">graphics</a> are offered at each location, with a mockup per color ticked above — and, for any product, the DTFs always printed on it and the reorder QR code. Saved with Save changes.)</span></div>
-          <div id="productConfigSection"><em style="color:#888;font-size:13px;">Loading&hellip;</em></div>
-        </div>` : ""}
+        </section>
         <div id="prodFormError" class="admin-error"></div>
         <div class="admin-actions">
           <button class="admin-btn" data-org="${escapeHtml(orgId)}" onclick="submitProductForm(this.dataset.org, ${isEdit ? "true" : "false"})">${isEdit ? "Save changes" : "Create product"}</button>
@@ -10415,6 +10460,7 @@ function renderProductForm(app, orgId, product){
   { const panel = app.querySelector(".admin-panel"); if (panel) { const dirty = () => { window._prodFormDirty = true; }; panel.addEventListener("input", dirty); panel.addEventListener("change", dirty); } }
   if (isEdit) {
     loadBlankLinksSection(orgId, product); loadProductDesignSection(orgId, product); loadProductConfigSection(orgId, product);
+    wireProductMode_(app, product); loadRunPreview_(orgId, product);
     loadColorGroupsSection_(orgId, product);
     loadPricingSection_(orgId, product);
     loadPriceCalc_(product);
@@ -10425,6 +10471,7 @@ function renderProductForm(app, orgId, product){
       // Restricted brands on this product (migrations/0075): its supplier logo approvals (brands that need one).
       const ruledBrands = [...new Set((list || []).filter(x => x.code === "brandRule" && x.brand && x.needsApproval !== false).map(x => x.brand))];
       if (ruledBrands.length) loadBrandApprovalBox_(orgId, product, ruledBrands);
+      drawProductCardFlags_(list || []);
       if (!el || !list) return;
       // A linked blank's vendor price changed since these prices were set (migrations/0062): change the
       // prices and save (that counts), or confirm they're still right.
@@ -10473,6 +10520,101 @@ async function loadProductPersSetup_(orgId, product){
     map: Object.assign({}, (product && product.personalizationOptionDesigns) || {}) };
   drawProductPersSetup_();
 }
+// ---- The product form's layout (2026-10) ----
+// What the customer chooses decides which cards matter: nothing (plain), a color (configurable, no options) or a
+// color and a graphic (configurable with graphic options). It's worked out from the product, not stored.
+function productModeOf_(product){
+  if (!product || !product.configurable) return "plain";
+  return (product.locations || []).some(l => l && (l.graphicIds || []).length) ? "options" : "colors";
+}
+function wireProductMode_(app, product){
+  const form = app.querySelector(".admin-form");
+  if (!form) return;
+  let mode = productModeOf_(product);
+  const radios = [...form.querySelectorAll('input[name="prodMode"]')];
+  const show = () => { form.dataset.mode = mode; radios.forEach(r => { r.checked = r.value === mode; }); };
+  show();
+  const setConfigurable = (want) => { const on = document.getElementById("cfgOn");
+    if (on && on.checked !== want) { on.checked = want; on.dispatchEvent(new Event("change", { bubbles: true })); } };
+  radios.forEach(r => r.onchange = async () => {
+    const next = r.value, root = form;
+    const rows = [...root.querySelectorAll(".cfgLoc")].filter(x => x.querySelector(".cfgLocGraphic:checked"));
+    if (!document.getElementById("cfgOn")) { show(); showToast("Still loading — try again in a moment."); return; }
+    if (mode === "options" && next !== "options" && rows.length) {
+      const yes = await askConfirm_(`Remove the graphic options at ${rows.length} decoration location${rows.length === 1 ? "" : "s"}? With “${next === "plain" ? "Nothing" : "A color"}” the customer doesn't pick a graphic, so they'd no longer be offered (Save changes to keep it).`);
+      if (!yes) { show(); return; }
+      let b, guard = 50; while ((b = root.querySelector(".cfgLocRm")) && guard--) b.click();
+    }
+    mode = next;
+    setConfigurable(mode !== "plain");
+    if (mode === "options" && !root.querySelector(".cfgLoc")) { const add = root.querySelector("#cfgAddLoc"); if (add) add.click(); }
+    window._prodFormDirty = true;
+    show();
+    const card = document.getElementById(mode === "options" ? "prodCardOptions" : "prodCardBlank");
+    if (card && mode !== "plain") card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
+}
+
+// "What Run Order will do" (as last saved): planProductPreview on the server, which plans made-up lines with the
+// same code Run Order uses — so a design that would be stitched on every piece, or a pick that can't be run, shows here.
+async function loadRunPreview_(orgId, product){
+  const box = document.getElementById("prodRunPreview");
+  if (!box) return;
+  if (!adminFeatureOn_("production")) { box.remove(); return; }   // Production off: there's no Run Order
+  let pv;
+  try { pv = (await hoopApi_({ action: "previewProductHoopings", org: orgId, productId: product.productId })).preview; }
+  catch (e) { box.innerHTML = `<div class="admin-note" style="color:#b03a2e;">Couldn't work out what Run Order will do: ${escapeHtml(e.message)}</div>`; return; }
+  box.innerHTML = runPreviewHtml_(pv);
+}
+function runPreviewHtml_(pv){
+  if (!pv) return "";
+  const step = (st) => `<span class="rp-step${st.blocked ? " rp-blocked" : ""}">${escapeHtml(st.designName || st.label || "?")}${st.label && st.label !== st.designName ? ` <span class="rp-dim">(${escapeHtml(st.label)})</span>` : ""}${st.hoopNames && st.hoopNames.length ? ` <span class="rp-dim">· ${escapeHtml(st.hoopNames.join(" / "))}</span>` : ""}${st.blocked ? `<br><span class="rp-why">⚠ ${escapeHtml(st.blocked)}</span>` : ""}</span>`;
+  const steps = (list) => list.length ? list.map(step).join(" → ") : `<span class="rp-dim">nothing</span>`;
+  const rows = [];
+  const always = pv.always || [];
+  rows.push(`<li><b>Every piece:</b> ${always.length ? steps(always) : pv.noDesignNeeded || pv.offersOptions || pv.printed.length ? `<span class="rp-dim">nothing stitched</span>` : `<span class="rp-why">⚠ nothing stitched yet — add a design under “On every piece”, or tick “No embroidery design needed”</span>`}</li>`);
+  if (pv.printed.length) rows.push(`<li><b>Pressed on every piece:</b> ${pv.printed.map(escapeHtml).join(", ")} <span class="rp-dim">(Run Transfer Sheets)</span></li>`);
+  if (pv.offersOptions) for (const loc of pv.picks) rows.push(`<li><b>Plus the customer's pick at ${escapeHtml(loc.label)}:</b><ul>${loc.choices.map(c =>
+    `<li>${escapeHtml(c.graphic)} → ${c.kind === "transfer" ? `<span class="rp-dim">pressed as a transfer (Run Transfer Sheets)</span>` : steps(c.steps)}</li>`).join("")}</ul></li>`);
+  const pz = pv.personalization;
+  if (pz && pz.typed) rows.push(`<li><b>A typed-in name:</b> ${pz.typed.mode === "combined" ? "combined with the main design — " : "its own hooping — "}${steps(pz.typed.steps.filter(st => st.kind === "itemDesign"))} <span class="rp-dim">(the order design is uploaded per order)</span></li>`);
+  if (pz && pz.options.length) rows.push(`<li><b>Personalization options:</b><ul>${pz.options.map(o => `<li>${escapeHtml(o.option)} → ${steps(o.steps)}</li>`).join("")}</ul></li>`);
+  if (pv.customDesign) rows.push(`<li><b>Customer's own design:</b> ${pv.customDesign === "embroidery" ? "replaces the designs above on that item, digitized per order" : "printed from their image (Run Transfer Sheets)"}</li>`);
+  const n = always.length;
+  const locs = pv.offersOptions ? pv.picks.length : 0;
+  const total = `${n} hooping${n === 1 ? "" : "s"}${locs ? ` + 1 for each location the customer picks embroidery at` : ""}`;
+  return `<div class="prod-sub-head">What Run Order will do <span class="rp-dim" style="font-weight:400;">(as last saved)</span></div>
+    <ul class="rp-list">${rows.join("")}</ul><div class="rp-total">Per piece: ${escapeHtml(total)}.</div>`;
+}
+
+// Which card of the product form each catalog-check problem belongs to; the card is outlined and lists them.
+const PRODUCT_ISSUE_CARD_ = {
+  designs: "prodCardEvery", mockupGraphics: "prodCardEvery", flags: "prodCardEvery", blankLinks: "prodCardBlank",
+  personalization: "prodCardPers", config: "prodCardOptions", orders: "prodCardMode",
+  noDesign: "prodCardEvery", designIssue: "prodCardEvery", fixedTransferMissing: "prodCardEvery", fixedTransferUnlinked: "prodCardEvery",
+  mockupGraphicMissing: "prodCardEvery", graphicNoDesign: "prodCardOptions", pickUnmapped: "prodCardPers", persHoop: "prodCardPers",
+  noPrice: "prodCardPrices", belowMap: "prodCardPrices", belowTarget: "prodCardPrices", blankPriceChanged: "prodCardPrices", belowPriceRule: "prodCardPrices",
+  noWeight: "prodCardBlank", noBlankLink: "prodCardBlank", blankTypeMismatch: "prodCardBlank",
+  brandRule: "prodCardBasics", brandUndecorated: "prodCardEvery", versionSplit: "prodCardBasics",
+};
+function drawProductCardFlags_(list){
+  document.querySelectorAll(".prod-card").forEach(c => { c.classList.remove("prod-card-warn", "prod-card-error");
+    const f = c.querySelector(".prod-card-flag"); if (f) f.innerHTML = ""; const l = c.querySelector(".prod-card-issues"); if (l) l.remove(); });
+  const by = {};
+  for (const x of list) { const id = PRODUCT_ISSUE_CARD_[x.section] || PRODUCT_ISSUE_CARD_[x.code]; if (id) (by[id] = by[id] || []).push(x); }
+  for (const [id, items] of Object.entries(by)) {
+    let card = document.getElementById(id);
+    if (!card || getComputedStyle(card).display === "none") card = document.getElementById("prodCardMode") || card;   // a hidden card: say it at the top
+    if (!card) continue;
+    const err = items.some(x => x.level === "error");
+    card.classList.add(err ? "prod-card-error" : "prod-card-warn");
+    const f = card.querySelector(".prod-card-flag");
+    if (f) f.innerHTML = `${err ? "⛔" : "⚠"} ${items.length} to check`;
+    const head = card.querySelector(".prod-card-head");
+    if (head) head.insertAdjacentHTML("afterend", `<div class="prod-card-issues">${issueListHtml_(items)}</div>`);
+  }
+}
+
 function drawProductPersSetup_(){
   const el = document.getElementById("prodFormPersSetup"), ctx = window._prodPersCtx;
   if (!el || !ctx || !ctx.loaded) return;
@@ -11073,6 +11215,12 @@ function loadColorGroupsSection_(orgId, product){
 async function loadProductConfigSection(orgId, product){
   const el = document.getElementById("productConfigSection");
   if (!el) return;
+  // The product form puts the printed transfers, mockup graphics, mockups and reorder QR in their own cards
+  // (.prod-slot, 2026-10): they're drawn here, then moved into those slots, so they're looked up under the form.
+  const root = el.closest(".admin-form") || el;
+  const toSlots = () => { for (const id of ["cfgFixedWrap", "cfgEmbWrap", "cfgMockups", "cfgQrWrap"]) {
+    const node = el.querySelector("#" + id), slot = root.querySelector(`.prod-slot[data-slot="${id}"]`);
+    if (node && slot) { node.style.borderTop = "0"; node.style.marginTop = "0"; node.style.paddingTop = "0"; slot.replaceChildren(node); } } };
   let graphics = [], reorderQrGraphicId = null, reorderQrTransferId = null, qrTransfers = [];
   try { const r = await hoopApi_({ action: "listGraphics", org: orgId }); graphics = r.graphics || []; reorderQrGraphicId = r.reorderQrGraphicId; reorderQrTransferId = r.reorderQrTransferId; }
   catch (e) { el.innerHTML = `<div style="color:#b03a2e;">${escapeHtml(e.message)}</div>`; return; }
@@ -11289,7 +11437,7 @@ async function loadProductConfigSection(orgId, product){
   el.addEventListener("change", (e) => { if (e.target && e.target.matches && e.target.matches(".cfgLocPick, .cfgLocGraphic")) { sync(); drawMockups(); } });
   function draw(){
     const inp = "font-size:13px;padding:5px 7px;border:1px solid #ccc;border-radius:4px;";
-    const headHtml = `<label class="checkbox-row"><input type="checkbox" id="cfgOn" ${product.configurable ? "checked" : ""}> This is a configurable product (the customer picks a color, and a graphic at each location)</label>
+    const headHtml = `<label class="checkbox-row cfg-on-row"><input type="checkbox" id="cfgOn" ${product.configurable ? "checked" : ""}> This is a configurable product (the customer picks a color, and a graphic at each location)</label>
       <div id="cfgBlankPick" style="${product.configurable ? "" : "display:none;"}margin-top:8px;"></div>`;
     if (headHost) headHost.innerHTML = headHtml;
     el.innerHTML = (headHost ? "" : headHtml) + `
@@ -11323,6 +11471,7 @@ async function loadProductConfigSection(orgId, product){
           </select></label>
         <div class="admin-note" style="margin-top:2px;">The QR-code transfer pressed onto this product at no charge — for any product, configurable or not. It's a transfer picked directly; it doesn't need a graphic. An embroidered product with one is listed on Run Order (its embroidery) and on Run Transfer Sheets (its QR code).</div>
       </div>`;
+    toSlots();
     head().querySelector("#cfgOn").onchange = (e) => { product.configurable = e.target.checked; el.querySelector("#cfgFields").style.display = e.target.checked ? "" : "none";
       head().querySelector("#cfgBlankPick").style.display = e.target.checked ? "" : "none"; changed(); drawMockups(); };
     drawPick();
@@ -11340,7 +11489,7 @@ async function loadProductConfigSection(orgId, product){
   // The Embroidered graphics (for mockups) box: location + one of the shop's embroidery graphics, so the mockup
   // table can show the embroidery on a product whose embroidery comes from its designs. Pictures only.
   function drawEmb(){
-    const host = el.querySelector("#cfgEmbWrap");
+    const host = root.querySelector("#cfgEmbWrap");
     if (!host) return;
     const embGraphics = graphics.filter(g => g.kind === "embroidery");
     const inp2 = "padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px;";
@@ -11377,7 +11526,7 @@ async function loadProductConfigSection(orgId, product){
   // goes straight into fixedList (so a redraw of the rest of the section keeps it) and fires `change` so the
   // Pricing panel re-counts the transfers' cost.
   function drawFixed(){
-    const host = el.querySelector("#cfgFixedWrap");
+    const host = root.querySelector("#cfgFixedWrap");
     if (!host) return;
     const transferGraphics = graphics.filter(g => g.kind === "transfer");
     const inp2 = "padding:6px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px;";
@@ -11447,7 +11596,7 @@ async function loadProductConfigSection(orgId, product){
     return out;
   };
   function drawMockups(){
-    const box = el.querySelector("#cfgMockups"); if (!box) return;
+    const box = root.querySelector("#cfgMockups"); if (!box) return;
     const title = `<div style="font-weight:600;font-size:13px;margin-bottom:4px;">Mockups (shop page pictures)</div>`;
     if (!isEditProduct) { box.innerHTML = title + `<div style="font-size:12px;color:#777;">Save the product, then reopen it to add mockups.</div>`; return; }
     const cols = mockupColumns_(), secs = mockupSections_();
@@ -11551,7 +11700,7 @@ async function loadProductConfigSection(orgId, product){
   window._productConfigGet = () => {
     const on = isOn();
     const locs = [...el.querySelectorAll(".cfgLoc")].map(rowToLoc).filter(l => l.locationId || l.key);
-    return { configurable: !!on, garmentColors: colors.slice(), locations: locs, reorderQr: el.querySelector("#cfgReorderQr") ? el.querySelector("#cfgReorderQr").value : "default",
+    return { configurable: !!on, garmentColors: colors.slice(), locations: locs, reorderQr: root.querySelector("#cfgReorderQr") ? root.querySelector("#cfgReorderQr").value : "default",
       fixedTransfers: window._productFixedGet(), mockupGraphics: window._productMockupGraphicsGet() };
   };
 }
@@ -13862,6 +14011,15 @@ async function showFreeShipping_(vendor, baseRows, ctx = {}){
 }
 // "S&S" → "s-s" for a file name.
 const vendorFileName_ = (v) => String(v || "vendor").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "vendor";
+
+// An open order whose lines were saved with settings that would make them be made wrong (order.catalogDrift,
+// orderLineDrift_ in db.js): one amber pill, the details on hover.
+function catalogDriftPill_(o){
+  const d = o.catalogDrift || [];
+  if (!d.length) return "";
+  const tip = d.map(x => `${x.name || "A line"}: ${x.problems.join("; ")}`).join("\n") + "\n\nFix: Edit items → Update from catalog (or pick the graphic on the line).";
+  return ` <span class="catalog-drift" title="${escapeHtml(tip)}" style="font-size:10px;font-weight:700;padding:1px 5px;border-radius:3px;background:#fef3c7;color:#92400e;border:1px solid #f59e0b;white-space:nowrap;">⚠ Check line${d.length === 1 ? "" : "s"} — doesn't match catalog</span>`;
+}
 
 // ---- Brand rules (migrations/0075): restricted brands and the supplier's logo approvals ----
 // An order's large quantities of a restricted brand (order.brandReview, from the loaders): a pill per style.
@@ -21850,6 +22008,7 @@ async function renderRunOrder(app, opts){
             <div>
             ${stepCount > 1 ? `<div style="font-size:12px;font-weight:700;color:#2c6b2f;text-transform:uppercase;letter-spacing:.04em;">Hooping ${stepNo} of ${stepCount} · ${escapeHtml(step.label)}</div>` : ""}
             <div style="font-weight:700;font-size:16px;">${escapeHtml(step.designName || (step.designId ? "" : "No design linked") || "No design linked")}</div>
+            ${step.staleDesign ? `<div style="font-size:13px;font-weight:600;color:#92400e;background:#fef3c7;border:1px solid #f59e0b;border-radius:5px;padding:4px 8px;margin-top:4px;">⚠ ${escapeHtml(step.staleDesign)}</div>` : ""}
             <div style="font-size:13px;color:#666;margin-top:2px;">${escapeHtml(job.orgName)} · ${escapeHtml(job.customerName)}${pieceLabel} · ${escapeHtml(job.itemName)}${job.itemSize ? " (" + escapeHtml(job.itemSize) + ")" : ""}</div>
             ${dueBadge_(job.dueDate) ? `<div>${dueBadge_(job.dueDate)}</div>` : ""}
             ${job.activeItemCount > 1 ? `<div style="font-size:12px;color:#888;margin-top:2px;">+${job.activeItemCount - 1} more item${job.activeItemCount - 1 === 1 ? "" : "s"} on this order</div>` : ""}
@@ -22555,6 +22714,13 @@ function showEditOrderModal(order, products, ctx){
           originalLineTotal: it.lineTotal,
           originalItemId: it.sheetRow,
           _origConfigJson: config ? JSON.stringify(config) : "",
+          // Detect stale design links: the graphic's current designId differs from what was stored
+          // in configJson when the order was placed.
+          _staleDesignWarning: (() => {
+            if (!configurable || !it.config || !Array.isArray(it.config.locations)) return "";
+            const stale = it.config.locations.filter(l => l.kind === "embroidery" && Number(l.graphicId) && Number(l.designId)).filter(l => { const g = gById_[Number(l.graphicId)]; return g && Number(g.designId || 0) !== Number(l.designId); });
+            return stale.length ? `${stale.map(l => `"${l.graphicName || l.label || l.location}"`).join(", ")} now link${stale.length === 1 ? "s" : ""} to a different design. Use Update from catalog to fix.` : "";
+          })(),
           _removed: false,
           _refundAmount: Number(it.lineTotal).toFixed(2),
           _refundReason: "",
@@ -22667,7 +22833,7 @@ function showEditOrderModal(order, products, ctx){
             ${row.configurable
               ? (row._removed
                   ? `<span style="font-size:12px;color:var(--ink-soft);">${escapeHtml([row.config.garmentColor, ...((row.config.locations || []).map(l => { if (l.custom) return "Customer design"; const g = gById_[l.graphicId]; return g ? g.name : ""; }).filter(Boolean))].filter(Boolean).join(" · ") || "—")}</span>`
-                  : cfgEditorHtml_(row, idx, curProd))
+                  : cfgEditorHtml_(row, idx, curProd) + (row._staleDesignWarning ? `<div style="font-size:12px;font-weight:600;color:#92400e;background:#fef3c7;border:1px solid #f59e0b;border-radius:4px;padding:4px 7px;margin-top:5px;">⚠ ${escapeHtml(row._staleDesignWarning)}</div>` : ""))
               : row._removed
                 ? (row.personalized ? `<span style="font-size:12px;color:var(--ink-soft);">"${escapeHtml(row.persName || "")}"</span>` : `<span style="font-size:12px;color:var(--ink-soft);">—</span>`)
                 : curProd && curProd.personalizationPrice != null
@@ -22752,6 +22918,7 @@ function showEditOrderModal(order, products, ctx){
           <span>New total: <strong id="editOrderNewTotal">$0.00</strong></span>
           <span id="editOrderDiff" style="font-weight:600;"></span>
         </div>
+        ${(order.catalogDrift || []).length ? `<div class="edit-order-drift" style="font-size:13px;color:#92400e;background:#fef3c7;border:1px solid #f59e0b;border-radius:5px;padding:8px 10px;margin-bottom:12px;">⚠ ${order.catalogDrift.map(x => `<strong>${escapeHtml(x.name || "A line")}</strong>: ${x.problems.map(escapeHtml).join("; ")}`).join("<br>⚠ ")}<br>Pick the graphic on the line, or use <strong>Update from catalog…</strong> below.</div>` : ""}
         <div class="admin-pass-actions" style="flex-wrap:wrap;gap:8px;">
           <button type="button" id="editOrderRefresh" title="Re-read this order's graphics and reorder QR from the catalog (prices don't change)" style="padding:8px 12px;font-size:13px;border-radius:5px;border:1px solid var(--border,#ccc);cursor:pointer;background:var(--surface,#fff);color:var(--ink,#111);margin-right:auto;">Update from catalog…</button>
           <button type="button" class="admin-pass-cancel" id="editOrderCancel">Cancel</button>
