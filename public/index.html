@@ -79,6 +79,11 @@
   }
   .brand{font-family:'Fraunces', serif; font-weight:600; font-size:20px; letter-spacing:-0.01em;}
   .brand small{display:block; font-family:'IBM Plex Mono', monospace; font-size:11px; font-weight:400; letter-spacing:.08em; text-transform:uppercase; opacity:.5; margin-top:2px;}
+  /* The desktop program's name and version, small, above the business's name (applyDesktopMark_). */
+  .desktop-mark{display:flex; align-items:center; gap:6px; margin-bottom:4px; font-family:'IBM Plex Sans', sans-serif; font-size:12px; font-weight:400; letter-spacing:0; color:#b9b4a8;}
+  .desktop-mark img{width:18px; height:18px; display:block;}
+  .desktop-mark b{font-weight:600;}
+  .desktop-mark span{color:var(--dim);}
   .backlink{font-family:'IBM Plex Mono', monospace; font-size:12px; letter-spacing:.04em; text-transform:uppercase; opacity:.7; text-decoration:none;}
   .backlink:hover{opacity:1;}
 
@@ -972,9 +977,23 @@ let siteFeatures = {};
 function applyFeatures_(f){ siteFeatures = (f && typeof f === "object") ? f : {}; }
 function featureOn_(key){ return siteFeatures[key] !== false; }
 // "desktop" when the admin runs inside the desktop program (desktop/, /api/catalog's edition): the
-// admin then leaves out what needs the internet. Only the admin answer carries it.
+// admin then leaves out what needs the internet. Only the admin answer carries it, with the
+// program's version.
 let siteEdition = "", siteDesktopSuppliers = false, siteDesktopEmail = false;
-function applyEdition_(e, suppliers, email){ siteEdition = e === "desktop" ? "desktop" : ""; siteDesktopSuppliers = siteEdition === "desktop" && suppliers === true; siteDesktopEmail = siteEdition === "desktop" && email === true; }
+function applyEdition_(e, suppliers, email, version){
+  siteEdition = e === "desktop" ? "desktop" : ""; siteDesktopSuppliers = siteEdition === "desktop" && suppliers === true; siteDesktopEmail = siteEdition === "desktop" && email === true;
+  applyDesktopMark_(version);
+}
+// In the desktop program, a small line above the business's name in the header: OpenDecoDesk's
+// mark, its name and the version ("2026.11.01.01", or "dev" run from the source). The business's
+// name stays the heading. Never on a cloud install, nor on a shop's pages.
+function applyDesktopMark_(version){
+  const brand = document.getElementById("brandName");
+  let mark = document.getElementById("desktopMark");
+  if(siteEdition !== "desktop" || !brand){ if(mark) mark.remove(); return; }
+  if(!mark){ mark = document.createElement("div"); mark.id = "desktopMark"; mark.className = "desktop-mark"; brand.parentNode.insertBefore(mark, brand); }
+  mark.innerHTML = `<img src="/images/icon.svg" alt="" width="18" height="18"><b>OpenDecoDesk</b><span>${escapeHtml(String(version || "dev"))}</span>`;
+}
 // The admin's tab and home-screen icon: OpenDecoDesk's logo (the website's, and the desktop
 // program's). Only the admin: a shop and its customers' pages are the business's, not ours.
 function applyAdminIcon_(){
@@ -1218,7 +1237,7 @@ async function resolveCurrentOrg(){
     applyBusiness_(data.business);
     applyCountry_(data.country);
     applyFeatures_(data.features);
-    if(data.status === "admin"){ applyEdition_(data.edition, data.desktopSuppliers, data.desktopEmail); applyAdminIcon_(); siteInfo_ = data.site || {}; return {admin:true}; }
+    if(data.status === "admin"){ applyEdition_(data.edition, data.desktopSuppliers, data.desktopEmail, data.version); applyAdminIcon_(); siteInfo_ = data.site || {}; return {admin:true}; }
     // Global settings → Features → Storefront is off: no shop is served here (see catalog.js).
     if(data.status === "closed") return {closed:true};
     if(data.status !== "ok") return null;

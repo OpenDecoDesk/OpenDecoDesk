@@ -1,7 +1,7 @@
 {
   "name": "opendecodesk-desktop",
   "productName": "OpenDecoDesk",
-  "version": "0.1.1",
+  "version": "0.0.0",
   "description": "OpenDecoDesk's back office as a program on one computer: orders, inventory, expenses and production, with no web shop and no email.",
   "private": true,
   "main": "main.js",
@@ -39,6 +39,7 @@
       "mailer.js",
       "r2-files-binding.mjs",
       "log.js",
+      "version.js",
       "icons/icon.png",
       "package.json",
       "!node_modules/workerd/bin/**",

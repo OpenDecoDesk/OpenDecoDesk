@@ -207,9 +207,11 @@ export async function onRequestGet(context){
     // edition: "desktop" tells the admin it runs inside the desktop program (hostConfig.js), so it
     // leaves out what needs the internet; desktopSuppliers / desktopEmail: the owner turned supplier
     // connections on there, or set up email (hostConfig.js desktopSuppliersOn / desktopEmailOn,
-    // repeated here to keep this file's one import).
+    // repeated here to keep this file's one import). version: the program's (DESKTOP_VERSION, set by
+    // desktop/server.js), shown above the business's name in the admin's header.
     return jsonResponse({status:"admin", business: catalogData.business || {}, country, features, site: { rootDomain: siteRoot },
-      ...(host.desktop ? {edition:"desktop", ...(String(env.DESKTOP_SUPPLIERS || "") === "on" ? {desktopSuppliers:true} : {}),
+      ...(host.desktop ? {edition:"desktop", version: String(env.DESKTOP_VERSION || "").trim().slice(0, 40) || "dev",
+        ...(String(env.DESKTOP_SUPPLIERS || "") === "on" ? {desktopSuppliers:true} : {}),
         ...(String(env.DESKTOP_EMAIL || "") === "on" ? {desktopEmail:true} : {})} : {})});
   } else {
     // Unknown hostname — refuse rather than treating it like a known host.

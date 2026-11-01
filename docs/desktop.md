@@ -74,6 +74,12 @@ one): `OpenDecoDesk-Windows.zip`,
 `OpenDecoDesk-macOS-AppleSilicon.zip` or `OpenDecoDesk-macOS-Intel.zip`. Every build is also
 under its **Desktop builds** workflow run → Artifacts, named with its version, as below.
 
+**The version** is the date of the release and that day's build number, `YYYY.MM.DD.NN`
+(`2026.11.01.01`, and `2026.11.01.02` for a second release that day; the date is UTC). The window's
+title bar shows it (*OpenDecoDesk 2026.11.01.01*), and so does a small line above your business's
+name at the top of the admin. A copy run from the source, or a build that wasn't a release, says
+`dev`. In the file names below it is in the form npm needs (see [A release](#a-release)).
+
 - **Windows**: `OpenDecoDesk-<version>-windows-x64.zip`. No installer: unzip it to a folder of its
   own (say `Documents\OpenDecoDesk`, not inside the zip) and run `OpenDecoDesk.exe` from there; pin
   it to Start or the taskbar if you like. Windows warns about an unknown publisher the first time.
@@ -330,20 +336,15 @@ npx electron-builder --win zip --x64          # dist/OpenDecoDesk-<version>-wind
 npx electron-builder --mac zip --arm64 --x64  # dist/OpenDecoDesk-<version>-mac-arm64.zip and -mac-x64.zip
 ```
 
-(`desktop/package.json` has the same two as its `dist:win` and `dist:mac` scripts.)
-
-**A release:** set the new `version` in `desktop/package.json` and write what's new in
-`desktop/RELEASE_NOTES.md` (the release's notes), then in GitHub Actions run **Desktop builds**
-with **Publish a release** ticked (or push a tag `desktop-v<version>`). It builds all three and
-publishes the release `desktop-v<version>` with them, named as the website links to them. A version
-is released once; a second run for the same one stops with an error.
+(`desktop/package.json` has the same two as its `dist:win` and `dist:mac` scripts.) Built this way
+the version is `0.0.0` in the file names, and the program says `dev`.
 
 The program's icon is the brand mark, as on the website and the Facebook group: a navy tile, the
 cream hoop and the orange D. It comes in two drawings: `public/images/icon-large.svg` (64 px and
 up, the stitched D) and `public/images/icon.svg` (48 px and under, a solid D; also the admin's
-browser-tab icon, the same as the website's favicon). `desktop/icons/` has it in each system's
-format (`icon.icns` for the Mac, `icon.ico` for Windows, `icon.png` for the window). After changing
-a drawing, run `npx electron icons/make-icons.js` in `desktop/` and commit what it writes. The
+browser-tab icon, the same as the website's favicon, and the mark beside the version in the
+desktop admin's header). `desktop/icons/` has it in each system's format (`icon.icns` for the Mac,
+`icon.ico` for Windows, `icon.png` for the window). After changing a drawing, run `npx electron icons/make-icons.js` in `desktop/` and commit what it writes. The
 same script makes the Stitch Analyzer and Machine Files icons from their own drawings
 (`--large=… --small=… --out=…`).
 
@@ -352,6 +353,24 @@ A build carries `src/`, `functions/`, `public/`, `migrations/`, `schema.sql`, `L
 Linux the packaged program is about 440 MB unpacked, nearly all of it Electron (about 280 MB) and
 Cloudflare's `workerd` runtime (about 120 MB). The Windows and Mac downloads are compressed, but
 their sizes haven't been measured yet.
+
+### A release
+
+Write what's new in `desktop/RELEASE_NOTES.md` (the release's notes) and merge it to `main`. Then,
+on GitHub: **Actions → Desktop builds → Run workflow**, on `main`, with **Publish a release**
+ticked. Nobody sets the version: the workflow's first job takes today's date (UTC) and the build
+after the day's highest `desktop-v<date>.NN` tag, starting at `01` (older tags such as
+`desktop-v0.1.1` don't count). It builds all three with that version and publishes the release
+`desktop-v<version>`, titled `OpenDecoDesk Desktop <version>`, with the three files named as the
+website links to them. Run without the tick, it only builds: the files are under the run's
+Artifacts, and the program in them says `dev`. A release can only be made from `main`.
+
+npm and electron-builder need a three-part version, so the build carries it as
+year.month.(day × 100 + build): `2026.11.01.01` is `2026.11.101` in `desktop/package.json` and the
+build files' names, and it is the Mac's bundle version and the Windows file version.
+`desktop/version.js` turns one into the other. The repository's own `desktop/package.json` keeps
+`0.0.0`, which the program shows as `dev`; the workflow stamps the real one into its copy before
+building.
 
 ## Licence
 

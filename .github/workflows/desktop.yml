@@ -2,25 +2,58 @@ name: Desktop builds
 
 # The desktop program (desktop/, docs/desktop.md) for Windows and Mac. Each build runs on the
 # system it is for, because Miniflare's workerd runtime is a native program installed per system.
-# Run it from the Actions tab (Run workflow): the files are under the run's Artifacts. To publish
-# them as a GitHub release, tick "Publish a release" there, or push a tag named desktop-v<version>
-# (the version in desktop/package.json). The builds are not signed (see docs/desktop.md).
+# Run it from the Actions tab (Run workflow): the files are under the run's Artifacts, and the
+# program shows its version as "dev". To publish them as a GitHub release, run it on main with
+# "Publish a release" ticked: the version is then the date and the day's build number,
+# YYYY.MM.DD.NN (desktop/version.js), and nobody sets it by hand. The builds are not signed (see
+# docs/desktop.md).
 on:
   workflow_dispatch:
     inputs:
       release:
-        description: "Publish a release: desktop-v<version in desktop/package.json>, with the notes in desktop/RELEASE_NOTES.md"
+        description: "Publish a release (from main only): desktop-v<today's date>.<build number>, with the notes in desktop/RELEASE_NOTES.md"
         type: boolean
         default: false
-  push:
-    tags: ["desktop-v*"]
 
 # The builds only read the repo; only the release job below may write (it publishes the release).
 permissions:
   contents: read
 
+# Two releases at once would both take the same build number: one waits for the other.
+concurrency:
+  group: desktop-builds-${{ inputs.release && 'release' || github.run_id }}
+
 jobs:
+  # The version: for a release, today's UTC date and the build after the day's highest
+  # desktop-v<date>.NN tag (01 for the first); otherwise "dev", and package.json's 0.0.0 is kept.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.v.outputs.release }}
+      version: ${{ steps.v.outputs.version }}
+      semver: ${{ steps.v.outputs.semver }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 (pinned to a commit, like the other workflows)
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      - id: v
+        env:
+          RELEASE: ${{ inputs.release && 'true' || 'false' }}
+        run: |
+          if [ "$RELEASE" != "true" ]; then
+            printf 'release=false\nversion=dev\nsemver=0.0.0\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Releases are made from main. Run the workflow on main, or leave \"Publish a release\" unticked."
+            exit 1
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          git ls-remote --tags --refs origin | node desktop/version.js next | tee -a "$GITHUB_OUTPUT"
+
   build:
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -47,6 +80,17 @@ jobs:
       # The tests run in the "Test suite" workflow (test.yml) on every push; the program runs that same code.
       - run: npm ci ${{ matrix.npm_flags }}   # exact versions from desktop/package-lock.json
         working-directory: desktop
+      # A release's version, in package.json's semver form (2026.11.01.01 → 2026.11.101, version.js),
+      # which is also the Mac's bundle version and the Windows file version.
+      - name: The version
+        if: needs.version.outputs.release == 'true'
+        working-directory: desktop
+        shell: bash
+        env:
+          SEMVER: ${{ needs.version.outputs.semver }}
+        run: |
+          npm version "$SEMVER" --no-git-tag-version
+          npm pkg set build.buildVersion="$SEMVER" build.mac.bundleShortVersion="$SEMVER"
       - run: npx electron-builder ${{ matrix.builder }} --publish never
         working-directory: desktop
         env:
@@ -57,41 +101,34 @@ jobs:
           path: desktop/dist/*.zip
           if-no-files-found: error
 
-  # The release: the three builds under the names the website's download buttons link to
-  # (https://github.com/OpenDecoDesk/opendecodesk/releases/latest/download/<name>), and the notes in
-  # desktop/RELEASE_NOTES.md. A version is released once: a second run for the same one fails, so
-  # bump "version" in desktop/package.json first.
+  # The release desktop-v<version>: the three builds under the names the website's download buttons
+  # link to (https://github.com/OpenDecoDesk/opendecodesk/releases/latest/download/<name>), and the
+  # notes in desktop/RELEASE_NOTES.md.
   release:
-    if: startsWith(github.ref, 'refs/tags/desktop-v') || (github.event_name == 'workflow_dispatch' && inputs.release)
-    needs: build
+    if: needs.version.outputs.release == 'true' && github.ref == 'refs/heads/main'
+    needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # to create the release (and its tag)
       actions: read     # to fetch this run's builds
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      SEMVER: ${{ needs.version.outputs.semver }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: The version
-        run: |
-          v=$(node -p "require('./desktop/package.json').version")
-          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "desktop-v$v" ]; then
-            echo "::error::The tag $GITHUB_REF_NAME doesn't match the version in desktop/package.json ($v). Tag desktop-v$v instead, or change the version."
-            exit 1
-          fi
-          echo "VERSION=$v" >> "$GITHUB_ENV"
-          echo "TAG=desktop-v$v" >> "$GITHUB_ENV"
       - name: The builds, named for the website
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --dir built
           mkdir release
-          cp "built/OpenDecoDesk-windows-x64/OpenDecoDesk-$VERSION-windows-x64.zip" release/OpenDecoDesk-Windows.zip
-          cp "built/OpenDecoDesk-mac-arm64/OpenDecoDesk-$VERSION-mac-arm64.zip" release/OpenDecoDesk-macOS-AppleSilicon.zip
-          cp "built/OpenDecoDesk-mac-x64/OpenDecoDesk-$VERSION-mac-x64.zip" release/OpenDecoDesk-macOS-Intel.zip
+          cp "built/OpenDecoDesk-windows-x64/OpenDecoDesk-$SEMVER-windows-x64.zip" release/OpenDecoDesk-Windows.zip
+          cp "built/OpenDecoDesk-mac-arm64/OpenDecoDesk-$SEMVER-mac-arm64.zip" release/OpenDecoDesk-macOS-AppleSilicon.zip
+          cp "built/OpenDecoDesk-mac-x64/OpenDecoDesk-$SEMVER-mac-x64.zip" release/OpenDecoDesk-macOS-Intel.zip
           ls -l release
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "OpenDecoDesk desktop $VERSION" --notes-file desktop/RELEASE_NOTES.md
+          gh release create "desktop-v$VERSION" release/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "OpenDecoDesk Desktop $VERSION" --notes-file desktop/RELEASE_NOTES.md
