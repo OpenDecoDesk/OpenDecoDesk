@@ -2229,6 +2229,88 @@ async function saveBoxPresets(presets){
 // never shown again) → test with one of your styles → link your blanks from it. Then Blanks → Refresh from
 // vendor, the price reminder's Refresh all, and New blank from a connected vendor fetch live data into the same
 // review window as a vendor file.
+// ---- Vendor web-service log (vendorLog.js, migrations/0078) — admin only ----
+// Every call made with a connection: when (your local time, to the second), the action, what it was about, status
+// and how long; a call opens to its full request (password blanked) and the vendor's response, each copyable and
+// downloadable. Newest first; "Older…" pages back; kept 30 days.
+const vendorXmlPretty_ = (xml) => {
+  const s = String(xml || "").trim();
+  if (!s || s.length > 2000000 || !/^</.test(s)) return s;
+  let depth = 0;
+  return s.replace(/>\s*</g, ">\n<").split("\n").map(line => {
+    if (/^<\//.test(line)) depth = Math.max(0, depth - 1);
+    const out = "  ".repeat(depth) + line;
+    if (/^<[^!?/][^>]*[^/]>$/.test(line) && !/^<([^\s>]+)[^>]*>.*<\/\1>$/.test(line)) depth++;
+    return out;
+  }).join("\n");
+};
+const vendorLogSize_ = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : (n || 0) + " B";
+const vendorLogTime_ = (iso) => { const d = new Date(iso); return isNaN(d) ? String(iso || "") : d.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" }); };
+async function showVendorLog_(conn){
+  const { ov } = inventoryModal_(`Web-service log — ${escapeHtml(conn.name)}`, `
+    <div style="font-size:12px;color:#666;margin-bottom:8px;">Every call this connection made to ${escapeHtml(conn.name)}'s web services, newest first, with the full request (the password is blanked) and ${escapeHtml(conn.name)}'s full response. Kept 30 days. Times are your computer's time.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:13px;margin-bottom:8px;">
+      <label style="display:inline-flex;gap:5px;align-items:center;"><input type="checkbox" id="vlErrors"> Errors only</label>
+      <select id="vlAction" aria-label="Action" style="font-size:13px;padding:4px 6px;"><option value="">Every action</option></select>
+      <button type="button" class="admin-btn" id="vlRefresh" style="padding:3px 10px;font-size:12px;">Refresh</button>
+    </div>
+    <div id="vlList" style="border:1px solid #ddd;border-radius:6px;max-height:34vh;overflow:auto;"><div class="admin-summary" style="padding:10px;">Loading&hellip;</div></div>
+    <div style="margin-top:6px;"><button type="button" class="admin-btn" id="vlMore" style="display:none;padding:3px 10px;font-size:12px;background:#fff;color:var(--ink,#222);border:1px solid #ccc;">Older…</button></div>
+    <div id="vlDetail" style="margin-top:10px;"></div>`, 1100);
+  const $ = (id) => ov.querySelector("#" + id);
+  let entries = [], more = false, open = null;
+  const th = "padding:6px 8px;text-align:left;font-size:11px;color:#555;background:#f0f0f0;white-space:nowrap;position:sticky;top:0;", td = "padding:5px 8px;border-top:1px solid #eee;font-size:12px;vertical-align:top;";
+  const drawList = () => {
+    $("vlList").innerHTML = entries.length ? `<table style="width:100%;border-collapse:collapse;"><thead><tr><th style="${th}">Time</th><th style="${th}">Action</th><th style="${th}">About</th><th style="${th}">Result</th>
+      <th style="${th}text-align:right;">Took</th><th style="${th}text-align:right;">Sent / received</th><th style="${th}">From</th></tr></thead><tbody>
+      ${entries.map(e => `<tr class="vl-row" data-id="${e.id}" style="cursor:pointer;${open === e.id ? "background:#eff6ff;" : ""}">
+        <td style="${td}white-space:nowrap;">${escapeHtml(vendorLogTime_(e.at))}</td><td style="${td}font-family:'IBM Plex Mono',monospace;">${escapeHtml(e.action)}</td>
+        <td style="${td}">${escapeHtml(e.subject || "")}</td>
+        <td style="${td}color:${e.ok ? "#166534" : "#b03a2e"};">${e.ok ? "✓ " + (e.httpStatus || "") : "✗ " + escapeHtml([e.httpStatus, e.error].filter(Boolean).join(" — "))}</td>
+        <td style="${td}text-align:right;white-space:nowrap;">${(e.durationMs / 1000).toFixed(2)} s</td><td style="${td}text-align:right;white-space:nowrap;">${vendorLogSize_(e.requestBytes)} / ${vendorLogSize_(e.responseBytes)}</td>
+        <td style="${td}color:#666;">${escapeHtml(e.context || "")}</td></tr>`).join("")}</tbody></table>`
+      : `<div class="admin-empty" style="padding:12px;">No calls logged${$("vlErrors").checked || $("vlAction").value ? " that match" : " yet"}.</div>`;
+    $("vlMore").style.display = more ? "" : "none";
+    $("vlList").querySelectorAll(".vl-row").forEach(tr => tr.onclick = () => showEntry(Number(tr.dataset.id)));
+  };
+  const load = async (append) => {
+    try {
+      const r = await hoopApi_({ action: "listVendorApiLog", connectionId: conn.id, errorsOnly: $("vlErrors").checked, logAction: $("vlAction").value, beforeId: append && entries.length ? entries[entries.length - 1].id : null });
+      entries = append ? entries.concat(r.entries) : r.entries; more = r.more;
+      const sel = $("vlAction"), was = sel.value;
+      sel.innerHTML = `<option value="">Every action</option>` + (r.actions || []).map(a => `<option value="${escapeHtml(a.action)}">${escapeHtml(a.action)} (${a.count})</option>`).join("");
+      sel.value = was;
+      drawList();
+    } catch (e) { $("vlList").innerHTML = `<div class="admin-empty" style="padding:12px;">${escapeHtml(e.message || "Couldn't load the log.")}</div>`; }
+  };
+  const pane = (title, text, name) => `<div style="flex:1;min-width:300px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px;"><strong style="font-size:13px;">${title}</strong>
+        <span style="display:flex;gap:6px;"><button type="button" class="admin-btn vl-copy" data-name="${name}" style="padding:2px 8px;font-size:11px;">Copy</button><button type="button" class="admin-btn vl-dl" data-name="${name}" style="padding:2px 8px;font-size:11px;">Download</button></span></div>
+      <pre style="margin:0;max-height:40vh;overflow:auto;background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:8px;font-size:11px;line-height:1.4;white-space:pre;">${escapeHtml(vendorXmlPretty_(text) || "(empty)")}</pre></div>`;
+  const showEntry = async (id) => {
+    open = id; drawList();
+    $("vlDetail").innerHTML = `<div class="admin-summary">Loading the call&hellip;</div>`;
+    try {
+      const { entry: e } = await hoopApi_({ action: "getVendorApiLogEntry", id });
+      if (open !== id) return;
+      $("vlDetail").innerHTML = `<div style="font-size:12px;color:#555;margin-bottom:6px;"><strong>${escapeHtml(vendorLogTime_(e.at))}</strong> · ${escapeHtml(e.action)} · <span style="font-family:'IBM Plex Mono',monospace;">${escapeHtml(e.url)}</span>${e.actor ? " · " + escapeHtml(e.actor) : ""}${e.missing ? ` · <span style="color:#b03a2e;">the stored payload is gone</span>` : ""}</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">${pane("Request", e.request, "request")}${pane("Response", e.response, "response")}</div>`;
+      const textOf = (n) => vendorXmlPretty_(n === "request" ? e.request : e.response);
+      $("vlDetail").querySelectorAll(".vl-copy").forEach(b => b.onclick = async () => { try { await navigator.clipboard.writeText(textOf(b.dataset.name)); showToast("Copied."); } catch (x) { showToast("Couldn't copy.", true); } });
+      $("vlDetail").querySelectorAll(".vl-dl").forEach(b => b.onclick = () => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(new Blob([textOf(b.dataset.name)], { type: "text/xml" }));
+        a.download = `${vendorFileName_(conn.name)}-${e.action}-${String(e.at).replace(/[^0-9]/g, "").slice(0, 14)}-${b.dataset.name}.xml`;
+        document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      });
+    } catch (x) { $("vlDetail").innerHTML = `<div class="admin-empty">${escapeHtml(x.message || "Couldn't load the call.")}</div>`; }
+  };
+  $("vlErrors").onchange = () => { open = null; $("vlDetail").innerHTML = ""; load(false); };
+  $("vlAction").onchange = () => { open = null; $("vlDetail").innerHTML = ""; load(false); };
+  $("vlRefresh").onclick = () => load(false);
+  $("vlMore").onclick = () => load(true);
+  await load(false);
+}
 async function renderVendorIntegrations(app){
   adminSetHash("vendors");
   document.title = adminTitle_("Vendor integrations");
@@ -2262,6 +2344,7 @@ async function mountVendorConnections_(root){
         <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
           <button type="button" class="admin-btn vcTest" data-id="${c.id}" style="padding:3px 10px;font-size:12px;">Test…</button>
           <button type="button" class="admin-btn vcLink" data-id="${c.id}" style="padding:3px 10px;font-size:12px;">Link blanks…</button>
+          <button type="button" class="admin-btn vcLog" data-id="${c.id}" style="padding:3px 10px;font-size:12px;" title="Every call to ${escapeHtml(c.name)}'s web services, with the full request and response">Logs…</button>
           <button type="button" class="admin-btn vcEdit" data-id="${c.id}" style="padding:3px 10px;font-size:12px;">Edit…</button>
           <button type="button" class="admin-btn vcDel admin-btn-danger" data-id="${c.id}" style="padding:3px 10px;font-size:12px;">Disconnect</button>
         </div></div>`).join("") : `<div style="color:#888;">No vendors connected yet.</div>`);
@@ -2269,6 +2352,7 @@ async function mountVendorConnections_(root){
     body.querySelectorAll(".vcTest").forEach(b => b.onclick = () => showVendorTest_(byId(b.dataset.id), draw));
     body.querySelectorAll(".vcLink").forEach(b => b.onclick = () => showVendorLinkBlanks_(byId(b.dataset.id), draw));
     body.querySelectorAll(".vcEdit").forEach(b => b.onclick = () => showVendorConnect_(byId(b.dataset.id), r.labels || {}, draw));
+    body.querySelectorAll(".vcLog").forEach(b => b.onclick = () => showVendorLog_(byId(b.dataset.id)));
     body.querySelectorAll(".vcDel").forEach(b => b.onclick = async () => {
       if (!await askConfirm_(`Disconnect ${byId(b.dataset.id).name}? Its saved login is deleted and its blanks are unlinked (the blanks themselves stay).`)) return;
       try { await hoopApi_({ action: "deleteVendorConnection", id: Number(b.dataset.id) }); showToast("Disconnected."); draw(); } catch (e) { showToast(e.message); }
@@ -16674,6 +16758,23 @@ function looksSame_(a, b){
   const r = da && db ? num / Math.sqrt(da * db) : (diff === 0 ? 1 : 0);
   return r >= 0.99 && diff / n <= 2;
 }
+// The same photo (identical file) on more than one color of a blank: a picture of the whole style that a vendor
+// attached to every color (SanMar's catalog "Primary" photo, group shots) — it isn't any color's own. Each copy gets
+// `cross` = the colors it's on, and is offered for removal. Only identical files count: two colors can look alike.
+function markCrossColorDuplicates_(work){
+  const byBlank = new Map();
+  for (const w of work) (byBlank.get(w.blank.id) || byBlank.set(w.blank.id, []).get(w.blank.id)).push(w);
+  for (const list of byBlank.values()) {
+    if (list.length < 2) continue;
+    const colorsOf = new Map();
+    for (const w of list) for (const p of w.photos) if (p.sha && p.of < 0) (colorsOf.get(p.sha) || colorsOf.set(p.sha, new Set()).get(p.sha)).add(w.color);
+    for (const w of list) for (const p of w.photos) {
+      const on = p.sha && p.of < 0 ? colorsOf.get(p.sha) : null;
+      if (on && on.size > 1) p.cross = [...on];
+    }
+  }
+  return work;
+}
 // Groups one color's photos: each photo → {i, url, of (index of the photo it copies, or -1), why}.
 function duplicatesInColor_(photos){
   return photos.map((p, i) => {
@@ -16694,7 +16795,8 @@ async function findDuplicateBlankPhotos_(onDone){
   const work = [];
   for (const b of blanks) for (const c of b.colors || []) {
     const imgs = (c.images || []).map((im, i) => ({ i, url: String(typeof im === "object" && im ? im.url : im || ""), loc: typeof im === "object" && im && im.locationId != null ? im.locationId : null })).filter(x => x.url);
-    if (imgs.length > 1) work.push({ blank: b, color: c.color || "", photos: imgs });
+    // One photo is enough here: the same photo on two colors of a blank is a duplicate too (below).
+    if (imgs.length > 1 || (imgs.length && (b.colors || []).length > 1)) work.push({ blank: b, color: c.color || "", photos: imgs });
   }
   const total = work.reduce((n, w) => n + w.photos.length, 0);
   const { ov, close } = inventoryModal_("Find duplicate photos", `<div id="dpBody" style="font-size:13px;">
@@ -16708,7 +16810,10 @@ async function findDuplicateBlankPhotos_(onDone){
     const step = ov.querySelector("#dpStep"), fill = ov.querySelector("#dpFill");
     if (step) step.textContent = `Compared ${done} of ${total} photos…`; if (fill) fill.style.width = (total ? done / total * 100 : 100) + "%"; } };
   await Promise.all([worker(), worker(), worker(), worker()]);
-  const found = work.map(w => Object.assign(w, { photos: duplicatesInColor_(w.photos) })).filter(w => w.photos.some(p => p.of >= 0));
+  work.forEach(w => Object.assign(w, { photos: duplicatesInColor_(w.photos) }));
+  markCrossColorDuplicates_(work);
+  const isDup = (p) => p.of >= 0 || !!p.cross;
+  const found = work.filter(w => w.photos.some(isDup));
   if (!found.length) {
     body.innerHTML = `<div style="padding:8px 0;">No duplicate photos — every photo on every blank color is different.</div>
       <div style="display:flex;justify-content:flex-end;"><button type="button" class="admin-btn" id="dpClose">Done</button></div>`;
@@ -16717,15 +16822,15 @@ async function findDuplicateBlankPhotos_(onDone){
   }
   const byBlank = new Map();
   found.forEach(w => { (byBlank.get(w.blank.id) || byBlank.set(w.blank.id, { blank: w.blank, colors: [] }).get(w.blank.id)).colors.push(w); });
-  const dupCount = found.reduce((n, w) => n + w.photos.filter(p => p.of >= 0).length, 0);
+  const dupCount = found.reduce((n, w) => n + w.photos.filter(isDup).length, 0);
   body.innerHTML = `<div style="font-size:12px;color:#555;margin-bottom:10px;">${dupCount} extra cop${dupCount === 1 ? "y" : "ies"} on ${byBlank.size} blank${byBlank.size === 1 ? "" : "s"}. The first of each set is kept; the ticked photos are taken off the blank. Untick any you want to keep.</div>
     <div id="dpList" style="max-height:60vh;overflow:auto;">${[...byBlank.values()].map(({ blank, colors }) => `<div class="dp-blank" style="border:1px solid #e5e7eb;border-radius:6px;padding:8px 10px;margin-bottom:10px;">
       <div style="font-weight:700;margin-bottom:4px;">${escapeHtml(blank.name || "")} <span style="font-weight:400;color:#666;font-size:12px;">${escapeHtml([blank.vendor, blank.sku].filter(Boolean).join(" · "))}</span></div>
       ${colors.map(w => `<div style="margin:6px 0;"><div style="font-size:12px;font-weight:600;margin-bottom:3px;">${escapeHtml(w.color || "—")}</div>
         <div style="display:flex;flex-wrap:wrap;gap:8px;">${w.photos.map(p => `<label style="display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10px;color:#555;width:76px;text-align:center;">
-          <img src="${escapeHtml(thumbUrl(p.url))}" alt="" style="width:64px;height:64px;object-fit:cover;border:2px solid ${p.of >= 0 ? "#fca5a5" : "#bbf7d0"};border-radius:4px;">
-          <span><input type="checkbox" class="dpPick" data-blank="${blank.id}" data-color="${escapeHtml(w.color)}" data-index="${p.i}" data-url="${escapeHtml(p.url)}"${p.of >= 0 ? " checked" : ""}> ${p.of >= 0 ? "remove" : "keep"}</span>
-          <span>${p.of >= 0 ? `#${p.of + 1}: ${escapeHtml(p.why)}` : `#${p.i + 1}`}</span></label>`).join("")}</div></div>`).join("")}</div>`).join("")}</div>
+          <img src="${escapeHtml(thumbUrl(p.url))}" alt="" style="width:64px;height:64px;object-fit:cover;border:2px solid ${isDup(p) ? "#fca5a5" : "#bbf7d0"};border-radius:4px;">
+          <span><input type="checkbox" class="dpPick" data-blank="${blank.id}" data-color="${escapeHtml(w.color)}" data-index="${p.i}" data-url="${escapeHtml(p.url)}"${isDup(p) ? " checked" : ""}> ${isDup(p) ? "remove" : "keep"}</span>
+          <span${p.cross ? ` class="dp-cross" title="${escapeHtml("The same photo is on " + p.cross.join(", ") + " — a picture of the whole style, not this color's")}"` : ""}>${p.of >= 0 ? `#${p.of + 1}: ${escapeHtml(p.why)}` : p.cross ? `on ${p.cross.length} colors` : `#${p.i + 1}`}</span></label>`).join("")}</div></div>`).join("")}</div>`).join("")}</div>
     <div id="dpErr" style="color:#b03a2e;font-size:13px;min-height:18px;margin-top:6px;"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">
       <button type="button" id="dpCancel" style="padding:6px 14px;border:1px solid #ccc;border-radius:5px;background:#fff;cursor:pointer;">Cancel</button>

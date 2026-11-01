@@ -19,6 +19,7 @@ import { copyVendorImage } from "../_lib/vendorImages.js";
 import { countStitches } from "../_lib/stitchCount.js";
 import { findOrphanImages, deleteOrphanImages } from "../_lib/orphanImages.js";
 import { searchPsCompanies, getPsEndpoints, fetchVendorProduct, PS_OVERRIDES, psSendPO } from "../_lib/promostandards.js";
+import { vendorLogFetch, listVendorApiLog, getVendorApiLogEntry } from "../_lib/vendorLog.js";
 import { supplierConnection, supplierShipMethods, supplierShipTo, planSupplierOrder, checkSupplierShipments, supplierOrderApprovalCheck } from "../_lib/supplierOrders.js";
 import { encryptVendorCredentials, decryptVendorCredentials, vendorCredentialsReady } from "../_lib/vendorCredentials.js";
 
@@ -161,7 +162,7 @@ const CATALOG_ADMIN_ACTIONS = new Set([
   "getBlanks", "createBlank", "updateBlank", "deleteBlank", "mergeBlanks", "markBlankPricesChecked", "getBlankVendorPriceHistory", "recomputeBlankAverageCosts", "confirmProductPrices",
   "previewVendorBlanks", "applyVendorBlanks", "copyVendorImage", "getPricingSettings", "updatePricingSettings", "analyzePricing", "removeBlankImages", "findOrphanImages", "deleteOrphanImages", "suggestColorGroups",
   "vendorDirectorySearch", "vendorDirectoryEndpoints", "listVendorConnections", "saveVendorConnection", "deleteVendorConnection", "testVendorConnection", "linkVendorConnectionBlanks", "fetchVendorProducts",
-  "previewSupplierOrder", "placeSupplierOrder", "listSupplierOrders", "checkSupplierOrderShipments", "cancelSupplierOrder",
+  "previewSupplierOrder", "placeSupplierOrder", "listSupplierOrders", "checkSupplierOrderShipments", "cancelSupplierOrder", "listVendorApiLog", "getVendorApiLogEntry",
   "getBrandRules", "updateBrandRules", "listBrandApprovals", "addBrandApproval", "revokeBrandApproval",
   "getPublishState", "getPreviewLink", "setOrgReady",
   "getShopWizard", "saveShopWizard", "listShopWizards", "deleteShopWizard", "buildProductFromBlank",
@@ -233,7 +234,7 @@ const ADMIN_ONLY_ACTIONS = [
   "updateGlobalSettings", "updateFeatures", "updateBusinessProfile", "updateLocaleSettings", "updateSalesTaxSettings", "updateShipFromAddress",
   "updateMachineSettings", "backfillStripeFees", "getAuditLog", "sendTestEmail", "updatePricingSettings", "findOrphanImages", "deleteOrphanImages", "vendorDirectorySearch", "vendorDirectoryEndpoints", "saveVendorConnection", "deleteVendorConnection", "testVendorConnection", "linkVendorConnectionBlanks",
   // Ordering from a supplier spends the shop's money (the card / terms the supplier has on file): admin only.
-  "previewSupplierOrder", "placeSupplierOrder", "listSupplierOrders", "checkSupplierOrderShipments", "cancelSupplierOrder",
+  "previewSupplierOrder", "placeSupplierOrder", "listSupplierOrders", "checkSupplierOrderShipments", "cancelSupplierOrder", "listVendorApiLog", "getVendorApiLogEntry",
   "updateBrandRules",
   // The domain step (Global settings → Your domain): a Cloudflare key that can change the account's Workers and DNS.
   "getCloudflareSetup", "connectCloudflare",
@@ -3520,6 +3521,16 @@ export async function onRequestPost(context) {
       audit({ orgId: null, orderId: null, action: "vendor.blanks_linked", detail: { id: row.id, count: n } });
       return jsonResponse({ status: "ok", linked: n, connections: await listVendorConnections(env.DB) });
     }
+    // A connection's log of vendor calls (vendorLog.js): newest first, then one call's full request + response.
+    if (body.action === "listVendorApiLog") {
+      if (!body.connectionId) return jsonResponse({ status: "error", message: "Which connection?" }, 400);
+      return jsonResponse({ status: "ok", ...(await listVendorApiLog(env.DB, { connectionId: body.connectionId, beforeId: body.beforeId, errorsOnly: !!body.errorsOnly, action: String(body.logAction || ""), limit: body.limit })) });
+    }
+    if (body.action === "getVendorApiLogEntry") {
+      const entry = await getVendorApiLogEntry(env, body.id);
+      if (!entry) return jsonResponse({ status: "error", message: "That log entry is gone (logs are kept 30 days)." }, 404);
+      return jsonResponse({ status: "ok", entry });
+    }
     // Test connection / fetch products: the stored login is decrypted here, used for the calls, and dropped.
     if (body.action === "testVendorConnection" || body.action === "fetchVendorProducts") {
       const rl = await rateLimited(env, "vendor_api", request, 30);
@@ -3530,7 +3541,8 @@ export async function onRequestPost(context) {
       try { credentials = await decryptVendorCredentials(env, row.credentialsEnc); }
       catch (e) { return jsonResponse({ status: "error", message: e.message }, 400); }
       if (!credentials) return jsonResponse({ status: "error", message: "This connection has no login yet — add it under Vendor integrations." }, 400);
-      const conn = { id: row.id, name: row.name, companyCode: row.companyCode, endpoints: JSON.parse(row.endpointsJson || "{}"), overrides: JSON.parse(row.overridesJson || "{}"), credentials };
+      const conn = { id: row.id, name: row.name, companyCode: row.companyCode, endpoints: JSON.parse(row.endpointsJson || "{}"), overrides: JSON.parse(row.overridesJson || "{}"), credentials,
+        fetch: vendorLogFetch(env, Number(row.id), { context: body.action, actor: adminActor(request), defer: (p) => context.waitUntil(p) }) };
       if (body.action === "testVendorConnection") {
         const style = String(body.style || "").trim().slice(0, 60);
         if (!style) return jsonResponse({ status: "error", message: "Which style should the test look up?" }, 400);
@@ -3731,7 +3743,7 @@ export async function onRequestPost(context) {
       if (rl.blocked) return rateLimitResponse(rl.retryAfter);
       const retry = body.action === "placeSupplierOrder" && body.retryId ? await getSupplierOrder(env.DB, body.retryId) : null;
       if (body.retryId && body.action === "placeSupplierOrder" && !retry) return jsonResponse({ status: "error", message: "That supplier order wasn't found" }, 404);
-      const c = await supplierConnection(env, retry ? retry.connectionId : (body.connectionId || body.id));
+      const c = await supplierConnection(env, retry ? retry.connectionId : (body.connectionId || body.id), { context: body.action, actor: adminActor(request), defer: (p) => context.waitUntil(p) });
       if (c.error) return jsonResponse({ status: "error", message: c.error }, c.code);
       const conn = c.conn;
       if (!conn.endpoints.po) return jsonResponse({ status: "error", message: `${conn.name} has no Purchase Order service set up — add it under Tools → Vendor integrations (the supplier has to turn ordering on for your account first).` }, 400);
@@ -3828,7 +3840,7 @@ export async function onRequestPost(context) {
       if (rl.blocked) return rateLimitResponse(rl.retryAfter);
       let one = null;
       if (body.id) { one = await getSupplierOrder(env.DB, body.id); if (!one) return jsonResponse({ status: "error", message: "That supplier order wasn't found" }, 404); }
-      const r = await checkSupplierShipments(env, one ? { order: one } : { limit: 10 });
+      const r = await checkSupplierShipments(env, one ? { order: one, context: body.action, actor: adminActor(request) } : { limit: 10, context: body.action, actor: adminActor(request) });
       return jsonResponse({ status: "ok", ...r, orders: await listSupplierOrders(env.DB, { limit: 30 }) });
     }
 

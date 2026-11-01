@@ -256,7 +256,10 @@ that offer PromoStandards web services, with a login the vendor gives you, store
 the `VENDOR_CREDENTIALS_KEY` secret — see [accounts-and-keys.md](accounts-and-keys.md)). Then Blanks →
 **Connected vendor → Refresh prices and colors…** and **Look up a style → new blank…** bring live data
 into the same review. (The Connected vendor menu appears on Blanks only once a vendor is connected.)
-A blank made or updated from a connection stays linked to it.
+A blank made or updated from a connection stays linked to it. Each connection's **Logs…** (admins) lists
+every call to the vendor's web services — when, what, the answer or the vendor's error, how long — with
+the full request (the password blanked) and response; logs are kept 30 days. A picture a vendor repeats on
+every color (a catalog shot) isn't taken as any one color's, and SanMar's parts each bring their own color.
 
 **Ordering blanks from a supplier** (admins): on Blanks to Order, a supplier whose connection offers
 PromoStandards Purchase Order gets **Order from <supplier>…**. The window checks each line's part and

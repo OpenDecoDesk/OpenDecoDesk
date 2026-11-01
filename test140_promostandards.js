@@ -12,7 +12,7 @@ const { createD1 } = require("./testlib/d1-shim.js");
 const read = (p) => fs.readFileSync(__dirname + "/" + p, "utf8");
 const strip = (src) => src.replace(/import\s*\{[\s\S]*?\}\s*from\s*["'][^"']+["'];?\n?/g, "").replace(/export (async function|function|const)/g, "$1");
 const dbSrc = strip(read("functions/_lib/db.js"));
-const psSrc = strip(read("functions/_lib/promostandards.js")), credSrc = strip(read("functions/_lib/vendorCredentials.js"));
+const psSrc = strip(read("functions/_lib/promostandards.js")), credSrc = strip(read("functions/_lib/vendorCredentials.js")) + "\n" + strip(read("functions/_lib/vendorLog.js"));
 const lib = new Function(dbSrc + `\nreturn { createBlank, getAllBlanks };`)();
 const ps = new Function(psSrc + `\nreturn { readXml_, xmlAll_, psXmlText_, soapCall_, searchPsCompanies, getPsEndpoints, fetchVendorProduct, psProductId_, psGetParts, psPartFor_, psIsImageUrl_ };`)();
 const vc = new Function(credSrc + `\nreturn { encryptVendorCredentials, decryptVendorCredentials, vendorCredentialsReady };`)();
@@ -125,6 +125,28 @@ const conn = { name: "SanMar", companyCode: "SanMar", endpoints: { product: "htt
   ok("…another vendor shows colorName, as before", other.colors.map(c => c.color).join() === "DeepBlack,TrueNavy");
   ok("pictures only: the 3D model (.glb) and the video (.mp4) are left out, a .JPG with a query string kept", sm.colors[0].images.map(i => i.fileName).join() === "st100_black_front.jpg" &&
     sm.colors[1].images.map(i => i.fileName).join() === "st100_navy_front.JPG" && ps.psIsImageUrl_("https://x/y/noext") && !ps.psIsImageUrl_("https://x/a.usdz"));
+  // SanMar repeats style-level pictures on every part, labelled with that part's color: the catalog's "Primary" photo
+  // (one color's) and group shots. Kept, they put the same wrong front picture on every color.
+  const smM = (pid, url, id, name, color) => `<MediaContent><productId>ST100</productId><partId>${pid}</partId><url>${url}</url><mediaType>Image</mediaType><ClassTypeArray><ClassType><classTypeId>${id}</classTypeId><classTypeName>${name}</classTypeName></ClassType></ClassTypeArray><color>${color}</color><singlePart>true</singlePart></MediaContent>`;
+  const SHARED = env(`<GetMediaContentResponse ${M}><MediaContentArray>` +
+    smM("1", "https://img.example/st100_black_back.jpg", 1008, "Rear", "Deep Black") + smM("1", "https://img.example/st100_black_front.jpg", 1007, "Front", "Deep Black") +
+    smM("1", "https://img.example/catalog/ST100.jpg", 1006, "Primary", "Deep Black") + smM("1", "https://img.example/st100_black_sw.jpg", 1004, "Swatch", "Deep Black") +
+    smM("1", "https://img.example/st100_group_model.jpg", 500, "Custom", "Deep Black") + smM("2", "https://img.example/st100_black_hi.jpg", 2001, "High", "Deep Black") +
+    smM("3", "https://img.example/st100_navy_front.jpg", 1007, "Front", "True Navy") + smM("3", "https://img.example/catalog/ST100.jpg", 1006, "Primary", "True Navy") +
+    smM("3", "https://img.example/st100_group_model.jpg", 500, "Custom", "True Navy") + `</MediaContentArray></GetMediaContentResponse>`);
+  const sh = await ps.fetchVendorProduct(smConn, "ST100", {}, async (u, init = {}) => /GetMediaContentRequest/.test(String(init.body)) ? new Response(SHARED, { status: 200 }) : smFetch(u, init));
+  const shBlack = sh.colors.find(c => c.color === "Deep Black").images, shNavy = sh.colors.find(c => c.color === "True Navy").images;
+  ok("a picture the vendor puts on more than one color (SanMar's catalog Primary, group shots) isn't any color's picture", !JSON.stringify(sh.colors).includes("catalog/ST100.jpg") && !JSON.stringify(sh.colors).includes("group_model") &&
+    shNavy.map(i => i.fileName).join() === "st100_navy_front.jpg");
+  ok("…each color's own pictures stay, front first and the swatch last; SanMar's 2001 \"High\" isn't a swatch", shBlack[0].fileName === "st100_black_front.jpg" && shBlack[shBlack.length - 1].type === "swatch" &&
+    shBlack.find(i => i.fileName === "st100_black_hi.jpg").type !== "swatch" && shBlack.length === 4);
+  const one = await ps.fetchVendorProduct(smConn, "ST100", {}, async (u, init = {}) => {
+    const b = String(init.body || "");
+    if (/GetProductRequest/.test(b)) return new Response(env(`<GetProductResponse ${P}><Product><ns2:productId>ST100</ns2:productId><ns2:ProductPartArray>${pc("1", "Deep Black", "DeepBlack", "S")}</ns2:ProductPartArray></Product></GetProductResponse>`), { status: 200 });
+    if (/GetMediaContentRequest/.test(b)) return new Response(SHARED, { status: 200 });
+    return smFetch(u, init);
+  });
+  ok("…a style that comes in one color keeps every picture", JSON.stringify(one.colors).includes("catalog/ST100.jpg"));
   const parts = await ps.psGetParts(smConn, "ST100", {}, smFetch);
   ok("ordering: each color + size finds its own part — by the display name or SanMar's backend name", ps.psPartFor_(parts, "True Navy", "M") === "4" && ps.psPartFor_(parts, "Deep Black", "S") === "1" &&
     ps.psPartFor_(parts, "TrueNavy", "S") === "3" && ps.psPartFor_(parts, "Signal Red", "S") === "");

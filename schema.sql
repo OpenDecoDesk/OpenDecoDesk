@@ -1371,3 +1371,25 @@ CREATE TABLE IF NOT EXISTS catalog_snapshots (
   publishedAt  TEXT    NOT NULL,
   publishedBy  TEXT    NOT NULL DEFAULT ''
 );
+
+-- Every call to a connected vendor's web services; full payloads in R2 vendor-logs/ (migrations/0078).
+CREATE TABLE IF NOT EXISTS vendor_api_log (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  connectionId  INTEGER NOT NULL,
+  at            TEXT    NOT NULL,
+  context       TEXT    NOT NULL DEFAULT '',
+  action        TEXT    NOT NULL DEFAULT '',
+  url           TEXT    NOT NULL DEFAULT '',
+  subject       TEXT    NOT NULL DEFAULT '',
+  httpStatus    INTEGER,
+  ok            INTEGER NOT NULL DEFAULT 1 CHECK (ok IN (0, 1)),
+  error         TEXT    NOT NULL DEFAULT '',
+  durationMs    INTEGER NOT NULL DEFAULT 0,
+  requestBytes  INTEGER NOT NULL DEFAULT 0,
+  responseBytes INTEGER NOT NULL DEFAULT 0,
+  payloadKey    TEXT    NOT NULL DEFAULT '',
+  payload       TEXT    NOT NULL DEFAULT '',
+  actor         TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_vendor_api_log_conn ON vendor_api_log(connectionId, id);
+CREATE INDEX IF NOT EXISTS idx_vendor_api_log_at ON vendor_api_log(at);

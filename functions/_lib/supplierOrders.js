@@ -9,13 +9,15 @@ import { getVendorConnectionRow, listVendorConnections, getBlanksForSupplierOrde
   brandContext_, brandRuleFor_, brandApprovalCovers_, itemColorOf_ } from "./db.js";
 import { psGetParts, psPartFor_, psNorm_, psSizeKey_, psGetInventory, psGetShipments, PS_OVERRIDES } from "./promostandards.js";
 import { decryptVendorCredentials } from "./vendorCredentials.js";
+import { vendorLogFetch } from "./vendorLog.js";
 
 export const SUPPLIER_ORDER_MAX_LINES = 100;
 export const SUPPLIER_ORDER_MAX_QTY = 5000;
 const SUPPLIER_ORDER_MAX_STYLES = 20;
 
 // A connection ready to call: {conn} or {error, code}. The login is decrypted here and used only for the calls.
-export async function supplierConnection(env, id) {
+// `log` = {context, actor, defer}: every call with this connection is logged in full (vendorLog.js).
+export async function supplierConnection(env, id, log = {}) {
   const row = await getVendorConnectionRow(env.DB, id);
   if (!row) return { error: "Connection not found", code: 404 };
   let credentials;
@@ -25,7 +27,8 @@ export async function supplierConnection(env, id) {
   let endpoints = {}, overrides = {};
   try { endpoints = JSON.parse(row.endpointsJson || "{}"); } catch (e) {}
   try { overrides = JSON.parse(row.overridesJson || "{}"); } catch (e) {}
-  return { conn: { id: Number(row.id), name: row.name, companyCode: row.companyCode, endpoints, overrides, credentials, environment: endpoints.environment === "test" ? "test" : "production" } };
+  return { conn: { id: Number(row.id), name: row.name, companyCode: row.companyCode, endpoints, overrides, credentials, environment: endpoints.environment === "test" ? "test" : "production",
+    fetch: vendorLogFetch(env, Number(row.id), log) } };
 }
 
 // The ship methods offered for a supplier (its override list, else UPS Ground only).
@@ -137,7 +140,7 @@ export async function checkSupplierShipments(env, opts = {}) {
   const out = { checked: 0, added: 0, errors: [] };
   const conns = new Map();
   for (const o of orders) {
-    if (!conns.has(o.connectionId)) conns.set(o.connectionId, await supplierConnection(env, o.connectionId));
+    if (!conns.has(o.connectionId)) conns.set(o.connectionId, await supplierConnection(env, o.connectionId, { context: opts.context || "shipment-check", actor: opts.actor || "" }));
     const c = conns.get(o.connectionId);
     if (c.error) { out.errors.push({ poNumber: o.poNumber, message: c.error }); continue; }
     if (!c.conn.endpoints.osn) continue;
