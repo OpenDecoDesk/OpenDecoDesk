@@ -386,7 +386,7 @@ const tick = (ms) => new Promise(res => setTimeout(res, ms || 40));
       "getNeedleSettings", "saveNeedleSize", "deleteNeedleSize", "saveNeedleType", "deleteNeedleType",        // Threads → Needle settings
       "listHoops", "saveHoop", "deleteHoop",                                                                  // Hoops
       "listDesigns", "getDesign", "saveDesign", "deleteDesign", "saveDesignVersion", "updateDesignVersionColors", // Designs
-      "setProductDesign", "listProductDesigns", "setProductDesigns",                                          // a product's designs
+      "setProductDesign", "listProductDesigns", "setProductDesigns", "previewProductHoopings",                // a product's designs
       "getOrderItemDesigns", "saveOrderItemDesign",                                                           // order-specific designs
       "listMachines", "getMachine", "saveMachine", "deleteMachine", "setMachineHoop", "setMachineNeedle", "recordMachineDiscovery", // Machines
       "getMachineSettings", "updateMachineSettings",                                                          // Machine Files

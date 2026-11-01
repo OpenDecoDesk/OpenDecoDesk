@@ -1301,6 +1301,15 @@ export async function getCatalogIssues(db, orgId = null) {
   const pdBy = {}; for (const r of pds) (pdBy[r.orgId + "|" + r.productId] = pdBy[r.orgId + "|" + r.productId] || []).push(Number(r.designId));
   const linked = {}; for (const r of links) linked[r.orgId + "|" + r.productId + "|" + r.productSize] = true;
   const openBy = {}; for (const r of open) openBy[r.orgId + "|" + r.productId] = Number(r.n);
+  // Open order lines whose copy of their options no longer matches the catalog (see orderLineDrift_).
+  const staleBy = {};
+  for (const r of await q(`SELECT oi.id, oi.orgId, oi.productId, oi.configJson FROM order_items oi JOIN orders o ON o.orderId = oi.orderId
+      JOIN products p ON p.orgId = oi.orgId AND p.productId = oi.productId AND p.configurable = 1
+      WHERE oi.cancelDate IS NULL AND o.manufacturedAt IS NULL AND o.completedAt IS NULL AND o.voidedAt IS NULL AND o.isTest = 0
+        AND COALESCE(oi.manufacturedQty, 0) < oi.qty` + (orgId ? " AND oi.orgId = ?" : ""), ...ob)) {
+    const prod = products.find(x => x.orgId === r.orgId && x.productId === r.productId);
+    if (prod && orderLineDrift_(prod, tryParse_(r.configJson, null), graphicById).length) staleBy[r.orgId + "|" + r.productId] = (staleBy[r.orgId + "|" + r.productId] || 0) + 1;
+  }
   const designName = (id) => (designById[id] && designById[id].name) || ("#" + id);
   for (const p of products) {
     const key = p.orgId + "|" + p.productId;
@@ -1358,6 +1367,11 @@ export async function getCatalogIssues(db, orgId = null) {
       const g = graphicById[Number(f.graphicId)];
       if (!graphicUsableBy_(g, p.orgId)) list.push({ code: "mockupGraphicMissing", level: "warn", text: "An embroidered graphic for its mockups is gone — pick another on the product" });
     }
+    // Settings that contradict each other or that this product's setup never uses (2026-10). Each names the
+    // product form section to fix (`section`), which the form outlines.
+    for (const x of settingConflicts_(p, { used, options, offersOptions, graphicById, designName, linkedSizes: sizes.filter(sz => linked[key + "|" + sz]), production: features.production })) list.push(x);
+    if (staleBy[key]) list.push({ code: "openLinesStale", level: "warn", section: "orders",
+      text: `${staleBy[key]} open order line${staleBy[key] === 1 ? " was" : "s were"} placed with settings that no longer match the catalog — Orders → Edit items → Update from catalog on ${staleBy[key] === 1 ? "it" : "each"}` });
     const typeOff = linkedTypes.filter(t => t.orgId === p.orgId && t.productId === p.productId && t.productType && p.type && t.productType !== p.type);
     if (typeOff.length) list.push({ code: "blankTypeMismatch", level: "warn", text: `Linked to ${typeOff.map(t => `“${t.blankName}” (filed as ${t.productType})`).join(", ")}, but this product is a ${p.type} — change one of them so they match` });
     // A restricted brand (Tools → Brand rules): what the supplier requires, and whether the logo is approved.
@@ -1395,6 +1409,97 @@ export async function getCatalogIssues(db, orgId = null) {
     orgOf(o.orgId).shop = shop;
   }
   for (const o of Object.values(out.orgs)) { o.productCount = Object.keys(o.products).length; o.designCount = Object.keys(o.designs).length; }
+  return out;
+}
+
+// What on a product's settings contradicts itself, or is set but never used by its setup (2026-10).
+// p = the products row; ctx = {used (design ids), options (pick list), offersOptions, graphicById, designName, linkedSizes,
+// production (the Production feature: off, nothing is stitched, so the stitching warnings are left out)}.
+// Each entry is a catalog-check warning with `section`: the product form part to fix.
+export function settingConflicts_(p, ctx) {
+  const out = [];
+  const locs = (tryParse_(p.locationsJson, []) || []).filter(l => l && Array.isArray(l.graphicIds) && l.graphicIds.length);
+  const mock = tryParse_(p.mockupGraphicsJson, []) || [];
+  const gName = (id) => { const g = ctx.graphicById[Number(id)]; return g ? `“${g.name}”` : "a graphic"; };
+  const configurable = !!Number(p.configurable);
+  const options = ctx.offersOptions;
+  const stitching = ctx.production !== false;
+  // A configurable product's own designs are stitched on every piece, ON TOP of the customer's pick.
+  if (stitching && options && ctx.used.length)
+    out.push({ code: "designsPlusOptions", level: "warn", section: "designs",
+      text: `Every piece gets ${ctx.used.map(id => `“${ctx.designName(id)}”`).join(", ")} stitched (Designs) on top of the graphic the customer picks at ${locs.map(l => l.label || "a spot").join(", ")} — if ${ctx.used.length === 1 ? "that design isn't" : "those aren't"} meant to go on every piece, remove ${ctx.used.length === 1 ? "it" : "them"} under Designs` });
+  // Embroidered graphics for mockups (migrations/0068) are for a product whose embroidery is its own designs.
+  for (const m of mock) {
+    const loc = locs.find(l => Number(l.locationId) === Number(m.locationId));
+    if (loc) out.push({ code: "mockupDuplicatesOption", level: "warn", section: "mockupGraphics",
+      text: `${gName(m.graphicId)} is under “Embroidered graphics (for mockups)” at ${loc.label || "a spot"}, where the customer already picks a graphic — the shop page then says every piece carries it; remove it there` });
+    else if (!stitching) continue;
+    else if (configurable && options && !ctx.used.length) out.push({ code: "mockupNotStitched", level: "warn", section: "mockupGraphics",
+      text: `${gName(m.graphicId)} is under “Embroidered graphics (for mockups)”, but nothing stitches it — it's only a picture (add its design under Designs, or remove it)` });
+    else {
+      const g = ctx.graphicById[Number(m.graphicId)];
+      if (g && Number(g.designId) && ctx.used.length && !ctx.used.includes(Number(g.designId)))
+        out.push({ code: "mockupNotStitched", level: "warn", section: "mockupGraphics",
+          text: `${gName(m.graphicId)} is shown on the mockups and the shop page, but its design “${ctx.designName(Number(g.designId))}” isn't under Designs, so Run Order won't stitch it` });
+    }
+  }
+  if (stitching && Number(p.noDesignNeeded) && (ctx.used.length || locs.some(l => l.graphicIds.some(id => (ctx.graphicById[Number(id)] || {}).kind === "embroidery"))))
+    out.push({ code: "noDesignButDesigns", level: "warn", section: "flags",
+      text: "“No embroidery design needed” is ticked, but it has " + (ctx.used.length ? "designs" : "embroidery graphic options") + " — Run Order still stitches them; untick it or remove them" });
+  if (Number(p.noBlankNeeded) && ctx.linkedSizes.length)
+    out.push({ code: "noBlankButLinked", level: "warn", section: "blankLinks",
+      text: "“No blank needed” is ticked, but sizes are still linked to a blank — making it still uses those blanks; untick it or remove the links" });
+  if (ctx.options.length && p.personalizationPriceCents == null)
+    out.push({ code: "pickListOff", level: "warn", section: "personalization",
+      text: "Personalization options are filled in, but personalization is off (no price) — customers can't pick them; set a price (0 is fine) or clear the options" });
+  if (!configurable && locs.length)
+    out.push({ code: "optionsNotConfigurable", level: "warn", section: "config",
+      text: "Graphic options are set up, but the product isn't Configurable — customers don't see them; tick Configurable or remove the options" });
+  return out;
+}
+
+// Per order, the active lines still to make whose saved options would make them be made wrong
+// (orderLineDrift_): Map orderId → [{itemId, name, problems}]. Only configurable products' lines are looked at.
+async function catalogDriftForLines_(db, itemRows) {
+  const lines = (itemRows || []).filter(it => !it.cancelDate && Number(it.manufacturedQty || 0) < Number(it.qty || 0) && it.productId);
+  const out = new Map();
+  if (!lines.length) return out;
+  const keys = [...new Set(lines.map(it => it.orgId + "|" + it.productId))];
+  const { results: prods } = await db.prepare(`SELECT orgId, productId, configurable, locationsJson, fixedTransfersJson FROM products
+    WHERE configurable = 1 AND (orgId || '|' || productId) IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(keys)).all();
+  if (!prods.length) return out;
+  const prodBy = {}; for (const p of prods) prodBy[p.orgId + "|" + p.productId] = p;
+  const { results: graphics } = await db.prepare("SELECT id, name, kind, designId FROM graphics").all();
+  const gBy = {}; for (const g of graphics) gBy[Number(g.id)] = g;
+  for (const it of lines) {
+    const prod = prodBy[it.orgId + "|" + it.productId];
+    if (!prod) continue;
+    const problems = orderLineDrift_(prod, tryParse_(it.configJson, null), gBy);
+    if (problems.length) (out.get(it.orderId) || out.set(it.orderId, []).get(it.orderId)).push({ itemId: Number(it.id), name: it.name || "", problems });
+  }
+  return out;
+}
+
+// How an order line's saved copy of its options (order_items.configJson) differs from the catalog now — [] when it
+// matches. The line keeps what was true when it was ordered (Update from catalog re-reads it); this says when that copy
+// would make it be made wrong: a picked embroidery graphic now linked to another design, or a line of a product that
+// offers graphic options with no pick saved (only the product's own designs would be stitched).
+export function orderLineDrift_(prod, cfg, graphicById) {
+  const out = [];
+  if (!prod || !Number(prod.configurable)) return out;
+  const offers = (tryParse_(prod.locationsJson, []) || []).some(l => l && Array.isArray(l.graphicIds) && l.graphicIds.length);
+  const picks = cfg && !cfg.plain ? (cfg.locations || []).filter(l => l && !l.auto && !l.fixed && l.location !== "reorderqr") : [];
+  // With printed transfers on the product every option may be left at None, so no pick can be right.
+  const fixed = (tryParse_(prod.fixedTransfersJson, []) || []).length;
+  if (offers && !picks.length && !fixed) out.push("no graphic pick is saved on this line, so only the product's own designs would be stitched");
+  for (const l of picks) {
+    if (l.custom || !Number(l.graphicId)) continue;
+    const g = graphicById[Number(l.graphicId)];
+    if (!g) { out.push(`“${l.graphicName || l.label || "a graphic"}” is no longer in Graphics`); continue; }
+    if (l.kind && g.kind && l.kind !== g.kind) out.push(`“${g.name}” was ${l.kind === "transfer" ? "a transfer" : "embroidery"} when ordered and is ${g.kind === "transfer" ? "a transfer" : "embroidery"} now`);
+    else if ((l.kind || g.kind) === "embroidery" && Number(l.designId || 0) !== Number(g.designId || 0))
+      out.push(Number(g.designId) ? `“${g.name}” now links to a different design than when it was ordered` : `“${g.name}” had no stitch file when ordered — one is linked now`);
+  }
   return out;
 }
 
@@ -4857,12 +4962,18 @@ async function hoopingContext_(db, itemIds) {
   const ids = JSON.stringify(itemIds.map(Number));
   const { results: items } = await db.prepare(
     `SELECT oi.id, oi.orgId, oi.productId, oi.personalized, oi.persName, oi.configJson,
-            p.designId AS productDesignId, p.configurable, p.noDesignNeeded, p.personalizationOptions, p.personalizationMode, p.personalizationHoopId, p.personalizationOptionDesigns
+            p.designId AS productDesignId, p.configurable, p.noDesignNeeded, p.locationsJson, p.fixedTransfersJson, p.personalizationOptions, p.personalizationMode, p.personalizationHoopId, p.personalizationOptionDesigns
      FROM order_items oi LEFT JOIN products p ON p.orgId = oi.orgId AND p.productId = oi.productId
      WHERE oi.id IN (SELECT value FROM json_each(?))`).bind(ids).all();
   const { results: pds } = await db.prepare(
     `SELECT pd.* FROM product_designs pd WHERE EXISTS (SELECT 1 FROM order_items oi WHERE oi.id IN (SELECT value FROM json_each(?))
        AND oi.orgId = pd.orgId AND oi.productId = pd.productId) ORDER BY pd.sortOrder, pd.id`).bind(ids).all();
+  return hoopingContextFromRows_(db, items, pds, ids);
+}
+
+// The rest of hoopingContext_, from line rows (order_items joined to products) and the products' product_designs
+// rows — shared with planProductPreview, which plans made-up lines of one product. ids = the lines' ids as JSON.
+async function hoopingContextFromRows_(db, items, pds, ids) {
   const designIds = new Set(pds.map(r => Number(r.designId)));
   for (const it of items) {
     if (it.productDesignId != null) designIds.add(Number(it.productDesignId));
@@ -4915,7 +5026,9 @@ async function hoopingContext_(db, itemIds) {
     options: tryParse_(it.personalizationOptions, []) || [], mode: it.personalizationMode === "separate" ? "separate" : "combined",
     persHoopId: it.personalizationHoopId == null ? null : Number(it.personalizationHoopId),
     optionDesigns: tryParse_(it.personalizationOptionDesigns, {}) || {},
-    configurable: !!Number(it.configurable), noDesignNeeded: !!Number(it.noDesignNeeded), config: tryParse_(it.configJson, null) };
+    configurable: !!Number(it.configurable), noDesignNeeded: !!Number(it.noDesignNeeded), config: tryParse_(it.configJson, null),
+    offersOptions: (tryParse_(it.locationsJson, []) || []).some(l => l && Array.isArray(l.graphicIds) && l.graphicIds.length),
+    hasFixedTransfers: (tryParse_(it.fixedTransfersJson, []) || []).length > 0 };
   return ctx;
 }
 
@@ -4949,9 +5062,11 @@ function planHoopings_(ctx, it) {
     stabilizer: d.stabilizer, hoopIds, hoopNames: names(hoopIds), threadColors: d.threadColors,
     machineFileKey: d.machineFileKey, machineFileName: d.machineFileName,
     blocked: d.machineFileKey ? "" : `"${d.name}" has no machine file uploaded yet` });
-  // Configurable products (migrations/0036): hoopings come from the line's chosen EMBROIDERY options
-  // (location order); transfer options go to Run Transfer Sheets, not here. Returns [] when the line
-  // has no embroidery picks (a transfer-only line — kept out of the embroidery Run Order queue).
+  // Configurable products (migrations/0036): the line's chosen EMBROIDERY options (location order) are
+  // hoopings IN ADDITION to the product's own designs, which are stitched on every piece whatever the
+  // customer picks (2026-10 — they used to be ignored once anything was picked). Transfer options go to
+  // Run Transfer Sheets, not here. A line with nothing to stitch gets [] (transfer-only — kept out of
+  // the embroidery Run Order queue).
   const itemDesign = ctx.itemDesigns[it.itemId] || null;
   // The customer's own design, stitched (migrations/0054): the shop digitizes each location's image into
   // its own order design (order_item_designs at that location, migrations/0055), so each of those
@@ -4968,7 +5083,10 @@ function planHoopings_(ctx, it) {
   // A configurable line with no options picked at all (a product offering colors only, decorated by its own designs)
   // is planned from the product's designs below, like an ordinary line.
   const picked = it.config && (it.config.locations || []).some(l => l && !l.auto && !l.fixed && l.location !== "reorderqr");
-  if (it.configurable && it.config && !it.config.plain && picked) {
+  const cfgPicked = !!(it.configurable && it.config && !it.config.plain && picked);
+  const optionSteps = [];
+  if (cfgPicked) {
+    const steps = optionSteps;
     for (const l of (it.config.locations || [])) {
       if (l.custom && l.kind === "embroidery") { steps.push(customStep("Customer design: " + (l.label || l.location), [], String(l.location), l.label || l.location)); continue; }
       if (l.kind !== "embroidery") continue;
@@ -4981,7 +5099,7 @@ function planHoopings_(ctx, it) {
         const step = fromDesign(d, l.label || l.location, "design", d.hoopIds);
         // Detect a stale design link: the graphic's current designId differs from what was
         // recorded in the order's configJson, meaning the catalog changed after this order was placed.
-        const currentDesignId = Number(l.graphicId) ? ctx.graphicDesignIds[Number(l.graphicId)] : undefined;
+        const currentDesignId = Number(l.graphicId) ? (ctx.graphicDesignIds || {})[Number(l.graphicId)] : undefined;
         if (currentDesignId !== undefined && currentDesignId !== Number(l.designId)) {
           step.staleDesign = `Design may be outdated — "${l.graphicName || l.label}" now links to a different design. Use Edit items → Update from catalog to fix.`;
         }
@@ -4990,7 +5108,6 @@ function planHoopings_(ctx, it) {
         itemDesignId: null, stabilizer: "", hoopIds: [], hoopNames: [], threadColors: [], machineFileKey: "", machineFileName: "",
         blocked: `Design for "${l.graphicName || l.label}" is unavailable` });
     }
-    return steps.map((st, i) => Object.assign(st, { stepNo: i + 1 }));
   }
   const fromItemDesign = (label, hoopIds, base) => ({ label, kind: "itemDesign", itemDesignLocation: "", designId: base ? base.id : null,
     designName: base ? base.name + " + personalization" : "Personalization", versionId: null, itemDesignId: itemDesign ? itemDesign.id : null,
@@ -4998,10 +5115,12 @@ function planHoopings_(ctx, it) {
     threadColors: itemDesign ? itemDesign.threadColors : [], machineFileKey: itemDesign ? itemDesign.machineFileKey : "",
     machineFileName: itemDesign ? itemDesign.machineFileName : "",
     blocked: itemDesign ? "" : `Upload the order-specific design for "${it.persName || "the personalization"}" first` });
-  const isOption = it.personalized && it.options.includes(it.persName);
+  const isOption = it.personalized && (it.options || []).includes(it.persName);
   const freeText = it.personalized && !isOption;
-  let pds = ctx.productDesigns[it.orgId + "|" + it.productId] || [];
-  if (!pds.length && it.productDesignId != null && !isOption) pds = [{ designId: it.productDesignId, placement: "", isMain: true }];
+  let pds = (ctx.productDesigns || {})[it.orgId + "|" + it.productId] || [];
+  // products.designId mirrors the main product_designs row; the fallback is for products from before 0032
+  // (never configurable ones, which came later — a stray designId there must not add a hooping).
+  if (!pds.length && it.productDesignId != null && !isOption && !cfgPicked) pds = [{ designId: it.productDesignId, placement: "", isMain: true }];
   // The customer's own design on an ordinary line replaces the product's designs. Stitched: one
   // "Customer design" hooping on the main design's hoops (any hoop when there's none) — a typed-in
   // name is digitized into that same order design. Printed as a transfer: no hooping for it at all
@@ -5025,16 +5144,67 @@ function planHoopings_(ctx, it) {
       steps.push(fromItemDesign(label + " + personalization", d.personalizationHoopIds.length ? d.personalizationHoopIds : d.hoopIds, d));
     } else steps.push(fromDesign(d, label, "design", d.hoopIds));
   }
+  steps.push(...optionSteps);   // the customer's picks, after the designs every piece gets
   if (freeText && !combined && !custom) steps.push(fromItemDesign("Personalization", it.persHoopId ? [it.persHoopId] : [], null));
   if (isOption) {
-    const d = ctx.designs[Number(it.optionDesigns[it.persName])];
+    const d = ctx.designs[Number((it.optionDesigns || {})[it.persName])];
     if (d) steps.push(fromDesign(d, "Personalization: " + it.persName, "option", d.hoopIds));
     else steps.push({ label: "Personalization: " + it.persName, kind: "option", designId: null, designName: it.persName, versionId: null,
       itemDesignId: null, stabilizer: "", hoopIds: [], hoopNames: [], threadColors: [], machineFileKey: "", machineFileName: "",
       blocked: `No design is mapped to the pick-list option "${it.persName}" — map it on the product` });
   }
-  if (!steps.length && !custom) steps.push(legacyStep_(null));
+  if (!steps.length && !custom && !cfgPicked) steps.push(legacyStep_(null));
+  // A line of a product that offers graphic options, saved with no pick: only the product's own designs are planned.
+  if (it.configurable && it.offersOptions && !cfgPicked && !it.hasFixedTransfers && !custom && steps[0])
+    steps[0].staleDesign = steps[0].staleDesign || "No graphic pick is saved on this order line, so only the product's own designs are planned — check what the customer ordered, then Edit items → pick it (or Update from catalog).";
   return steps.map((st, i) => Object.assign(st, { stepNo: i + 1 }));
+}
+
+// What Run Order will do for one product, worked out by planHoopings_ itself on made-up order lines (2026-10):
+//   always:   the hoopings every piece gets (its own designs; personalization combined with the main one is shown
+//             under personalization instead),
+//   picks:    per offered location, each graphic → the hooping it adds (or "printed" for a transfer),
+//   personalization: what a typed-in name / each pick-list option adds,
+//   printed:  the transfers pressed on every piece (printed transfers, the reorder QR is left to its own box).
+// Each step: {label, designName, hoopNames, blocked}. Read-only.
+export async function planProductPreview(db, orgId, productId) {
+  const prod = await db.prepare("SELECT * FROM products WHERE orgId=? AND productId=?").bind(orgId, productId).first();
+  if (!prod) return null;
+  const { results: pds } = await db.prepare("SELECT * FROM product_designs WHERE orgId=? AND productId=? ORDER BY sortOrder, id").bind(orgId, productId).all();
+  const { results: graphics } = await db.prepare("SELECT id, name, kind, designId, orgId, isGlobal FROM graphics").all();
+  const gBy = {}; for (const g of graphics) gBy[Number(g.id)] = g;
+  const locs = (tryParse_(prod.locationsJson, []) || []).filter(l => l && Array.isArray(l.graphicIds) && l.graphicIds.length);
+  const configurable = !!Number(prod.configurable);
+  const options = tryParse_(prod.personalizationOptions, []) || [];
+  const persOn = prod.personalizationPriceCents != null;
+  let nextId = -1;
+  const line = (config, personalized = false, persName = "") => ({ id: nextId--, orgId, productId, personalized: personalized ? 1 : 0, persName,
+    configJson: config ? JSON.stringify(config) : null, productDesignId: prod.designId, configurable: prod.configurable, noDesignNeeded: prod.noDesignNeeded,
+    locationsJson: prod.locationsJson, fixedTransfersJson: prod.fixedTransfersJson, personalizationOptions: prod.personalizationOptions,
+    personalizationMode: prod.personalizationMode, personalizationHoopId: prod.personalizationHoopId, personalizationOptionDesigns: prod.personalizationOptionDesigns });
+  const pick = (loc, g) => ({ location: loc.key, label: loc.label, graphicId: Number(g.id), graphicName: g.name, kind: g.kind,
+    designId: g.kind === "embroidery" && Number(g.designId) ? Number(g.designId) : null });
+  // The made-up lines: a plain one, one per offered graphic, a typed-in name, and each pick-list option.
+  const base = line(configurable ? { locations: [] } : null);
+  const pickLines = [];
+  for (const loc of locs) for (const id of loc.graphicIds) { const g = gBy[Number(id)]; if (g) pickLines.push({ loc, g, it: line({ locations: [pick(loc, g)] }) }); }
+  const typed = persOn && !options.length ? line(configurable ? { locations: [] } : null, true, "SAMPLE NAME") : null;
+  const optLines = persOn ? options.map(o => ({ option: o, it: line(configurable ? { locations: [] } : null, true, o) })) : [];
+  const rows = [base, ...pickLines.map(x => x.it), ...(typed ? [typed] : []), ...optLines.map(x => x.it)];
+  const ctx = await hoopingContextFromRows_(db, rows, pds, JSON.stringify(rows.map(r => r.id)));
+  const plan = (r) => planHoopings_(ctx, ctx.items[r.id]).filter(st => st.designId != null || st.kind === "itemDesign" || st.blocked)
+    .map(st => ({ label: st.label, kind: st.kind, designName: st.designName, hoopNames: (st.hoopNames || []).filter(Boolean), blocked: st.blocked || "" }));
+  const always = plan(base);
+  const sig = (st) => st.label + "|" + st.designName;
+  const extra = (steps) => { const seen = always.map(sig); return steps.filter(st => { const i = seen.indexOf(sig(st)); if (i >= 0) { seen.splice(i, 1); return false; } return true; }); };
+  const picks = locs.map(loc => ({ label: loc.label || "Decoration location", choices: pickLines.filter(x => x.loc === loc).map(x => ({
+    graphic: x.g.name, kind: x.g.kind, steps: x.g.kind === "embroidery" ? extra(plan(x.it)) : [] })) }));
+  const personalization = !persOn ? null : {
+    typed: typed ? { mode: prod.personalizationMode === "separate" ? "separate" : "combined", steps: plan(typed) } : null,
+    options: optLines.map(x => ({ option: x.option, steps: extra(plan(x.it)) })) };
+  const printed = (tryParse_(prod.fixedTransfersJson, []) || []).map(f => (gBy[Number(f.graphicId)] || {}).name).filter(Boolean);
+  return { configurable, offersOptions: configurable && locs.length > 0, noDesignNeeded: !!Number(prod.noDesignNeeded),
+    customDesign: prod.customDesign || "", always, picks, personalization, printed };
 }
 
 // Where a line's pieces are: [{pieceNo, done:[stepNo…], running:{runId,stepNo,…}|null, nextStepNo}]
@@ -8239,12 +8409,15 @@ async function loadOrders_(db, where, binds, orderBy) {
   // Restricted brands it has a large number of, and whether the supplier approved the logo (migrations/0075).
   let reviews = new Map();
   try { reviews = brandReviewsForLines_(await brandContext_(db), itemRows); } catch (e) { console.error("brand review check failed:", e); }
+  let drift = new Map();
+  try { drift = await catalogDriftForLines_(db, itemRows); } catch (e) { console.error("catalog drift check failed:", e); }
 
   return orderRows.map((r) => {
     const o = parseOrder_(r, itemsByOrder[r.orderId] || [], paymentsByOrder[r.orderId] || [], labelsByOrder[r.orderId] || []);
     o.blankShipments = shipmentsByOrder[r.orderId] || [];
     o.invoice = invoices[r.orderId] || null;
     o.brandReview = reviews.get(r.orderId) || [];
+    o.catalogDrift = r.manufacturedAt || r.completedAt || r.voidedAt ? [] : drift.get(r.orderId) || [];
     return o;
   });
 }
@@ -8268,6 +8441,7 @@ export async function getOrderById(db, orderId) {
   order.blankShipments = await getBlankShipmentsForOrder(db, orderId).catch(() => []);
   order.invoice = (await invoicesByOrder_(db, "?", [orderId]))[orderId] || null;
   try { order.brandReview = brandReviewsForLines_(await brandContext_(db), itemRows).get(orderId) || []; } catch (e) { order.brandReview = []; }
+  try { order.catalogDrift = row.manufacturedAt || row.completedAt || row.voidedAt ? [] : (await catalogDriftForLines_(db, itemRows)).get(orderId) || []; } catch (e) { order.catalogDrift = []; }
   return order;
 }
 

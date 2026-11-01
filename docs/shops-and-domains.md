@@ -168,6 +168,32 @@ category, and ↑ ↓ move a product within its section (Publish to show the new
 product, the colors offered can be put in order too (↑ ↓ / First under the color boxes): that is the
 order customers see the swatches in, and the first one is shown when the product opens.
 
+## The product form
+
+A product's page is a set of cards: Basics, **What does the customer choose?**, Blank & colors, On
+every piece, The customer's pick, Customer's own design, Personalization, Prices & costs, and Pictures &
+shop page. The first question has three answers: **Nothing** (every piece is the same), **A color**, or
+**A color and a graphic** (the customer picks a graphic at one or more decoration locations). The page
+then shows only the cards that kind of product uses.
+
+The designs under **On every piece** are stitched on every piece, *as well as* the graphic the customer
+picks, then the pick, then any personalization. Under the question, **What Run Order will do** lists
+those hoopings as last saved, worked out by the same code Run Order uses, so a pick that can't be run
+shows here first.
+
+The catalog check also warns about settings that contradict each other:
+- designs stitched on top of the customer's pick;
+- a mockup graphic that repeats a pick, or that nothing stitches;
+- **No embroidery design needed** or **No blank needed** ticked on a product that has designs or blank
+  links;
+- a pick list with personalization off;
+- graphic options on a product that isn't configurable.
+
+Each problem is outlined in the card that fixes it. An open order line placed before such a change is
+marked **Check line — doesn't match catalog** on the Orders page; Edit items → **Update from catalog**
+brings it up to date. With the Production feature off, the stitching parts (designs, What Run Order
+will do, and their warnings) are left out.
+
 ## Versions of a product
 
 A shirt sold in short and long sleeve is two products shown as **one card** on the shop page, with a
