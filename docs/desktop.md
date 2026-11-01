@@ -338,10 +338,14 @@ with **Publish a release** ticked (or push a tag `desktop-v<version>`). It build
 publishes the release `desktop-v<version>` with them, named as the website links to them. A version
 is released once; a second run for the same one stops with an error.
 
-The program's icon is the OpenDecoDesk logo, `public/images/icon.svg`, which is also the admin's
-browser-tab icon and the website's. `desktop/icons/` has it in each system's format (`icon.icns`
-for the Mac, `icon.ico` for Windows, `icon.png` for the window). After changing the logo, run
-`npx electron icons/make-icons.js` in `desktop/` and commit what it writes.
+The program's icon is the brand mark, as on the website and the Facebook group: a navy tile, the
+cream hoop and the orange D. It comes in two drawings: `public/images/icon-large.svg` (64 px and
+up, the stitched D) and `public/images/icon.svg` (48 px and under, a solid D; also the admin's
+browser-tab icon, the same as the website's favicon). `desktop/icons/` has it in each system's
+format (`icon.icns` for the Mac, `icon.ico` for Windows, `icon.png` for the window). After changing
+a drawing, run `npx electron icons/make-icons.js` in `desktop/` and commit what it writes. The
+same script makes the Stitch Analyzer and Machine Files icons from their own drawings
+(`--large=… --small=… --out=…`).
 
 A build carries `src/`, `functions/`, `public/`, `migrations/`, `schema.sql`, `LICENSE` and
 `NOTICE` next to the program, and runs them as they are. It has no build step of its own. On

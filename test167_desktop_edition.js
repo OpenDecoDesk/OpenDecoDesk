@@ -214,14 +214,17 @@ const named = (db, type) => db.q(`SELECT name FROM sqlite_master WHERE type='${t
     /Miniflare[\s\S]*workerd/.test(read("NOTICE")));
   ok("pictures are stored under an address that can never be a real site", /^https:\/\/[a-z.]+\.invalid$/.test(server.IMAGES_BASE));
 
-  // The icon: the logo (public/images/icon.svg, the website's), made into each system's format by
-  // desktop/icons/make-icons.js.
+  // The icon: the brand mark in two drawings (public/images/icon-large.svg, and icon.svg — the
+  // website's favicon — for small sizes), made into each system's format by desktop/icons/make-icons.js.
   const pkg = JSON.parse(read("desktop/package.json")).build;
   const icnsFile = fs.readFileSync(path.join(__dirname, "desktop/icons/icon.icns")), icoFile = fs.readFileSync(path.join(__dirname, "desktop/icons/icon.ico"));
   const icoSizes = Array.from({ length: icoFile.readUInt16LE(4) }, (_, i) => icoFile[6 + 16 * i] || 256);
   ok("the Mac and Windows builds have the logo as their icon", pkg.mac.icon === "icons/icon.icns" && pkg.win.icon === "icons/icon.ico" &&
     icnsFile.toString("ascii", 0, 4) === "icns" && icnsFile.readUInt32BE(4) === icnsFile.length && icnsFile.includes("ic10") &&
     icoFile.readUInt16LE(2) === 1 && [16, 32, 48, 256].every(n => icoSizes.includes(n)));
+  const brand = (f) => { const t = read(f); return /#1F2A44/i.test(t) && /#F7F3EC/i.test(t) && /#E8743B/i.test(t); };
+  ok("it's the brand mark: navy tile, cream hoop, orange D, in a large and a small drawing", brand("public/images/icon.svg") && brand("public/images/icon-large.svg") &&
+    /const svg = size - 2 \* inset <= 48 \? smallSvg : largeSvg;/.test(read("desktop/icons/make-icons.js")));
   ok("…and the window and a Mac's dock (run from the source) show it too", pkg.files.includes("icons/icon.png") && /icon: path\.join\(__dirname, "icons", "icon\.png"\)/.test(mainSrc) &&
     /app\.dock\.setIcon\(path\.join\(__dirname, "icons", "dock\.png"\)\)/.test(mainSrc) && fs.existsSync(path.join(__dirname, "desktop/icons/dock.png")));
 
