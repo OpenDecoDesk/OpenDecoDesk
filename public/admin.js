@@ -21850,6 +21850,7 @@ async function renderRunOrder(app, opts){
             <div>
             ${stepCount > 1 ? `<div style="font-size:12px;font-weight:700;color:#2c6b2f;text-transform:uppercase;letter-spacing:.04em;">Hooping ${stepNo} of ${stepCount} · ${escapeHtml(step.label)}</div>` : ""}
             <div style="font-weight:700;font-size:16px;">${escapeHtml(step.designName || (step.designId ? "" : "No design linked") || "No design linked")}</div>
+            ${step.staleDesign ? `<div style="font-size:13px;font-weight:600;color:#92400e;background:#fef3c7;border:1px solid #f59e0b;border-radius:5px;padding:4px 8px;margin-top:4px;">⚠ ${escapeHtml(step.staleDesign)}</div>` : ""}
             <div style="font-size:13px;color:#666;margin-top:2px;">${escapeHtml(job.orgName)} · ${escapeHtml(job.customerName)}${pieceLabel} · ${escapeHtml(job.itemName)}${job.itemSize ? " (" + escapeHtml(job.itemSize) + ")" : ""}</div>
             ${dueBadge_(job.dueDate) ? `<div>${dueBadge_(job.dueDate)}</div>` : ""}
             ${job.activeItemCount > 1 ? `<div style="font-size:12px;color:#888;margin-top:2px;">+${job.activeItemCount - 1} more item${job.activeItemCount - 1 === 1 ? "" : "s"} on this order</div>` : ""}
@@ -22555,6 +22556,13 @@ function showEditOrderModal(order, products, ctx){
           originalLineTotal: it.lineTotal,
           originalItemId: it.sheetRow,
           _origConfigJson: config ? JSON.stringify(config) : "",
+          // Detect stale design links: the graphic's current designId differs from what was stored
+          // in configJson when the order was placed.
+          _staleDesignWarning: (() => {
+            if (!configurable || !it.config || !Array.isArray(it.config.locations)) return "";
+            const stale = it.config.locations.filter(l => l.kind === "embroidery" && Number(l.graphicId) && Number(l.designId)).filter(l => { const g = gById_[Number(l.graphicId)]; return g && Number(g.designId || 0) !== Number(l.designId); });
+            return stale.length ? `${stale.map(l => `"${l.graphicName || l.label || l.location}"`).join(", ")} now link${stale.length === 1 ? "s" : ""} to a different design. Use Update from catalog to fix.` : "";
+          })(),
           _removed: false,
           _refundAmount: Number(it.lineTotal).toFixed(2),
           _refundReason: "",
@@ -22667,7 +22675,7 @@ function showEditOrderModal(order, products, ctx){
             ${row.configurable
               ? (row._removed
                   ? `<span style="font-size:12px;color:var(--ink-soft);">${escapeHtml([row.config.garmentColor, ...((row.config.locations || []).map(l => { if (l.custom) return "Customer design"; const g = gById_[l.graphicId]; return g ? g.name : ""; }).filter(Boolean))].filter(Boolean).join(" · ") || "—")}</span>`
-                  : cfgEditorHtml_(row, idx, curProd))
+                  : cfgEditorHtml_(row, idx, curProd) + (row._staleDesignWarning ? `<div style="font-size:12px;font-weight:600;color:#92400e;background:#fef3c7;border:1px solid #f59e0b;border-radius:4px;padding:4px 7px;margin-top:5px;">⚠ ${escapeHtml(row._staleDesignWarning)}</div>` : ""))
               : row._removed
                 ? (row.personalized ? `<span style="font-size:12px;color:var(--ink-soft);">"${escapeHtml(row.persName || "")}"</span>` : `<span style="font-size:12px;color:var(--ink-soft);">—</span>`)
                 : curProd && curProd.personalizationPrice != null

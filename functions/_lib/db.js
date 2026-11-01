@@ -4871,6 +4871,16 @@ async function hoopingContext_(db, itemIds) {
     if (Number(it.configurable)) { const cfg = tryParse_(it.configJson, null);
       if (cfg) for (const l of (cfg.locations || [])) if (l.kind === "embroidery" && Number(l.designId)) designIds.add(Number(l.designId)); }
   }
+  // Collect graphicIds from configurable items to check for stale design links.
+  const graphicIds = new Set();
+  for (const it of items) {
+    if (Number(it.configurable)) { const cfg = tryParse_(it.configJson, null);
+      if (cfg) for (const l of (cfg.locations || [])) if (l.kind === "embroidery" && Number(l.graphicId)) graphicIds.add(Number(l.graphicId)); }
+  }
+  const gIds = JSON.stringify([...graphicIds]);
+  const { results: graphicDesigns } = graphicIds.size
+    ? await db.prepare("SELECT id, designId FROM graphics WHERE id IN (SELECT value FROM json_each(?))").bind(gIds).all()
+    : { results: [] };
   const dIds = JSON.stringify([...designIds]);
   const { results: designs } = await db.prepare(
     `SELECT d.id, d.name, d.stabilizer, d.hoopId, dv.id AS versionId, dv.threadColorsJson, dv.machineFileKey, dv.machineFileName
@@ -4884,7 +4894,8 @@ async function hoopingContext_(db, itemIds) {
     `SELECT x.* FROM order_item_designs x WHERE x.itemId IN (SELECT value FROM json_each(?))
        AND x.id = (SELECT id FROM order_item_designs y WHERE y.itemId = x.itemId${sameLoc} ORDER BY uploadedAt DESC, id DESC LIMIT 1)`).bind(ids).all();
   const { results: hoops } = await db.prepare("SELECT id, name FROM hoops").all();
-  const ctx = { items: {}, productDesigns: {}, designs: {}, itemDesigns: {}, itemDesignsAt: {}, hoopNames: {} };
+  const ctx = { items: {}, productDesigns: {}, designs: {}, itemDesigns: {}, itemDesignsAt: {}, hoopNames: {}, graphicDesignIds: {} };
+  for (const r of graphicDesigns) ctx.graphicDesignIds[Number(r.id)] = r.designId == null ? null : Number(r.designId);
   for (const h of hoops) ctx.hoopNames[h.id] = h.name || "";
   for (const d of designs) ctx.designs[d.id] = { id: Number(d.id), name: d.name || "", stabilizer: d.stabilizer || "",
     hoopIds: [], personalizationHoopIds: [], legacyHoopId: d.hoopId == null ? null : Number(d.hoopId),
@@ -4966,8 +4977,16 @@ function planHoopings_(ctx, it) {
         itemDesignId: null, stabilizer: "", hoopIds: [], hoopNames: [], threadColors: [], machineFileKey: "", machineFileName: "",
         blocked: `No stitch file linked to “${l.graphicName || l.label || "this graphic"}” yet — link a design to the graphic (Graphics screen), then Update from catalog on the order` }); continue; }
       const d = ctx.designs[Number(l.designId)];
-      if (d) steps.push(fromDesign(d, l.label || l.location, "design", d.hoopIds));
-      else steps.push({ label: l.label || l.location, kind: "design", designId: Number(l.designId), designName: l.graphicName || "", versionId: null,
+      if (d) {
+        const step = fromDesign(d, l.label || l.location, "design", d.hoopIds);
+        // Detect a stale design link: the graphic's current designId differs from what was
+        // recorded in the order's configJson, meaning the catalog changed after this order was placed.
+        const currentDesignId = Number(l.graphicId) ? ctx.graphicDesignIds[Number(l.graphicId)] : undefined;
+        if (currentDesignId !== undefined && currentDesignId !== Number(l.designId)) {
+          step.staleDesign = `Design may be outdated — "${l.graphicName || l.label}" now links to a different design. Use Edit items → Update from catalog to fix.`;
+        }
+        steps.push(step);
+      } else steps.push({ label: l.label || l.location, kind: "design", designId: Number(l.designId), designName: l.graphicName || "", versionId: null,
         itemDesignId: null, stabilizer: "", hoopIds: [], hoopNames: [], threadColors: [], machineFileKey: "", machineFileName: "",
         blocked: `Design for "${l.graphicName || l.label}" is unavailable` });
     }
@@ -4982,7 +5001,7 @@ function planHoopings_(ctx, it) {
   const isOption = it.personalized && it.options.includes(it.persName);
   const freeText = it.personalized && !isOption;
   let pds = ctx.productDesigns[it.orgId + "|" + it.productId] || [];
-  if (!pds.length && it.productDesignId != null) pds = [{ designId: it.productDesignId, placement: "", isMain: true }];
+  if (!pds.length && it.productDesignId != null && !isOption) pds = [{ designId: it.productDesignId, placement: "", isMain: true }];
   // The customer's own design on an ordinary line replaces the product's designs. Stitched: one
   // "Customer design" hooping on the main design's hoops (any hoop when there's none) — a typed-in
   // name is digitized into that same order design. Printed as a transfer: no hooping for it at all
