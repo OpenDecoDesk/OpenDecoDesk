@@ -25,9 +25,9 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
 
 (async () => {
   console.log("=== A. desktop/mailer.js ===");
-  const gmail = { host: "smtp.gmail.com", port: 587, security: "starttls", from: "pat@gmail.com" };
+  const gmail = { host: "smtp.gmail.com", port: 587, security: "starttls", from: "pat@example.com" };
   const clean = cleanSmtpSettings({ ...gmail, host: " SMTP.Gmail.com " });
-  ok("settings are tidied, and the username is the address unless given", clean.host === "smtp.gmail.com" && clean.user === "pat@gmail.com" && clean.security === "starttls");
+  ok("settings are tidied, and the username is the address unless given", clean.host === "smtp.gmail.com" && clean.user === "pat@example.com" && clean.security === "starttls");
   const refuses = (s, re) => { try { cleanSmtpSettings(s); return false; } catch (e) { return re.test(e.message); } };
   ok("a server name that isn't one, port 25, or no address is refused, saying what to fix", refuses({ ...gmail, host: "smtp gmail" }, /mail server's name/) &&
     refuses({ ...gmail, port: 25 }, /Use 587 or 465/) && refuses({ ...gmail, port: 70000 }, /usually 587 or 465/) && refuses({ ...gmail, from: "pat" }, /email address/));
@@ -37,10 +37,10 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   const mailer = new Mailer(gmail, "app password here", { transport, log: (t) => logged.push(t) });
   let r = await mailer.send({ to: "cust@example.net", fromName: "Stitch <Co>", replyTo: "owner@stitch.example", bcc: ["books@stitch.example", "not an address"], subject: "Your order\r\nBcc: x@y.z", html: "<p>Hi</p>", text: "Hi" });
   const m = sent[0] || {};
-  ok("a message goes from the mailbox's own address, under the business's name", r.ok && m.from && m.from.address === "pat@gmail.com" && m.from.name === "Stitch Co");
+  ok("a message goes from the mailbox's own address, under the business's name", r.ok && m.from && m.from.address === "pat@example.com" && m.from.name === "Stitch Co");
   ok("…to the customer, with the receipts copy and replies to the owner", m.to === "cust@example.net" && m.bcc.join() === "books@stitch.example" && m.replyTo === "owner@stitch.example");
   ok("…and a subject that can't add headers", m.subject === "Your order Bcc: x@y.z" && m.html === "<p>Hi</p>" && m.text === "Hi");
-  await mailer.send({ to: "cust@example.net", replyTo: "PAT@gmail.com", subject: "s" });
+  await mailer.send({ to: "cust@example.net", replyTo: "PAT@example.com", subject: "s" });
   ok("replies go to the mailbox itself without a Reply-To of its own address", !("replyTo" in sent[1]) && sent[1].text === "(no plain-text body)");
   r = await mailer.send({ to: "not-an-address", subject: "s" });
   ok("a message to something that isn't an address isn't sent", !r.ok && sent.length === 2);
@@ -96,7 +96,7 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   ok("turning email on needs the password", thrown && /password/.test(thrown.message) && !cfgOf().smtp);
   server.setSmtp(tmp, gmail, "secret app pw");
   let cfg = cfgOf();
-  ok("the server settings are kept beside the port, the password with the secrets", cfg.smtp.host === "smtp.gmail.com" && cfg.smtp.from === "pat@gmail.com" && !("password" in cfg.smtp) &&
+  ok("the server settings are kept beside the port, the password with the secrets", cfg.smtp.host === "smtp.gmail.com" && cfg.smtp.from === "pat@example.com" && !("password" in cfg.smtp) &&
     cfg.secrets.SMTP_PASSWORD === "secret app pw" && server.savedSmtpPassword(tmp) === "secret app pw");
   server.setSmtp(tmp, { ...gmail, host: "smtp.mail.me.com" }, "");
   ok("saving without a password keeps the saved one", cfgOf().smtp.host === "smtp.mail.me.com" && cfgOf().secrets.SMTP_PASSWORD === "secret app pw");
@@ -146,16 +146,16 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
   let mailerAnswer = { ok: true, message: "250 OK" };
   const MAILER = { fetch: async (url, init) => { mail.push(JSON.parse(init.body)); return new Response(JSON.stringify(mailerAnswer), { status: mailerAnswer.ok ? 200 : 502 }); } };
   const off = { DB: d1, EDITION: "desktop" };
-  const on = { DB: d1, EDITION: "desktop", DESKTOP_EMAIL: "on", EMAIL_FROM: "pat@gmail.com", MAILER };
+  const on = { DB: d1, EDITION: "desktop", DESKTOP_EMAIL: "on", EMAIL_FROM: "pat@example.com", MAILER };
   r = await post(off, { action: "createLocalSale", key: "x", org: "shop", paymentMethod: "Venmo", customerName: "Sam", contact: "sam@example.net",
     items: [{ productId: "__custom__", name: "Club tee", qty: 2, customUnitPrice: 20, type: "shirt" }] });
   const orderId = r.body.orderId;
   r = await post(off, { action: "markPaidManual", key: "x", org: "shop", orderId });
   const issuesOff = (await lib.getSystemIssues(d1).catch(() => [])) || [];
   ok("with no mailbox, marking an order paid sends nothing and reports no failed email", r.status === 200 && mail.length === 0 && !issuesOff.some(x => /email/i.test(x.kind || x.label || "")));
-  r = await post(on, { action: "sendTestEmail", key: "x", to: "pat@gmail.com" });
+  r = await post(on, { action: "sendTestEmail", key: "x", to: "pat@example.com" });
   const t = mail[0] || {};
-  ok("with one, the test email goes through the program's mailer, and the report says so", r.status === 200 && r.body.report.provider === "mailbox" && r.body.report.ok && r.body.report.from === "pat@gmail.com" && /Your mail server accepted it/.test(r.body.report.hints.join(" ")));
+  ok("with one, the test email goes through the program's mailer, and the report says so", r.status === 200 && r.body.report.provider === "mailbox" && r.body.report.ok && r.body.report.from === "pat@example.com" && /Your mail server accepted it/.test(r.body.report.hints.join(" ")));
   ok("…from the business, replies to the owner, naming no web address", t.fromName === "Stitch Co" && t.replyTo === "owner@stitch.example" && /the OpenDecoDesk program/.test(t.text) && !/example\.com/.test(t.text + t.html));
   mail.length = 0;
   r = await post(on, { action: "resendEmail", key: "x", org: "shop", orderId });
@@ -210,7 +210,7 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
 
   mailerAnswer = { ok: false, message: "The mailbox refused the sign-in. (535 bad)" };
   mail.length = 0;
-  r = await post(on, { action: "sendTestEmail", key: "x", to: "pat@gmail.com" });
+  r = await post(on, { action: "sendTestEmail", key: "x", to: "pat@example.com" });
   ok("a refused test email shows the mail server's answer", r.status === 200 && !r.body.report.ok && /535 bad/.test(r.body.report.providerMessage) && /Global settings → Email/.test(r.body.report.hints.join(" ")));
   r = await post(on, { action: "resendEmail", key: "x", org: "shop", orderId });
   const issuesOn = (await lib.getSystemIssues(d1).catch(() => [])) || [];
@@ -302,7 +302,7 @@ const ok = (d, c) => { console.log(d + ":", !!c); };
       win.oddDesktop = { edition: "desktop", firstRunKey: async () => null,
         checkEmail: async (settings, password) => { saved.push({ settings, password }); return password === "wrong" ? { ok: false, message: "The mailbox refused the sign-in." } : { ok: true }; },
         applySettings: async (s) => { applied.push(s); return { ok: true }; },
-        saveInvoicePdf: async (doc) => { pdfSaves.push(doc); return { ok: true, path: "/Users/pat/Documents/Invoice X1.pdf" }; } };
+        saveInvoicePdf: async (doc) => { pdfSaves.push(doc); return { ok: true, path: "/home/pat/Documents/Invoice X1.pdf" }; } };
       win.confirm = () => true;
     } });
   const w = dom.window, doc = w.document;
