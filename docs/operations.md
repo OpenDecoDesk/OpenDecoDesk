@@ -245,6 +245,15 @@ own settings, so reset it key by key, not as a whole table.
 - **The Worker's logs in the Cloudflare dashboard** — errors the code logged (`wrangler.toml` turns
   on `[observability]`).
 
+## When things happened (order dates)
+
+Every step recorded on an order — paid, manufactured, shipped, delivered, completed, a cancelled line, a
+payment or refund, a local sale, a stock count correction or a transfer write-off — asks when it happened,
+with the date and time defaulting to now, so a step entered later still carries its real date. A date in
+the future, or one out of order (shipped before it was made), is refused. An order's **Dates…** window
+changes or clears any of its dates at once. A date in a closed period (Periods & Export) is refused, both
+into and out of it, so a filed month never changes.
+
 ## Machine maintenance
 
 Each run adds to its machine's stitch count and run time: the design's stitch count comes from its

@@ -344,7 +344,8 @@ let _adminSignInEmail = "";
 // Returns {vendor, vendorOrderId, estimatedDelivery} on submit, or null on cancel.
 // Shared tracking-number prompt. required=true enforces a non-empty value (used
 // by bulkAddTracking). required=false makes it optional (used by Mark shipped).
-function showTrackingModal(title, { required = false, submitLabel = "Save tracking" } = {}){
+// With `when: true` it also asks when it shipped and resolves {tn, at} (else the tracking number, null or undefined).
+function showTrackingModal(title, { required = false, submitLabel = "Save tracking", when = false } = {}){
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
     overlay.className = "admin-pass-overlay";
@@ -356,6 +357,7 @@ function showTrackingModal(title, { required = false, submitLabel = "Save tracki
         <input type="text" class="tracking-input" placeholder="e.g. 9400100000000000000000" maxlength="100" autocomplete="off" spellcheck="false"
                style="width:100%;padding:8px 10px;border:1px solid var(--border,#ccc);border-radius:5px;font-size:14px;margin-bottom:10px;box-sizing:border-box;font-family:monospace;background:var(--surface,#fff);color:var(--ink,#111);">
         <div class="tracking-err" style="color:#c0392b;font-size:13px;margin-bottom:8px;display:none;"></div>
+        ${when ? `<div style="margin-bottom:10px;">${whenFieldHtml_("trackWhen", "When did it ship?")}</div>` : ""}
         <div class="admin-pass-actions">
           <button type="button" class="admin-pass-cancel">Cancel</button>
           <button type="submit" class="admin-pass-submit">${escapeHtml(submitLabel)}</button>
@@ -370,6 +372,7 @@ function showTrackingModal(title, { required = false, submitLabel = "Save tracki
       e.preventDefault();
       const tn = input.value.trim();
       if(required && !tn){ errEl.textContent = "Enter a tracking number."; errEl.style.display = ""; input.focus(); return; }
+      if(when){ const at = whenFrom_(overlay, "trackWhen"); if(!at) return; finish({ tn: tn || null, at }); return; }
       finish(tn || null);
     });
     overlay.querySelector(".admin-pass-cancel").addEventListener("click", () => finish(undefined));
@@ -411,7 +414,8 @@ function showBlankOrderModal(title){
 
         <label for="blankEstDelivery" style="font-size:13px;font-weight:600;margin-bottom:4px;display:block;">Estimated delivery <span style="font-weight:400;color:var(--ink-soft,#888)">(optional)</span></label>
         <input type="date" id="blankEstDelivery" autocomplete="off"
-               style="width:100%;padding:8px 10px;border:1px solid var(--border,#ccc);border-radius:5px;font-size:14px;margin-bottom:16px;box-sizing:border-box;background:var(--surface,#fff);color:var(--ink,#111);">
+               style="width:100%;padding:8px 10px;border:1px solid var(--border,#ccc);border-radius:5px;font-size:14px;margin-bottom:6px;box-sizing:border-box;background:var(--surface,#fff);color:var(--ink,#111);">
+        <div style="margin-bottom:10px;">${whenFieldHtml_("blankOrderWhen", "When were they ordered?")}</div>
 
         <div id="blankOrderFormErr" style="color:#c0392b;font-size:13px;margin-bottom:8px;display:none;"></div>
         <div class="admin-pass-actions">
@@ -445,10 +449,13 @@ function showBlankOrderModal(title){
         otherInput.focus();
         return;
       }
+      const at = whenFrom_(overlay, "blankOrderWhen");
+      if(!at) return;
       finish({
         vendor: isOther ? otherName : vendorSelect.value,
         vendorOrderId: overlay.querySelector("#blankVendorOrderId").value.trim(),
-        estimatedDelivery: overlay.querySelector("#blankEstDelivery").value
+        estimatedDelivery: overlay.querySelector("#blankEstDelivery").value,
+        at
       });
     });
     overlay.querySelector(".admin-pass-cancel").addEventListener("click", () => finish(null));
@@ -460,7 +467,8 @@ function showBlankOrderModal(title){
   });
 }
 
-// Blank receiving + inspection modal — returns {receivedDate, condition, itemConditions} or null on cancel.
+// Blank receiving + inspection modal — returns {at, condition, itemConditions, items} or null on cancel. `at` (when
+// they arrived) used to be a date the server ignored — the blanks were always received "now".
 // Toggle at top switches between "by order" (default) and "by product/size" views.
 // data-idx on every input is always the index into the fixed rows array, so the
 // confirm handler's querySelector-by-idx collection works regardless of display order.
@@ -560,11 +568,7 @@ function showBlankReceiveModal(title, orders){
           </div>` : ""}
         </div>
 
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;font-size:13px;font-weight:600;color:var(--ink)">
-          Date received
-          <input type="date" id="blankReceivedDate" value="${today}" autocomplete="off"
-                 style="padding:5px 8px;border:1px solid var(--card-line);border-radius:5px;font-size:13px;background:#fff;color:var(--ink)">
-        </div>
+        <div style="margin-bottom:12px;">${whenFieldHtml_("blankReceivedWhen", "When did they arrive?")}</div>
 
         <div id="brTable">${buildTable(mode)}</div>
 
@@ -634,7 +638,8 @@ function showBlankReceiveModal(title, orders){
     const finish = (result) => { document.body.removeChild(overlay); resolve(result); };
 
     overlay.querySelector("#brConfirm").addEventListener("click", () => {
-      const receivedDate = overlay.querySelector("#blankReceivedDate").value;
+      const at = whenFrom_(overlay, "blankReceivedWhen");
+      if(!at) return;
       let anyOther = false;
       // Only the ticked lines are received (migrations/0039 — partial receive).
       const incl = (i) => { const el = overlay.querySelector(`.br-incl[data-idx="${i}"]`); return !el || el.checked; };
@@ -649,7 +654,7 @@ function showBlankReceiveModal(title, orders){
       }).filter(Boolean);
       const items = rows.map((r, i) => incl(i) ? { orderId: r.orderId, itemId: r.sheetRow } : null).filter(Boolean);
       if(!items.length){ showToast("Tick at least one line to receive.", true); return; }
-      finish({ receivedDate, condition: anyOther ? "Other" : "Good", itemConditions, items });
+      finish({ at, condition: anyOther ? "Other" : "Good", itemConditions, items });
     });
     overlay.querySelector("#brCancel").addEventListener("click", () => finish(null));
     // click outside does not close — use Cancel or Submit
@@ -1883,12 +1888,13 @@ function canCompleteOrder(o){
   return !!o && !o.voidedAt && !o.completedAt && !!o.deliveredAt && !!o.paid && (o.items || []).some(it => !it.cancelDate);
 }
 // Close out (or reopen) orders, then repaint the list — completed ones drop out of the default view.
-async function completeOrders(orgId, orderIds, completed){
+// `at`: when it was completed (asked for when completing — see completeOrdersAsk_); reopening needs no date.
+async function completeOrders(orgId, orderIds, completed, at){
   if(!adminKey) adminKey = (await adminLogin()) || "";
   if(!adminKey) return false;
   try{
     const res = await fetch("/api/orders", { method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ action: "setOrderCompleted", org: orgId, orderIds, completed, key: adminKey }) });
+      body: JSON.stringify({ action: "setOrderCompleted", org: orgId, orderIds, completed, ...(at ? { at } : {}), key: adminKey }) });
     const d = await res.json();
     if(!res.ok || d.status === "error"){
       if(d && d.message === "Unauthorized") clearAdminAuth();
@@ -1903,16 +1909,25 @@ async function completeOrders(orgId, orderIds, completed){
     return true;
   }catch(e){ showToast("Could not reach the server.", true); return false; }
 }
-// After orders are set to delivered: offer to complete the ones that can be (paid in full).
-async function offerToComplete(orgId, orderIds){
+// The order row's Mark completed: asks when (default now), then completes.
+async function completeOrdersAsk_(orgId, orderIds){
+  const at = await askWhen_(`Mark ${orderIds.length === 1 ? "order " + orderIds[0] : orderIds.length + " orders"} as completed?`, { whenLabel: "When was it completed?" });
+  if(at) return completeOrders(orgId, orderIds, true, at);
+  return false;
+}
+// After orders are set to delivered: offer to complete the ones that can be (paid in full) — dated when they were
+// delivered unless changed.
+async function offerToComplete(orgId, orderIds, deliveredAt){
   const cache = (window._ordersCache && window._ordersCache[orgId]) || [];
   const delivered = orderIds.map(id => cache.find(o => o.orderId === id)).filter(o => o && o.deliveredAt && !o.completedAt && !o.voidedAt);
   const ready = delivered.filter(canCompleteOrder);
   const waiting = delivered.filter(o => !canCompleteOrder(o));
   if(ready.length){
     const names = ready.slice(0, 6).map(o => o.orderId).join(", ") + (ready.length > 6 ? ", +" + (ready.length - 6) + " more" : "");
-    if(await askConfirm_(`Mark ${ready.length} delivered order${ready.length === 1 ? "" : "s"} as completed?\n\n${names}\n\nPaid in full. Completed orders are hidden from this list unless "Include completed" is ticked (you can reopen them).`)){
-      await completeOrders(orgId, ready.map(o => o.orderId), true);
+    const at = await askWhen_(`Mark ${ready.length} delivered order${ready.length === 1 ? "" : "s"} as completed?\n\n${names}\n\nPaid in full. Completed orders are hidden from this list unless "Include completed" is ticked (you can reopen them).`,
+      { whenLabel: "When was it completed?", whenValue: deliveredAt || undefined });
+    if(at){
+      await completeOrders(orgId, ready.map(o => o.orderId), true, at);
       return;
     }
   }
@@ -1985,11 +2000,14 @@ async function bulkSetFulfillmentStage(orgId, stage){
     if(!details) return;
     extraFields = details;
   } else if(stage === "shipped"){
-    const tn = await showTrackingModal("Mark " + orderIds.length + " order" + (orderIds.length === 1 ? "" : "s") + " as shipped", { required: false, submitLabel: "Mark shipped" });
-    if(tn === undefined) return; // cancelled
-    if(tn) extraFields = { trackingNumber: tn };
+    const r = await showTrackingModal("Mark " + orderIds.length + " order" + (orderIds.length === 1 ? "" : "s") + " as shipped", { required: false, submitLabel: "Mark shipped", when: true });
+    if(r === undefined) return; // cancelled
+    extraFields = { at: r.at, ...(r.tn ? { trackingNumber: r.tn } : {}) };
   } else {
-    if(!await askConfirm_("Mark " + orderIds.length + " order" + (orderIds.length === 1 ? "" : "s") + " as " + label + "?")) return;
+    // One date and time for all of them (an order it doesn't fit is skipped, saying why).
+    const at = await askWhen_("Mark " + orderIds.length + " order" + (orderIds.length === 1 ? "" : "s") + " as " + label + "?");
+    if(!at) return;
+    extraFields = { at };
   }
 
   if(!adminKey) adminKey = (await adminLogin()) || "";
@@ -2007,15 +2025,17 @@ async function bulkSetFulfillmentStage(orgId, stage){
       return;
     }
     let msg = "Updated " + data.updated;
-    if(data.skipped) msg += ", " + data.skipped + " already set";
-    if(data.errors && data.errors.length) msg += ", " + data.errors.length + " error" + (data.errors.length === 1 ? "" : "s");
-    showToast(msg + ".");
+    const errs = data.errors || [];
+    if(data.skipped && !errs.length) msg += ", " + data.skipped + " already set";
+    if(errs.length) msg += " — skipped " + errs.length + ": " + errs.slice(0, 3).join("; ") + (errs.length > 3 ? "; …" : "");
+    showToast(msg + ".", !data.updated && errs.length > 0);
     const orgObj = (adminOrgs || []).find(x => x.orgId === orgId);
     // Blank stages are per-line-item now (migrations/0039) + roll up to order summaries, so re-fetch
     // rather than patching cells in place (a partial receive mustn't flip the whole-order cell).
     if(/^blank/.test(stage)){ if(orgObj) refreshOrdersInPlace_(orgObj); return; }
     if(orgObj){
-      const errorIds = new Set((data.errors || []).map(e => e.orderId));
+      // Errors read "<orderId>: why".
+      const errorIds = new Set((data.errors || []).map(e => String(e.orderId || e).split(":")[0].trim()));
       const byRow = {};
       if(stage === "blankReceived" && Array.isArray(extraFields.itemConditions)){
         extraFields.itemConditions.forEach(ic => { byRow[ic.sheetRow] = ic; });
@@ -2023,7 +2043,7 @@ async function bulkSetFulfillmentStage(orgId, stage){
       let anyMiss = false;
       for(const id of orderIds){
         if(errorIds.has(id)) continue;
-        const updates = { [FULFILLMENT_FIELD[stage]]: data.timestamp || new Date().toISOString() };
+        const updates = { [FULFILLMENT_FIELD[stage]]: extraFields.at || data.timestamp || new Date().toISOString() };
         if(stage === "shipped" && extraFields.trackingNumber) updates.trackingNumber = extraFields.trackingNumber;
         if(stage === "blankReceived"){
           updates.blankCondition = extraFields.condition || "Good";
@@ -2039,7 +2059,7 @@ async function bulkSetFulfillmentStage(orgId, stage){
         if(!applyOrderUpdate(orgId, id, updates, orgObj)) anyMiss = true;
       }
       if(anyMiss) refreshOrdersInPlace_(orgObj);
-      if(stage === "delivered") await offerToComplete(orgId, orderIds.filter(id => !errorIds.has(id)));
+      if(stage === "delivered") await offerToComplete(orgId, orderIds.filter(id => !errorIds.has(id)), extraFields.at);
     }
   }catch(e){
     showToast("Could not reach the server.", true);
@@ -2062,7 +2082,8 @@ async function bulkCancelLineItems(orgId){
   if(!sheetRows.length){ showToast("No cancellable items in selection (blank already ordered or all already cancelled).", true); return; }
   const ans = await confirmModal_({ title: "Cancel " + sheetRows.length + " item" + (sheetRows.length === 1 ? "" : "s") + "?",
     text: "Across " + orderIds.length + " order" + (orderIds.length === 1 ? "" : "s") + ". Customers are told by email. This can't be undone.",
-    reason: "optional", reasonLabel: "Reason (applies to all, optional)", confirmLabel: "Cancel items", cancelLabel: "Keep them", danger: true });
+    reason: "optional", reasonLabel: "Reason (applies to all, optional)", confirmLabel: "Cancel items", cancelLabel: "Keep them", danger: true,
+    when: { label: "When were they cancelled?" } });
   if(!ans.ok) return;
   const reason = ans.reason;
   if(!adminKey) adminKey = (await adminLogin()) || "";
@@ -2071,7 +2092,7 @@ async function bulkCancelLineItems(orgId){
     const res = await fetch("/api/orders", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({action:"bulkCancelLineItems", org:orgId, sheetRows, reason: reason||"", key:adminKey})
+      body: JSON.stringify({action:"bulkCancelLineItems", org:orgId, sheetRows, reason: reason||"", at: ans.at, key:adminKey})
     });
     const data = await res.json();
     if(!res.ok || data.status === "error"){
@@ -3353,7 +3374,8 @@ async function bulkSetDueDate(orgId){
 // ambiguity even when an order has multiple line items of the same product.
 async function cancelLineItem(orgId, sheetRow, itemName, lineTotal){
   const ans = await confirmModal_({ title: "Cancel this item?", text: itemName + " ($" + Number(lineTotal).toFixed(2) + "). This can't be undone.",
-    reason: "optional", reasonLabel: "Reason (optional, e.g. “duplicate order — same as ORD-XXXXXXX”)", confirmLabel: "Cancel item", cancelLabel: "Keep it", danger: true });
+    reason: "optional", reasonLabel: "Reason (optional, e.g. “duplicate order — same as ORD-XXXXXXX”)", confirmLabel: "Cancel item", cancelLabel: "Keep it", danger: true,
+    when: { label: "When was it cancelled?" } });
   if(!ans.ok) return;
   const reason = ans.reason;
   if(!adminKey) adminKey = (await adminLogin()) || "";
@@ -3362,7 +3384,7 @@ async function cancelLineItem(orgId, sheetRow, itemName, lineTotal){
     const res = await fetch("/api/orders", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({action:"cancelLineItem", org:orgId, sheetRow:Number(sheetRow), reason: reason || "", key:adminKey})
+      body: JSON.stringify({action:"cancelLineItem", org:orgId, sheetRow:Number(sheetRow), reason: reason || "", at: ans.at, key:adminKey})
     });
     const data = await res.json();
     if(!res.ok || data.status === "error"){
@@ -3394,17 +3416,31 @@ async function setLineItemRefund(orgId, sheetRow, defaultAmount, paymentMethod){
   } else if(paymentMethod === "Check"){
     prompt_ += "\n\nCheck payment — mail a check first.";
   }
-  const input = prompt(prompt_, Number(defaultAmount).toFixed(2));
-  if(input === null) return;
-  const amount = parseFloat(input);
-  if(!isFinite(amount) || amount < 0){ showToast("Invalid amount.", true); return; }
+  // Amount and when it was refunded (date and time, default now) — it used to be a typed prompt stamped "now".
+  const got = await new Promise(resolve => {
+    const { ov, close } = inventoryModal_("Record refund", `<div style="font-size:13px;white-space:pre-line;color:#444;">${escapeHtml(prompt_)}</div>
+      <label for="lrAmount" style="display:block;font-size:13px;font-weight:600;margin:12px 0 4px;">Amount refunded ($)</label>
+      <input type="number" id="lrAmount" min="0" step="0.01" value="${Number(defaultAmount).toFixed(2)}" style="font:inherit;font-size:14px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;width:140px;">
+      ${whenFieldHtml_("lrWhen", "When was it refunded?")}
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;"><button type="button" class="admin-btn admin-btn-secondary" id="lrCancel">Cancel</button><button type="button" class="admin-btn" id="lrOk">Record refund</button></div>`, 460,
+      { onClose: () => resolve(null) });
+    ov.querySelector("#lrCancel").onclick = () => { close(); resolve(null); };
+    ov.querySelector("#lrOk").onclick = () => {
+      const amount = parseFloat(ov.querySelector("#lrAmount").value);
+      if(!isFinite(amount) || amount < 0){ showToast("Invalid amount.", true); return; }
+      const at = whenFrom_(ov, "lrWhen"); if(!at) return;
+      close(); resolve({ amount, at });
+    };
+  });
+  if(!got) return;
+  const amount = got.amount;
   if(!adminKey) adminKey = (await adminLogin()) || "";
   if(!adminKey) return;
   try{
     const res = await fetch("/api/orders", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({action:"setLineItemRefund", org:orgId, sheetRow:Number(sheetRow), refundAmount:amount, key:adminKey})
+      body: JSON.stringify({action:"setLineItemRefund", org:orgId, sheetRow:Number(sheetRow), refundAmount:amount, at: got.at, key:adminKey})
     });
     const data = await res.json();
     if(!res.ok || data.status === "error"){
@@ -3481,12 +3517,13 @@ function adminActionCell(org, o){
   const hasAddr = o.shippingAddress && o.shippingAddress.line1;
   const shipBtn = `<button class="admin-btn" ${dataAttrs} onclick="setShippingInfo(this.dataset.org,this.dataset.order)" style="margin-top:4px;">${hasAddr ? "Edit shipping" : "Set shipping"}</button>`;
   const editBtn = `<button class="admin-btn" ${dataAttrs} onclick="editOrder(this.dataset.org,this.dataset.order)" style="margin-top:4px;">Edit items</button>`;
+  const datesBtn = `<button class="admin-btn" ${dataAttrs} onclick="showOrderDates_(this.dataset.org,this.dataset.order)" title="Every date on this order — change or clear any of them" style="margin-top:4px;">Dates…</button>`;
   const completeBtn = o.completedAt
     ? `<div class="mono" style="font-size:11px;color:var(--ink-soft);margin-top:4px;">Completed ${escapeHtml(new Date(o.completedAt).toLocaleDateString())}</div><button class="admin-btn" ${dataAttrs} onclick="completeOrders(this.dataset.org, [this.dataset.order], false)" style="margin-top:4px;">Reopen</button>`
     : canCompleteOrder(o)
-      ? `<button class="admin-btn" ${dataAttrs} onclick="completeOrders(this.dataset.org, [this.dataset.order], true)" title="Delivered and paid in full — close it out" style="margin-top:4px;background:#166534;color:#fff;border-color:#166534;">Mark completed</button>`
+      ? `<button class="admin-btn" ${dataAttrs} onclick="completeOrdersAsk_(this.dataset.org, [this.dataset.order])" title="Delivered and paid in full — close it out" style="margin-top:4px;background:#166534;color:#fff;border-color:#166534;">Mark completed</button>`
       : "";
-  return stageEl + completeBtn + emailBtn + invoiceCell_(org, o) + shipBtn + editBtn + paymentsBtn + deleteBtn;
+  return stageEl + completeBtn + emailBtn + invoiceCell_(org, o) + shipBtn + editBtn + datesBtn + paymentsBtn + deleteBtn;
 }
 
 // The invoice link emailed for an order (migrations/0053): a button to send it — offered while
@@ -4758,7 +4795,8 @@ function renderOrderBreakdown(orders, blankLinks, blanks){
 // from Stripe's automatic webhook path on purpose: too many payment
 // methods need a person to actually verify money arrived first.
 async function markOrderPaid(orgId, orderId){
-  if(!await askConfirm_("Mark order " + orderId + " as paid? This will email the customer confirming their order.")) return;
+  const at = await askWhen_("Mark order " + orderId + " as paid? This will email the customer confirming their order.", { whenLabel: "When was it paid?" });
+  if(!at) return;
   if(!adminKey){
     adminKey = (await adminLogin()) || "";
   }
@@ -4767,7 +4805,7 @@ async function markOrderPaid(orgId, orderId){
     const res = await fetch("/api/orders", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({action: "markPaidManual", org: orgId, orderId: orderId, key: adminKey})
+      body: JSON.stringify({action: "markPaidManual", org: orgId, orderId: orderId, at, key: adminKey})
     });
     const data = await res.json();
     if(!res.ok || data.status === "error"){
@@ -4837,11 +4875,13 @@ async function setFulfillmentStage(orgId, orderId, stage){
     if(!details) return;
     extraFields = details;
   } else if(stage === "shipped"){
-    const tn = await showTrackingModal("Mark shipped — " + orderId, { required: false, submitLabel: "Mark shipped" });
-    if(tn === undefined) return;
-    if(tn) extraFields = { trackingNumber: tn };
+    const r = await showTrackingModal("Mark shipped — " + orderId, { required: false, submitLabel: "Mark shipped", when: true });
+    if(r === undefined) return;
+    extraFields = { at: r.at, ...(r.tn ? { trackingNumber: r.tn } : {}) };
   } else {
-    if(!await askConfirm_("Mark order " + orderId + " as " + label + "?")) return;
+    const at = await askWhen_("Mark order " + orderId + " as " + label + "?");
+    if(!at) return;
+    extraFields = { at };
   }
 
   if(!adminKey){
@@ -4882,7 +4922,7 @@ async function setFulfillmentStage(orgId, orderId, stage){
       if(!applyOrderUpdate(orgId, orderId, updates, orgObj)){
         refreshOrdersInPlace_(orgObj);
       }
-      if(stage === "delivered") await offerToComplete(orgId, [orderId]);
+      if(stage === "delivered") await offerToComplete(orgId, [orderId], extraFields.at);
     }
   }catch(e){
     showToast("Could not reach the server.", true);
@@ -4974,8 +5014,8 @@ async function showPaymentsModal(orgId, orderId) {
               <input id="pmAmount" type="number" min="0.01" step="0.01" placeholder="${balanceDue > 0.005 ? balanceDue.toFixed(2) : "0.00"}" style="width:100px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
             </div>
             <div>
-              <label style="display:block;font-size:12px;margin-bottom:3px;">Date received</label>
-              <input id="pmDate" type="date" value="${new Date().toLocaleDateString("en-CA")}" max="${new Date().toLocaleDateString("en-CA")}" style="padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+              <label style="display:block;font-size:12px;margin-bottom:3px;">When received</label>
+              <input id="pmDate" type="datetime-local" value="${localDateTime_()}" data-shown="${localDateTime_()}" data-iso="" max="${localDateTime_(Date.now() + 60000)}" style="padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
             </div>
             <div>
               <label style="display:block;font-size:12px;margin-bottom:3px;">Paid by</label>
@@ -5009,8 +5049,8 @@ async function showPaymentsModal(orgId, orderId) {
               <input id="pmRefundAmount" type="number" min="0.01" step="0.01" placeholder="0.00" style="width:100px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
             </div>
             <div>
-              <label style="display:block;font-size:12px;margin-bottom:3px;">Date</label>
-              <input id="pmRefundDate" type="date" value="${new Date().toLocaleDateString("en-CA")}" max="${new Date().toLocaleDateString("en-CA")}" style="padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
+              <label style="display:block;font-size:12px;margin-bottom:3px;">When refunded</label>
+              <input id="pmRefundDate" type="datetime-local" value="${localDateTime_()}" data-shown="${localDateTime_()}" data-iso="" max="${localDateTime_(Date.now() + 60000)}" style="padding:5px 8px;border:1px solid #ccc;border-radius:4px;font-size:13px;">
             </div>
             <div>
               <label style="display:block;font-size:12px;margin-bottom:3px;">Refunded by</label>
@@ -5101,11 +5141,12 @@ async function showPaymentsModal(orgId, orderId) {
 
       // Correct the date a (non-Stripe) entry's money was received
       window.pmSetPaymentDate = async (idStr, current) => {
-        const date = prompt("Date this money was received (YYYY-MM-DD):", current || "");
-        if (date === null) return;
+        const pay = (order.payments || []).find(x => String(x.id) === String(idStr));
+        const at = await askWhen_("Change when this money was received?", { whenLabel: "When was it received?", whenValue: pay && pay.receivedAt ? pay.receivedAt : undefined });
+        if (!at) return;
         try {
           const r = await fetch("/api/orders", {method:"POST",headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({action:"setPaymentDate", key:adminKey, paymentId:Number(idStr), orderId, org: orgId, date: date.trim()})});
+            body: JSON.stringify({action:"setPaymentDate", key:adminKey, paymentId:Number(idStr), orderId, org: orgId, at})});
           const d = await r.json().catch(() => ({ status: "error", message: "Server error (" + r.status + ")" }));
           if (!r.ok || d.status === "error") { showToast("Date not changed: " + ((d&&d.message)||"Unknown"), true); return; }
           const updated = Object.assign({}, order, { payments: d.payments || order.payments });
@@ -5143,6 +5184,8 @@ async function showPaymentsModal(orgId, orderId) {
         errEl.textContent = "";
         const amount = parseFloat(amtEl.value);
         if (!amount || amount <= 0) { errEl.textContent = "Enter a valid amount."; return; }
+        const paidWhen = readWhen_(ov.querySelector("#pmDate"));
+        if (paidWhen.error) { errEl.textContent = paidWhen.error; return; }
 
         const effectiveTotalNow = Number(order.effectiveTotal) || 0;
         const newReceived = (Number(order.amountReceived) || 0) + amount;
@@ -5153,7 +5196,7 @@ async function showPaymentsModal(orgId, orderId) {
             const r = await fetch("/api/orders", {method:"POST",headers:{"Content-Type":"application/json"},
               body: JSON.stringify({action:"addPayment", key:adminKey, orderId, amount,
                 method: ov.querySelector("#pmMethod").value, reference: ov.querySelector("#pmReference").value.trim(),
-                date: ov.querySelector("#pmDate").value,
+                at: paidWhen.at,
                 accountId: Number((ov.querySelector("#pmAccount") || {}).value) || undefined,
                 note: noteEl.value.trim(), discountRemainder: !!discountRemainder, discountNote: discountNote || ""})});
             const d = await r.json();
@@ -5193,12 +5236,14 @@ async function showPaymentsModal(orgId, orderId) {
         if (!amount || amount <= 0) { errEl.textContent = "Enter the refund amount."; return; }
         const shippingAmount = parseFloat(ov.querySelector("#pmRefundShipping").value) || 0;
         if (shippingAmount < 0 || shippingAmount > amount + 0.0001) { errEl.textContent = "The shipping part must be between $0 and the refund amount."; return; }
+        const refundWhen = readWhen_(ov.querySelector("#pmRefundDate"));
+        if (refundWhen.error) { errEl.textContent = refundWhen.error; return; }
         if (!await askConfirm_(`Record a $${amount.toFixed(2)} refund on ${orderId}? This is added to the books as money returned.`)) return;
         try {
           const r = await fetch("/api/orders", {method:"POST",headers:{"Content-Type":"application/json"},
             body: JSON.stringify({action:"recordRefund", key:adminKey, orderId, amount,
               method: ov.querySelector("#pmRefundMethod").value, reference: ov.querySelector("#pmRefundReference").value.trim(),
-              date: ov.querySelector("#pmRefundDate").value, shippingAmount,
+              at: refundWhen.at, shippingAmount,
               accountId: Number((ov.querySelector("#pmRefundAccount") || {}).value) || undefined,
               note: ov.querySelector("#pmRefundNote").value.trim() || "Refund"})});
           const d = await r.json();
@@ -5300,126 +5345,61 @@ function updateOrderTableRow(orgId, orderId, updated) {
   if(window._refreshOrderFinancials) window._refreshOrderFinancials();
 }
 
-async function editOrderDate(btn) {
-  const orgId = btn.dataset.org;
-  const orderId = btn.dataset.order;
-  const cache = (window._ordersCache && window._ordersCache[orgId]) || [];
-  const order = cache.find(o => o.orderId === orderId);
-  const currentIso = order ? order.placedAt : null;
-  const currentDate = currentIso ? currentIso.slice(0, 10) : new Date().toISOString().slice(0, 10);
-
-  const overlay = document.createElement("div");
-  overlay.className = "admin-pass-overlay";
-  overlay.innerHTML = `
-    <form class="admin-pass-box" style="max-width:340px;">
-      <label style="font-weight:600;font-size:15px;margin-bottom:14px;display:block;">Edit order date</label>
-      <label style="font-size:13px;font-weight:600;margin-bottom:4px;display:block;">Order ${escapeHtml(orderId)}</label>
-      <input type="date" id="editDateInput" value="${escapeHtml(currentDate)}"
-             style="width:100%;padding:8px 10px;border:1px solid var(--border,#ccc);border-radius:5px;font-size:14px;margin-bottom:14px;box-sizing:border-box;background:var(--surface,#fff);color:var(--ink,#111);">
-      <div id="editDateErr" style="color:#b03a2e;font-size:13px;margin-bottom:8px;display:none;"></div>
-      <div class="admin-pass-actions">
-        <button type="button" class="admin-pass-cancel">Cancel</button>
-        <button type="submit" class="admin-pass-submit">Save</button>
-      </div>
-    </form>
-  `;
-  document.body.appendChild(overlay);
-  const input = overlay.querySelector("#editDateInput");
-  const errEl = overlay.querySelector("#editDateErr");
-  const form = overlay.querySelector("form");
-
-  const close = () => document.body.removeChild(overlay);
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const newDate = input.value;
-    if (!newDate) { errEl.textContent = "Please select a date."; errEl.style.display = ""; return; }
-    if (!adminKey) adminKey = (await adminLogin()) || "";
-    if (!adminKey) { close(); return; }
-    const submitBtn = form.querySelector(".admin-pass-submit");
-    submitBtn.disabled = true;
-    submitBtn.textContent = "Saving…";
-    try {
-      const r = await fetch("/api/orders", {
-        method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ action: "updateOrderDate", key: adminKey, org: orgId, orderId, date: newDate }),
-      });
-      const d = await r.json();
-      if (!r.ok || d.status === "error") {
-        errEl.textContent = "Could not update date: " + ((d && d.message) || "Unknown error");
-        errEl.style.display = "";
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Save";
-        return;
-      }
-      const newPlacedAt = d.placedAt;
-      if (order) order.placedAt = newPlacedAt;
-      const displayDate = new Date(newPlacedAt).toLocaleDateString();
-      // Update all date cells for this order (multi-item rows each have a date td)
-      document.querySelectorAll(`td[data-date-td][data-order="${CSS.escape(orderId)}"]`).forEach(cell => {
-        const editBtn = cell.querySelector("button");
-        cell.textContent = displayDate + " ";
-        if (editBtn) cell.appendChild(editBtn);
-      });
-      refreshOrderCard_(orgId, orderId);
-      close();
-    } catch (err) {
-      errEl.textContent = "Network error.";
-      errEl.style.display = "";
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Save";
-    }
-  });
-
-  overlay.querySelector(".admin-pass-cancel").addEventListener("click", close);
-  // click outside does not close — use Cancel or Save
-  input.focus();
-}
-
-// Set or clear an order's optional due date (migrations/0038), which prioritizes the run queues.
-async function editOrderDueDate(btn) {
-  const orgId = btn.dataset.org, orderId = btn.dataset.order;
-  const cache = (window._ordersCache && window._ordersCache[orgId]) || [];
-  const order = cache.find(o => o.orderId === orderId);
-  const current = order && order.dueDate ? order.dueDate.slice(0, 10) : "";
-  const overlay = document.createElement("div");
-  overlay.className = "admin-pass-overlay";
-  overlay.innerHTML = `
-    <form class="admin-pass-box" style="max-width:360px;">
-      <label style="font-weight:600;font-size:15px;margin-bottom:6px;display:block;">Due date — order ${escapeHtml(orderId)}</label>
-      <div style="font-size:12px;color:var(--ink-soft,#666);margin-bottom:12px;">Optional. Soonest-due orders run first in Run Order and Run Transfer Sheets. Clear it to remove the due date.</div>
-      <input type="date" id="dueInput" value="${escapeHtml(current)}" style="width:100%;padding:8px 10px;border:1px solid var(--border,#ccc);border-radius:5px;font-size:14px;margin-bottom:14px;box-sizing:border-box;background:var(--surface,#fff);color:var(--ink,#111);">
-      <div id="dueErr" style="color:#b03a2e;font-size:13px;margin-bottom:8px;display:none;"></div>
-      <div class="admin-pass-actions" style="justify-content:space-between;">
-        <button type="button" class="admin-pass-cancel">Cancel</button>
-        <span><button type="button" id="dueClear" style="padding:8px 12px;margin-right:6px;border:1px solid #ccc;border-radius:5px;background:var(--surface,#fff);cursor:pointer;">Clear</button><button type="submit" class="admin-pass-submit">Save</button></span>
-      </div>
-    </form>`;
-  document.body.appendChild(overlay);
-  const input = overlay.querySelector("#dueInput"), errEl = overlay.querySelector("#dueErr"), form = overlay.querySelector("form");
-  const close = () => document.body.removeChild(overlay);
-  const save = async (dueDate) => {
-    if (!adminKey) adminKey = (await adminLogin()) || "";
-    if (!adminKey) { close(); return; }
-    const btnEl = form.querySelector(".admin-pass-submit"); btnEl.disabled = true; btnEl.textContent = "Saving…";
-    try {
-      const r = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "setOrderDueDate", key: adminKey, org: orgId, orderId, dueDate }) });
-      const d = await r.json();
-      if (!r.ok || d.status === "error") { errEl.textContent = (d && d.message) || "Could not save."; errEl.style.display = ""; btnEl.disabled = false; btnEl.textContent = "Save"; return; }
-      if (order) order.dueDate = d.dueDate || "";
-      const disp = d.dueDate ? new Date(d.dueDate + "T00:00:00").toLocaleDateString() : "<span style='color:var(--ink-soft,#999);'>—</span>";
-      document.querySelectorAll(`td[data-due-td][data-order="${CSS.escape(orderId)}"]`).forEach(cell => {
-        const editBtn = cell.querySelector("button"); cell.innerHTML = disp + " "; if (editBtn) cell.appendChild(editBtn);
-      });
-      refreshOrderCard_(orgId, orderId);
-      close();
-    } catch (e) { errEl.textContent = "Network error."; errEl.style.display = ""; btnEl.disabled = false; btnEl.textContent = "Save"; }
+// The order's Dates… window (2026-10): every date on the order in one place — placed, due, blank ordered / received,
+// digitized, design approved, manufactured, QA & packed, shipped, delivered, completed — each a date-and-time box
+// (empty = not done) with ✕ to clear, Save / Cancel. Only the changed ones are sent (setOrderDates); the server
+// refuses dates out of order, in the future, or moving money / cost of goods into or out of a closed month, and
+// audits each change. Paid is the payments' own date (Payments…). The ✎ by the order and due dates open it too.
+const ORDER_DATE_ROWS_ = [["placedAt", "Order date"], ["blankOrderedAt", "Blank ordered"], ["blankReceivedAt", "Blank received"], ["digitizingCompleteAt", "Digitizing complete"],
+  ["designApprovedAt", "Design approved"], ["manufacturedAt", "Manufactured"], ["qaPackedAt", "QA and packed"], ["shippedAt", "Shipped"], ["deliveredAt", "Delivered"], ["completedAt", "Completed"]];
+async function editOrderDate(btn){ return showOrderDates_(btn.dataset.org, btn.dataset.order); }
+async function editOrderDueDate(btn){ return showOrderDates_(btn.dataset.org, btn.dataset.order); }
+async function showOrderDates_(orgId, orderId){
+  const caches = window._ordersCache || {};
+  const o = (caches[orgId] || []).find(x => x.orderId === orderId) || Object.values(caches).flat().find(x => x && x.orderId === orderId);
+  if(!o){ showToast("Order not found — refresh the list.", true); return; }
+  const row = (col, label) => {
+    const v = o[col] || "", fixed = col === "placedAt" || (col === "manufacturedAt" && !v);
+    return `<tr data-date-row="${col}"><td style="padding:5px 8px 5px 0;font-size:13px;font-weight:600;white-space:nowrap;">${escapeHtml(label)}</td>
+      <td style="padding:5px 0;"><input type="datetime-local" class="od-input" data-col="${col}" value="${escapeHtml(v ? localDateTime_(v) : "")}" data-shown="${escapeHtml(v ? localDateTime_(v) : "")}"
+        max="${localDateTime_(Date.now() + 60000)}" ${col === "manufacturedAt" && !v ? "disabled title=\"Set by marking the order made\"" : ""} style="font:inherit;font-size:13px;padding:4px 6px;border:1px solid #ccc;border-radius:4px;">
+        ${fixed ? "" : `<button type="button" class="od-clear" data-col="${col}" title="Clear — not done" style="background:none;border:none;color:#b03a2e;cursor:pointer;font-size:13px;">✕</button>`}</td></tr>`;
   };
-  form.addEventListener("submit", (e) => { e.preventDefault(); if (!input.value) { errEl.textContent = "Pick a date, or use Clear."; errEl.style.display = ""; return; } save(input.value); });
-  overlay.querySelector("#dueClear").addEventListener("click", () => save(""));
-  overlay.querySelector(".admin-pass-cancel").addEventListener("click", close);
-  input.focus();
+  const { ov, close } = inventoryModal_(`Dates — ${escapeHtml(orderId)}`, `
+    <div style="font-size:12px;color:#666;margin-bottom:8px;">When each step happened, in your time. Change any of them (empty = not done yet). Dates have to stay in order, and the order date and Manufactured can't move into or out of a closed month.</div>
+    <table style="border-collapse:collapse;">${ORDER_DATE_ROWS_.map(([c, l]) => row(c, l)).join("")}
+      <tr><td style="padding:5px 8px 5px 0;font-size:13px;font-weight:600;">Due</td><td style="padding:5px 0;"><input type="date" class="od-due" value="${escapeHtml(o.dueDate || "")}" style="font:inherit;font-size:13px;padding:4px 6px;border:1px solid #ccc;border-radius:4px;">
+        <button type="button" class="od-due-clear" title="No due date" style="background:none;border:none;color:#b03a2e;cursor:pointer;font-size:13px;">✕</button></td></tr>
+      <tr><td style="padding:5px 8px 5px 0;font-size:13px;font-weight:600;">Paid</td><td style="padding:5px 0;font-size:13px;color:#555;">${o.paidAt ? escapeHtml(new Date(o.paidAt).toLocaleString()) : "—"} <span style="font-size:12px;color:#888;">(each payment's own date — Payments…)</span></td></tr>
+    </table>
+    <div id="odErr" style="color:#b03a2e;font-size:13px;min-height:18px;margin-top:8px;"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;"><button type="button" class="admin-btn admin-btn-secondary" id="odCancel">Cancel</button><button type="button" class="admin-btn" id="odSave">Save</button></div>`, 520);
+  ov.querySelectorAll(".od-clear").forEach(b => b.onclick = () => { ov.querySelector(`.od-input[data-col="${b.dataset.col}"]`).value = ""; });
+  ov.querySelector(".od-due-clear").onclick = () => { ov.querySelector(".od-due").value = ""; };
+  ov.querySelector("#odCancel").onclick = close;
+  ov.querySelector("#odSave").onclick = async () => {
+    const dates = {}, err = ov.querySelector("#odErr");
+    for (const inp of ov.querySelectorAll(".od-input")) {
+      if (inp.value === inp.dataset.shown) continue;   // unchanged (the box only shows minutes)
+      if (!inp.value) { dates[inp.dataset.col] = null; continue; }
+      const d = new Date(inp.value);
+      if (isNaN(d)) { err.textContent = "One of the dates isn't valid."; return; }
+      dates[inp.dataset.col] = d.toISOString();
+    }
+    const due = ov.querySelector(".od-due").value;
+    const body = { action: "setOrderDates", org: orgId, orderId, dates };
+    if ((due || "") !== (o.dueDate || "")) body.dueDate = due;
+    if (!Object.keys(dates).length && !("dueDate" in body)) { close(); return; }
+    const btn = ov.querySelector("#odSave"); btn.disabled = true; err.textContent = "";
+    try {
+      const r = await hoopApi_(body);
+      close();
+      showToast(`Dates saved for ${orderId}.`);
+      const orgObj = (adminOrgs || []).find(x => x.orgId === orgId);
+      if (orgObj) refreshOrdersInPlace_(orgObj);
+      return r;
+    } catch (e) { err.textContent = e.message || "Couldn't save the dates."; btn.disabled = false; }
+  };
 }
 
 // browser's view of "paid" could be stale). Exists because an order paid
@@ -5789,7 +5769,7 @@ function showLocalSaleModal(products, blanks){
 
         <div style="margin:4px 0 10px;">
           <label style="font-size:14px;display:block;margin-bottom:4px;">Sale date</label>
-          <input type="date" id="lsDate" value="${new Date().toISOString().slice(0, 10)}" style="font-size:14px;padding:4px 6px;border:1px solid #ccc;border-radius:4px;width:160px;">
+          <input type="datetime-local" id="lsDate" value="${localDateTime_()}" data-shown="${localDateTime_()}" data-iso="" max="${localDateTime_(Date.now() + 60000)}" style="font-size:14px;padding:4px 6px;border:1px solid #ccc;border-radius:4px;width:200px;">
         </div>
 
         <div style="display:flex;gap:20px;margin:4px 0 14px;">
@@ -6072,7 +6052,7 @@ function showLocalSaleModal(products, blanks){
         ...(shipping ? { shippingCost: shipping.cost, shippingMethod: shipping.method } : {}),
         paid:      overlay.querySelector("#lsPaid").checked,
         delivered: overlay.querySelector("#lsDelivered").checked,
-        placedAt:  overlay.querySelector("#lsDate").value || null,
+        placedAt:  (readWhen_(overlay.querySelector("#lsDate")).at) || null,   // when the sale happened — also when it was paid / handed over
         sendInvoice: wantsInvoice,
       });
     });
@@ -10194,15 +10174,19 @@ async function showStockModal(orgId, productId, productName, pricingMode, sizePr
       ov.querySelectorAll(".fsMake").forEach(btn => btn.onclick = async () => {
         const tr = btn.closest("tr"), qty = parseInt(tr.querySelector(".fsMakeQty").value, 10);
         if (!(qty > 0)) { err.textContent = "Enter how many were made."; return; }
+        const at = await askWhen_(`Make ${qty} for stock?`, { whenLabel: "When were they made?" });
+        if (!at) return;
         btn.disabled = true;
-        try { const r = await hoopApi_({ action: "makeForStock", org: orgId, productId, size: tr.dataset.size, qty }); showToast(`Made ${qty} for stock at ${money(r.unitCost)} each.`); await load(); }
+        try { const r = await hoopApi_({ action: "makeForStock", org: orgId, productId, size: tr.dataset.size, qty, occurredAt: at }); showToast(`Made ${qty} for stock at ${money(r.unitCost)} each.`); await load(); }
         catch (e) { err.textContent = e.message; btn.disabled = false; }
       });
       ov.querySelectorAll(".fsCorrect").forEach(btn => btn.onclick = async () => {
         const tr = btn.closest("tr"), quantity = parseInt(tr.querySelector(".fsCount").value, 10);
         if (!(quantity >= 0)) { err.textContent = "Enter the count on hand (0 or more)."; return; }
+        const at = await askWhen_(`Correct the count to ${quantity}?`, { whenLabel: "When was it counted?" });
+        if (!at) return;
         btn.disabled = true;
-        try { const r = await hoopApi_({ action: "setReadyToShipQty", org: orgId, productId, size: tr.dataset.size, quantity }); showToast(r.delta ? "Count corrected." : "No change."); await load(); }
+        try { const r = await hoopApi_({ action: "setReadyToShipQty", org: orgId, productId, size: tr.dataset.size, quantity, at }); showToast(r.delta ? "Count corrected." : "No change."); await load(); }
         catch (e) { err.textContent = e.message; btn.disabled = false; }
       });
     }
@@ -12557,11 +12541,45 @@ if (typeof MutationObserver !== "undefined" && !window._stackLabelsObserver) {
 // be styled or explain much). Resolves {ok, reason}. reason: "required" keeps the confirm button off until something
 // is typed; "optional" shows the box; omitted = no box. Words: "Delete" removes a record, "Void" keeps money or stock
 // on record but stops it counting, "Remove" takes something off a list.
+// ---- When it happened (2026-10) ---------------------------------------------------------------------------------
+// Most steps are recorded after the fact, so each asks "when did this happen?" — a date-and-time box defaulting to
+// now in the admin's own time, never later than now. The server checks the time fits the order's other dates.
+function localDateTime_(d){
+  const x = d ? new Date(d) : new Date(), p = (n) => String(n).padStart(2, "0");
+  return isNaN(x) ? "" : `${x.getFullYear()}-${p(x.getMonth() + 1)}-${p(x.getDate())}T${p(x.getHours())}:${p(x.getMinutes())}`;
+}
+// Left unchanged, the box stands for exactly the moment it was set to (it only shows minutes): data-iso keeps it, or
+// "now" — so a step recorded seconds after the one before it never lands before it.
+function whenFieldHtml_(id, label, value){
+  const shown = value ? localDateTime_(value) : localDateTime_();
+  return `<label for="${id}" style="display:block;font-size:13px;font-weight:600;margin:12px 0 4px;">${escapeHtml(label || "When did this happen?")}</label>
+    <input type="datetime-local" id="${id}" class="when-input" value="${escapeHtml(shown)}" data-shown="${escapeHtml(shown)}" data-iso="${escapeHtml(value ? new Date(value).toISOString() : "")}" max="${localDateTime_(Date.now() + 60000)}" style="font:inherit;font-size:14px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;background:#fff;color:#1a1a1a;">
+    <div class="when-err" style="color:#b03a2e;font-size:12px;min-height:14px;margin-top:3px;"></div>`;
+}
+// The box's value as {at: ISO} or {error}.
+function readWhen_(input){
+  const v = input && input.value;
+  if (!v) return { error: "Pick when it happened." };
+  if (input.dataset && v === input.dataset.shown) return { at: input.dataset.iso || new Date().toISOString() };
+  const d = new Date(v);
+  if (isNaN(d)) return { error: "That date and time isn't valid." };
+  if (d.getTime() > Date.now() + 2 * 60000) return { error: "That's in the future — pick when it happened." };
+  return { at: d.toISOString() };
+}
+// Reads a when box inside `root`; shows the problem under it. Returns the ISO time or null.
+function whenFrom_(root, id){
+  const input = root.querySelector("#" + id), w = readWhen_(input), err = input && input.parentNode.querySelector(".when-err");
+  if (err) err.textContent = w.error || "";
+  if (w.error && input) input.focus();
+  return w.error ? null : w.at;
+}
+
 function confirmModal_(o){
   o = o || {};
   return new Promise(resolve => {
-    const box = o.reason ? `<label for="cmReason" style="display:block;font-size:13px;font-weight:600;margin:12px 0 4px;">${escapeHtml(o.reasonLabel || (o.reason === "required" ? "Reason" : "Reason (optional)"))}</label>
-      <textarea id="cmReason" rows="3" style="width:100%;box-sizing:border-box;font:inherit;font-size:14px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;">${escapeHtml(o.defaultReason || "")}</textarea>` : "";
+    const whenBox = o.when ? whenFieldHtml_("cmWhen", o.when.label, o.when.value) : "";
+    const box = whenBox + (o.reason ? `<label for="cmReason" style="display:block;font-size:13px;font-weight:600;margin:12px 0 4px;">${escapeHtml(o.reasonLabel || (o.reason === "required" ? "Reason" : "Reason (optional)"))}</label>
+      <textarea id="cmReason" rows="3" style="width:100%;box-sizing:border-box;font:inherit;font-size:14px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;">${escapeHtml(o.defaultReason || "")}</textarea>` : "");
     const { ov, close } = inventoryModal_(escapeHtml(o.title || "Are you sure?"), `<div class="cm-text" style="font-size:14px;line-height:1.5;white-space:pre-line;">${escapeHtml(o.text || "")}</div>${box}
       <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
         <button type="button" class="admin-btn admin-btn-secondary" id="cmCancel">${escapeHtml(o.cancelLabel || "Back")}</button>
@@ -12577,7 +12595,11 @@ function confirmModal_(o){
     const sync = () => { if (o.reason === "required") ok.disabled = !(ta && ta.value.trim()); };
     if (ta) { ta.oninput = sync; setTimeout(() => { try { ta.focus(); ta.select(); } catch (e) {} }, 0); }
     sync();
-    ok.onclick = () => finish({ ok: true, reason: ta ? ta.value.trim() : "" });
+    ok.onclick = () => {
+      let at;
+      if (o.when) { at = whenFrom_(ov, "cmWhen"); if (!at) return; }
+      finish({ ok: true, reason: ta ? ta.value.trim() : "", ...(o.when ? { at } : {}) });
+    };
     ov.querySelector("#cmCancel").onclick = () => finish({ ok: false, reason: "" });
     ov.querySelector("[data-modal-close]").onclick = () => finish({ ok: false, reason: "" });
   });
@@ -12590,7 +12612,7 @@ function confirmModal_(o){
 const ASK_VERBS_ = ["Delete", "Remove", "Disconnect", "Disable", "Reset", "Merge", "Close", "Reopen", "Mark", "Send", "Place", "Make", "Copy",
   "Separate", "Replace", "Record", "Resend", "Use", "Update", "Take", "Undo", "Require", "Cancel"];
 const ASK_DANGER_ = ["Delete", "Remove", "Disconnect", "Disable", "Reset", "Merge", "Cancel"];
-function askConfirm_(message, opts){
+function askOpts_(message){
   const m = String(message == null ? "" : message).trim();
   let cut = m.indexOf("\n\n");
   const q = m.indexOf("?");
@@ -12598,8 +12620,16 @@ function askConfirm_(message, opts){
   const title = (cut > 0 ? m.slice(0, cut) : m).trim(), text = (cut > 0 ? m.slice(cut) : "").trim();
   const first = (title.match(/^[A-Z][a-z]+/) || [""])[0];
   const verb = ASK_VERBS_.includes(first) ? (first === "Cancel" ? "Yes, cancel it" : first) : "OK";
-  return confirmModal_(Object.assign({ title, text, message: m, confirmLabel: verb, cancelLabel: first === "Cancel" ? "Keep it" : "Cancel",
-    danger: ASK_DANGER_.includes(first) }, opts || {})).then(a => !!a.ok);
+  return { title, text, message: m, confirmLabel: verb, cancelLabel: first === "Cancel" ? "Keep it" : "Cancel", danger: ASK_DANGER_.includes(first) };
+}
+function askConfirm_(message, opts){
+  return confirmModal_(Object.assign(askOpts_(message), opts || {})).then(a => !!a.ok);
+}
+// The same question with "When did this happen?" (date and time, default now; opts.whenLabel / opts.whenValue).
+// Resolves the chosen time (ISO), or null when cancelled.
+function askWhen_(message, opts){
+  opts = opts || {};
+  return confirmModal_(Object.assign(askOpts_(message), { when: { label: opts.whenLabel, value: opts.whenValue } }, opts.modal || {})).then(a => a.ok ? a.at : null);
 }
 
 // Made items with no blank cost, split by WHY (getInventoryReport's missingCost[].reason), each with
@@ -12703,7 +12733,7 @@ function showWriteOffModal_(blank, onDone){
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
       <label style="font-size:12px;font-weight:600;">Color / size<br><select id="woSize" style="${inp}">${sizeOpts}</select></label>
       <label style="font-size:12px;font-weight:600;">Qty<br><input type="number" min="1" id="woQty" placeholder="1" style="${inp}width:70px;"></label>
-      <label style="font-size:12px;font-weight:600;">Date<br><input type="date" id="woDate" value="${new Date().toISOString().slice(0, 10)}" max="${new Date().toISOString().slice(0, 10)}" style="${inp}"></label>
+      <label style="font-size:12px;font-weight:600;">Date<br><input type="date" id="woDate" value="${new Date().toLocaleDateString("en-CA")}" max="${new Date().toLocaleDateString("en-CA")}" style="${inp}"></label>
     </div>
     <label style="display:block;font-size:12px;font-weight:600;margin-bottom:10px;">Reason<br>
       <select id="woReason" style="${inp}">${Object.entries(WRITEOFF_REASONS_).map(([k, v]) => `<option value="${k}">${escapeHtml(v)}</option>`).join("")}</select></label>
@@ -13183,7 +13213,7 @@ async function showReceiveOrderModal(onDone, prefill){
   const { ov, close } = inventoryModal_("Receive a blank order", `
     <div style="font-size:12px;color:#666;margin-bottom:10px;">Record a whole vendor order at once — every blank type on the invoice, the shipping, and anything bought for R&amp;D / testing or personal use.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-      <label style="font-size:12px;font-weight:600;">Date received<br><input id="roDate" type="date" value="${escapeHtml(prefill && prefill.receivedAt || new Date().toISOString().slice(0, 10))}" style="${inp}"></label>
+      <label style="font-size:12px;font-weight:600;">Date received<br><input id="roDate" type="date" value="${escapeHtml(prefill && prefill.receivedAt || new Date().toLocaleDateString("en-CA"))}" max="${new Date().toLocaleDateString("en-CA")}" style="${inp}"></label>
       <label style="font-size:12px;font-weight:600;">Paid from<br><select id="roPaidFrom" style="${inp}"><option value="">Loading…</option></select></label>
       <label style="font-size:12px;font-weight:600;">Order total (optional)<br>$<input id="roTotal" type="number" min="0" step="0.01" placeholder="0.00" style="${inp}width:96px;"></label>
     </div>
@@ -14176,7 +14206,7 @@ function supplierOrderReceivePrefill_(o){
     if (!groups.has(l.blankId)) groups.set(l.blankId, { blankId: l.blankId, lines: [] });
     groups.get(l.blankId).lines.push({ color: l.color || "", size: l.size || "", qty: Number(l.qty) || 0, total: Math.round((Number(l.unitCents) || 0) * (Number(l.qty) || 0)) / 100 });
   }
-  return { groups: [...groups.values()], vendor: o.vendor || "", vendorRef: o.poNumber || "", receivedAt: new Date().toISOString().slice(0, 10) };
+  return { groups: [...groups.values()], vendor: o.vendor || "", vendorRef: o.poNumber || "", receivedAt: new Date().toLocaleDateString("en-CA") };
 }
 function wireSupplierOrders_(root, ctx, reload){
   if (!ctx) return;
@@ -19642,8 +19672,26 @@ async function renderTransfers(app){
   window.transferEdit_ = (id) => { const t = transfers.find(x => x.id === Number(id)); if (t) showTransferFormModal_(t, load); };
   window.transferWriteOff_ = async (id) => {
     const t = transfers.find(x => x.id === Number(id)); if (!t) return;
-    const qty = prompt(`Write off how many "${t.name}"? (on hand: ${t.quantity})`); if (!qty) return;
-    try { await hoopApi_({ action: "writeOffTransfers", transferId: t.id, qty: Number(qty), note: "Write-off", occurredAt: new Date().toISOString().slice(0, 10) }); showToast("Written off."); await load(); }
+    // How many, why and when (date and time, default now) — it was a typed prompt dated today in UTC.
+    const got = await new Promise(resolve => {
+      const { ov, close } = inventoryModal_(`Write off — ${escapeHtml(t.name)}`, `<div style="font-size:13px;color:#555;">On hand: ${Number(t.quantity)}</div>
+        <label for="twQty" style="display:block;font-size:13px;font-weight:600;margin:12px 0 4px;">How many</label>
+        <input type="number" id="twQty" min="1" step="1" style="font:inherit;font-size:14px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;width:120px;">
+        <label for="twNote" style="display:block;font-size:13px;font-weight:600;margin:12px 0 4px;">Why (optional)</label>
+        <input type="text" id="twNote" maxlength="200" placeholder="Misprint, damaged…" style="font:inherit;font-size:14px;padding:6px 8px;border:1px solid #ccc;border-radius:4px;width:100%;box-sizing:border-box;">
+        ${whenFieldHtml_("twWhen", "When?")}
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px;"><button type="button" class="admin-btn admin-btn-secondary" id="twCancel">Cancel</button><button type="button" class="admin-btn" id="twOk">Write off</button></div>`, 440,
+        { onClose: () => resolve(null) });
+      ov.querySelector("#twCancel").onclick = () => { close(); resolve(null); };
+      ov.querySelector("#twOk").onclick = () => {
+        const qty = parseInt(ov.querySelector("#twQty").value, 10);
+        if (!(qty > 0)) { showToast("Enter how many to write off.", true); return; }
+        const at = whenFrom_(ov, "twWhen"); if (!at) return;
+        close(); resolve({ qty, note: ov.querySelector("#twNote").value.trim() || "Write-off", at });
+      };
+    });
+    if (!got) return;
+    try { await hoopApi_({ action: "writeOffTransfers", transferId: t.id, qty: got.qty, note: got.note, occurredAt: got.at }); showToast("Written off."); await load(); }
     catch (e) { showToast(e.message, true); }
   };
   window.transferDelete_ = async (id) => {
@@ -19720,7 +19768,7 @@ function showReceiveTransferModal_(transfers, onDone){
     <td style="padding:3px 4px;"><button type="button" class="admin-btn trRm admin-btn-danger" style="padding:1px 7px;">✕</button></td></tr>`;
   const { ov, close } = inventoryModal_("Receive a transfer sheet", `
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:end;">
-      <label style="font-size:12px;font-weight:600;">Date<br><input id="trDate" type="date" value="${new Date().toISOString().slice(0, 10)}" style="${inp}"></label>
+      <label style="font-size:12px;font-weight:600;">Date<br><input id="trDate" type="date" value="${new Date().toLocaleDateString("en-CA")}" max="${new Date().toLocaleDateString("en-CA")}" style="${inp}"></label>
       <label style="font-size:12px;font-weight:600;">Sheet total ($)<br>$<input id="trTotal" type="number" min="0" step="0.01" style="${inp}width:100px;"></label>
       <label style="font-size:12px;font-weight:600;">Invoice #<br><input id="trRef" style="${inp}width:120px;"></label>
       <label style="font-size:12px;font-weight:600;">Paid from<br><select id="trPaid" style="${inp}"><option value="">Loading…</option></select></label>
@@ -19909,15 +19957,19 @@ async function renderRunTransfer(app){
       ${data.waiting.length ? data.waiting.map(c => card(c, false)).join("") : `<div style="color:#888;padding:8px 0;">Nothing waiting.</div>`}`;
     fillDesignThumbs_(body);
     body.querySelectorAll(".rtDl").forEach(b => b.onclick = () => downloadDesignFile_(b.dataset.key));
+    // Each step asks when it happened (default now).
     body.querySelectorAll(".rtRecv").forEach(b => b.onclick = async () => {
-      try { await hoopApi_({ action: "setTransferReceived", itemId: Number(b.dataset.item), orderId: b.dataset.order, org: b.dataset.org, received: true }); showToast("Transfer received."); await load(); }
+      const at = await askWhen_(`Mark the transfer for order ${b.dataset.order} received?`, { whenLabel: "When did it arrive?" }); if (!at) return;
+      try { await hoopApi_({ action: "setTransferReceived", itemId: Number(b.dataset.item), orderId: b.dataset.order, org: b.dataset.org, received: true, at }); showToast("Transfer received."); await load(); }
       catch (e) { showToast(e.message, true); } });
     body.querySelectorAll(".rtApply").forEach(b => b.onclick = async () => {
-      try { await hoopApi_({ action: "setTransfersApplied", orderId: b.dataset.order, itemId: Number(b.dataset.item), org: b.dataset.org, applied: true }); showToast("Transfers marked applied."); await load(); }
+      const at = await askWhen_(`Mark the transfers on order ${b.dataset.order} applied?`, { whenLabel: "When were they applied?" }); if (!at) return;
+      try { await hoopApi_({ action: "setTransfersApplied", orderId: b.dataset.order, itemId: Number(b.dataset.item), org: b.dataset.org, applied: true, at }); showToast("Transfers marked applied."); await load(); }
       catch (e) { showToast(e.message, true); } });
     body.querySelectorAll(".rtMake").forEach(b => b.onclick = async () => {
-      if (!await askConfirm_("Mark this line made? Consumes the blank and the transfer applications.")) return;
-      try { const r = await hoopApi_({ action: "makeTransferLine", orderId: b.dataset.order, itemId: Number(b.dataset.item), org: b.dataset.org }); showToast(r.orderComplete ? "Order complete." : "Marked made."); await load(); }
+      const at = await askWhen_("Mark this line made? Consumes the blank and the transfer applications.", { whenLabel: "When was it made?" });
+      if (!at) return;
+      try { const r = await hoopApi_({ action: "makeTransferLine", orderId: b.dataset.order, itemId: Number(b.dataset.item), org: b.dataset.org, at }); showToast(r.orderComplete ? "Order complete." : "Marked made."); await load(); }
       catch (e) { showToast(e.message, true); } });
   }
   document.getElementById("rtGang").onclick = async () => {
@@ -21566,9 +21618,10 @@ function showShipmentHistoryModal_(id){
 // the shelf instead of from a supplier — marked ordered and received now; they come out of stock when
 // the order is made. The server checks the stock covers them and says what's short when it doesn't.
 async function useBlanksFromStock_(orgId, orderId){
-  if (!await askConfirm_(`Use blanks from stock for order ${orderId}? They're marked received now, and come out of stock when the order is made.`)) return false;
+  const at = await askWhen_(`Use blanks from stock for order ${orderId}? They're marked received, and come out of stock when the order is made.`, { whenLabel: "When were they taken from stock?" });
+  if (!at) return false;
   try {
-    const d = await hoopApi_({ action: "useBlanksFromStock", org: orgId, orderId });
+    const d = await hoopApi_({ action: "useBlanksFromStock", org: orgId, orderId, at });
     const what = (d.lines || []).map(l => `${l.qty} × ${l.blank}${l.color ? " " + l.color : ""}${l.size && l.size !== "OSFA" ? " " + l.size : ""}`).join(", ");
     showToast(`Blanks from stock: ${what}.`);
     return true;
@@ -21972,10 +22025,11 @@ function wireRunOrderHandlers_(body, queue){
     const machine = resolveSelectedMachine_(card.step, btn.dataset.pkey);
     const count = (card.job.steps || []).length || 1;
     const what = count > 1 ? `hooping ${btn.dataset.step} (${card.step.label}) of ` : card.job.qty > 1 ? "this piece of " : "";
-    if (!await askConfirm_(`Mark ${what}${btn.dataset.orderid} done?`)) return;
+    const at = await askWhen_(`Mark ${what}${btn.dataset.orderid} done?`, { whenLabel: "When was it done?" });
+    if (!at) return;
     btn.disabled = true; btn.textContent = "Working…";
     try {
-      const r = await runOrderApi_({ action: "markHoopingDone", org: btn.dataset.orgid, orderId: btn.dataset.orderid, itemId: card.job.itemId,
+      const r = await runOrderApi_({ action: "markHoopingDone", at, org: btn.dataset.orgid, orderId: btn.dataset.orderid, itemId: card.job.itemId,
         pieceNo: pieceArg_(btn), stepNo: Number(btn.dataset.step), machineId: machine ? machine.id : null,
         hoopId: machine ? hoopForMachine_(machine, card.step, window._roCtx.hoopsById) : null });
       showToast(doneToast_(r, card));

@@ -2855,19 +2855,20 @@ export async function refreshPaidStatus(db, orderId) {
 // "Mark as paid": records a ledger payment for whatever is still owed (so the
 // books show money received, not just a flag), then refreshes the paid cache.
 // For an order that owes $0 it just sets the flag. Returns the amount recorded.
-export async function settleOrderBalance(db, orderId, note) {
+// `at`: when it was paid (the admin's chosen time, 2026-10) — the payment's date and the order's paid date.
+export async function settleOrderBalance(db, orderId, note, at = null) {
   const state = await refreshPaidStatus(db, orderId);
   if (!state) return 0;
   const balance = state.owedCents - state.receivedCents;
   if (balance > 0) {
     const o = await db.prepare("SELECT paymentMethod FROM orders WHERE orderId=?").bind(orderId).first();
     await addOrderPayment(db, orderId, fromCents(balance), note || "Marked paid", "",
-      { method: methodFromPaymentMethod(o && o.paymentMethod) });
+      { method: methodFromPaymentMethod(o && o.paymentMethod), ...(at ? { receivedAt: at } : {}) });
     return fromCents(balance);
   }
   if (state.owedCents === 0) {
     await db.prepare("UPDATE orders SET paid = 1, paidAt = COALESCE(paidAt, ?) WHERE orderId = ?")
-      .bind(new Date().toISOString(), orderId).run();
+      .bind(at || new Date().toISOString(), orderId).run();
   }
   return 0;
 }
@@ -5445,7 +5446,7 @@ export async function writeOffBlanks(db, { blankId, color, size, qty, note, occu
 // double-click, two tabs, Run Order + Orders) read the same fromQty, the second batch finds the
 // count already moved and every statement in it matches nothing: no second consume, no stock or
 // COGS change. Returns { claimed, consumed }: claimed=false means someone else got there first.
-async function makeItemPieces_(db, item, fromQty, toQty) {
+async function makeItemPieces_(db, item, fromQty, toQty, at = null) {
   const pieces = toQty - fromQty;
   if (pieces <= 0) return { claimed: false, consumed: false };
   const id = Number(item.id);
@@ -5459,12 +5460,12 @@ async function makeItemPieces_(db, item, fromQty, toQty) {
   // at its average cost — that's the line's cost of goods — and no blank is used.
   if (item.fromStock && Number(item.fromStock)) {
     const p = await db.prepare("SELECT name, pricingMode FROM products WHERE orgId = ? AND productId = ?").bind(item.orgId, item.productId).first();
-    const sz = stockSize_(p && p.pricingMode, item.size), now = new Date().toISOString();
+    const sz = stockSize_(p && p.pricingMode, item.size), now = new Date().toISOString(), when = at || now;   // `at`: when it was really made (2026-10)
     const avgSql = "MAX(0, COALESCE((SELECT avgCostCents FROM ready_to_ship WHERE orgId = ? AND productId = ? AND size = ?), 0))", ab = [item.orgId, item.productId, sz];
     stmts.push(db.prepare(
       `INSERT INTO finished_goods_movements (orgId, productId, productName, color, size, qtyDelta, unitCostCents, kind, orderId, itemId, note, occurredAt, createdAt)
        SELECT ?, ?, ?, '', ?, ?, ${avgSql}, 'sell', ?, ?, ?, ?, ? WHERE ${stillAt}`
-    ).bind(item.orgId, item.productId, (p && p.name) || item.productId, sz, -pieces, ...ab, item.orderId, id, ("Pulled for order " + item.orderId).slice(0, 300), now, now, id, fromQty));
+    ).bind(item.orgId, item.productId, (p && p.name) || item.productId, sz, -pieces, ...ab, item.orderId, id, ("Pulled for order " + item.orderId).slice(0, 300), when, now, id, fromQty));
     stmts.push(db.prepare(
       `UPDATE order_items SET cogsCents = (CASE WHEN cogsSource='consumed' THEN COALESCE(cogsCents,0) ELSE 0 END) + ? * ${avgSql}, cogsSource = 'consumed'
        WHERE id = ? AND cancelDate IS NULL AND COALESCE(manufacturedQty,0) = ?`).bind(pieces, ...ab, id, fromQty));
@@ -5479,12 +5480,12 @@ async function makeItemPieces_(db, item, fromQty, toQty) {
   if (linked) {
     const blankId = Number(link.blankId), color = link.blankColor || "", size = link.blankSize || "";
     const avgSql = "COALESCE((SELECT purchasePriceCents FROM blank_sizes WHERE blankId = ? AND color = ? AND size = ?), 0)";
-    const now = new Date().toISOString();
+    const now = new Date().toISOString(), when = at || now;
     stmts.push(db.prepare(
       `INSERT INTO inventory_movements (blankId, blankName, color, size, qtyDelta, unitCostCents, kind, orderId, itemId, vendor, vendorRef, note, occurredAt, createdAt, vendorChargedTax, accountId, paidPersonally, receiptKey, receiptName)
        SELECT ?, ?, ?, ?, ?, MAX(0, ${avgSql}), 'consume', ?, ?, '', '', ?, ?, ?, 0, NULL, 0, '', '' WHERE ${stillAt}`
     ).bind(blankId, await blankName_(db, blankId), color, size, -pieces, blankId, color, size, item.orderId, id,
-      ("Used for order " + item.orderId).slice(0, 300), now, now, id, fromQty));
+      ("Used for order " + item.orderId).slice(0, 300), when, now, id, fromQty));
     stmts.push(db.prepare(
       `UPDATE order_items SET cogsCents = (CASE WHEN cogsSource='consumed' THEN COALESCE(cogsCents,0) ELSE 0 END) + ? * MAX(0, ${avgSql}),
          cogsSource = 'consumed'
@@ -5513,7 +5514,7 @@ function itemColor_(row) {
   return cfg && cfg.garmentColor ? String(cfg.garmentColor) : "";
 }
 
-export async function consumeBlanksForOrder(db, orderId) {
+export async function consumeBlanksForOrder(db, orderId, at = null) {
   const fs = await hasFromStockColumn_(db);
   const { results: items } = await db.prepare(
     `SELECT id, orderId, orgId, productId, size, qty, configJson, COALESCE(manufacturedQty,0) AS manufacturedQty${fs ? ", fromStock" : ""}
@@ -5524,7 +5525,7 @@ export async function consumeBlanksForOrder(db, orderId) {
     const qty = Math.max(1, Number(it.qty) || 1);
     const made = Math.max(0, Number(it.manufacturedQty) || 0);
     if (made >= qty) continue;
-    if ((await makeItemPieces_(db, { ...it, color: itemColor_(it) }, made, qty)).consumed) consumed++;
+    if ((await makeItemPieces_(db, { ...it, color: itemColor_(it) }, made, qty, at)).consumed) consumed++;
   }
   return consumed;
 }
@@ -5535,7 +5536,8 @@ export async function consumeBlanksForOrder(db, orderId) {
 // the Run Order screen lets qty>1 lines be split across machines and finished independently.
 // If a concurrent request claims the same piece first, this re-reads and makes the NEXT piece
 // (both clicks meant "one more piece done"), or reports the line complete if none are left.
-export async function markItemPieceManufactured(db, orderId, itemId) {
+// `at`: when it was really made (the admin's chosen time, 2026-10) — dates the order, its blank use and transfer use.
+export async function markItemPieceManufactured(db, orderId, itemId, at = null) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const item = await db.prepare(
       `SELECT id, orderId, orgId, productId, size, qty, configJson, COALESCE(manufacturedQty,0) AS manufacturedQty, cancelDate${(await hasFromStockColumn_(db)) ? ", fromStock" : ""}
@@ -5547,12 +5549,12 @@ export async function markItemPieceManufactured(db, orderId, itemId) {
     const qty = Math.max(1, Number(item.qty) || 1);
     const made = Math.max(0, Number(item.manufacturedQty) || 0);
     if (made >= qty) {
-      return { alreadyComplete: true, orderComplete: await maybeCompleteManufacture_(db, orderId) };
+      return { alreadyComplete: true, orderComplete: await maybeCompleteManufacture_(db, orderId, at) };
     }
-    if ((await makeItemPieces_(db, item, made, made + 1)).claimed) {
+    if ((await makeItemPieces_(db, item, made, made + 1, at)).claimed) {
       // When the last piece lands, consume the line's transfer applications once (migrations/0036).
-      if (made + 1 >= qty) await consumeLineTransfersOnce_(db, orderId, Number(itemId));
-      return { pieceMarked: true, orderComplete: await maybeCompleteManufacture_(db, orderId) };
+      if (made + 1 >= qty) await consumeLineTransfersOnce_(db, orderId, Number(itemId), at);
+      return { pieceMarked: true, orderComplete: await maybeCompleteManufacture_(db, orderId, at) };
     }
   }
   throw new Error("This line is being updated by another request — refresh and try again");
@@ -5561,7 +5563,7 @@ export async function markItemPieceManufactured(db, orderId, itemId) {
 // A local sale is handed over on the spot (migrations/0060): its lines filled from finished stock are
 // pulled at once (their cost of goods recorded), without making anything else on the order. When every
 // active line is from stock, the order is made too. Returns the number of lines pulled.
-export async function pullStockLines(db, orderId) {
+export async function pullStockLines(db, orderId, at = null) {
   if (!(await hasFromStockColumn_(db))) return 0;
   const { results: items } = await db.prepare(
     `SELECT id, orderId, orgId, productId, size, qty, configJson, COALESCE(manufacturedQty,0) AS manufacturedQty, fromStock
@@ -5569,15 +5571,15 @@ export async function pullStockLines(db, orderId) {
   let n = 0;
   for (const it of items) {
     const qty = Math.max(1, Number(it.qty) || 1), made = Math.max(0, Number(it.manufacturedQty) || 0);
-    if (made < qty && (await makeItemPieces_(db, { ...it, color: "" }, made, qty)).claimed) n++;
+    if (made < qty && (await makeItemPieces_(db, { ...it, color: "" }, made, qty, at)).claimed) n++;
   }
-  if (n) await maybeCompleteManufacture_(db, orderId);
+  if (n) await maybeCompleteManufacture_(db, orderId, at);
   return n;
 }
 
 // Stamp orders.manufacturedAt once every active line is fully made; no-op (and returns false)
 // while any active line still has pieces left. Idempotent — never moves an existing timestamp.
-async function maybeCompleteManufacture_(db, orderId) {
+async function maybeCompleteManufacture_(db, orderId, at = null) {
   // Lines filled from finished stock (migrations/0060) aren't run: once every MADE line is done, they're
   // pulled from stock here, so an order mixing both completes when its last piece is made on Run Order.
   const fs = await hasFromStockColumn_(db);
@@ -5586,9 +5588,9 @@ async function maybeCompleteManufacture_(db, orderId) {
      WHERE orderId = ? AND cancelDate IS NULL AND COALESCE(manufacturedQty,0) < qty${fs ? " AND COALESCE(fromStock,0) = 0" : ""}`
   ).bind(orderId).first();
   if (Number(row && row.remaining) > 0) return false;
-  if (fs) await consumeBlanksForOrder(db, orderId);   // pulls whatever stock lines are left (the made ones are skipped)
+  if (fs) await consumeBlanksForOrder(db, orderId, at);   // pulls whatever stock lines are left (the made ones are skipped)
   await db.prepare("UPDATE orders SET manufacturedAt = COALESCE(manufacturedAt, ?) WHERE orderId = ?")
-    .bind(new Date().toISOString(), orderId).run();
+    .bind(at || new Date().toISOString(), orderId).run();
   return true;
 }
 
@@ -5649,7 +5651,7 @@ export async function listActiveRuns(db) {
 // untimed = true the hooping is recorded as already done ("Mark done (no timing)") and kept out of
 // the timing report. Snapshots the machine, the hooping's design (or order-specific design) and
 // hoop; the machine's mounted hoop is updated to the one used. Returns {runId, pieceNo, stepNo}.
-export async function startHooping(db, { orgId, orderId, itemId, machineId, pieceNo, stepNo, hoopId, untimed = false }) {
+export async function startHooping(db, { orgId, orderId, itemId, machineId, pieceNo, stepNo, hoopId, untimed = false, at = null }) {
   const item = await db.prepare(
     `SELECT id, orgId, orderId, productId, qty, COALESCE(manufacturedQty,0) AS manufacturedQty, cancelDate
      FROM order_items WHERE id=? AND orderId=?`
@@ -5695,7 +5697,7 @@ export async function startHooping(db, { orgId, orderId, itemId, machineId, piec
     hoopId = (machine && step.hoopIds.includes(Number(machine.currentHoopId)) ? Number(machine.currentHoopId) : null)
       || step.hoopIds.find(h => supported.includes(h)) || step.hoopIds[0];
   }
-  const now = new Date().toISOString();
+  const now = new Date().toISOString(), when = untimed && at ? at : now;   // an untimed "Mark done" can be dated after the fact
   let r;
   try {
     r = await db.prepare(
@@ -5703,7 +5705,7 @@ export async function startHooping(db, { orgId, orderId, itemId, machineId, piec
          pieceNo, stepNo, stepCount, stepLabel, hoopId, itemDesignId, timed)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(item.orgId, orderId, Number(itemId), machineId, (machine && machine.name) || "", step.designId, step.versionId,
-      step.designName || "", now, untimed ? now : null, untimed ? "done" : "running", now,
+      step.designName || "", when, untimed ? when : null, untimed ? "done" : "running", now,
       pieceNo, stepNo, steps.length, step.label || "", hoopId, step.itemDesignId, untimed ? 0 : 1).run();
   } catch (e) {
     // Two Starts at the same moment can both pass the checks above; the unique indexes reject the
@@ -5738,9 +5740,9 @@ async function legacyStartRun_(db, { orgId, orderId, itemId, machineId }) {
 
 // After a hooping is recorded done: when it was the piece's last, the piece is made (consumes its
 // blank, may finish the order). Returns {pieceComplete, orderComplete, nextStepNo}.
-async function afterHoopingDone_(db, run) {
+async function afterHoopingDone_(db, run, at = null) {
   if (run.pieceNo == null) {
-    const res = await markItemPieceManufactured(db, run.orderId, Number(run.itemId));
+    const res = await markItemPieceManufactured(db, run.orderId, Number(run.itemId), at);
     return { pieceComplete: true, orderComplete: !!res.orderComplete, nextStepNo: null };
   }
   const { results } = await db.prepare(
@@ -5748,7 +5750,7 @@ async function afterHoopingDone_(db, run) {
   const done = results.map(r => Number(r.stepNo));
   const total = Math.max(1, Number(run.stepCount) || 1);
   if (done.length >= total) {
-    const res = await markItemPieceManufactured(db, run.orderId, Number(run.itemId));
+    const res = await markItemPieceManufactured(db, run.orderId, Number(run.itemId), at);
     return { pieceComplete: true, orderComplete: !!res.orderComplete, nextStepNo: null };
   }
   let next = 1; while (done.includes(next)) next++;
@@ -5762,7 +5764,7 @@ export async function markHoopingDone(db, args) {
   const started = await startHooping(db, Object.assign({}, args, { untimed: true }));
   const counted = started && started.runId ? await countRunOnMachine_(db, started.runId, { kind: "run", readStitches: args.readStitches, actor: args.actor }) : null;
   return Object.assign({ pieceNo: started.pieceNo, stepNo: started.stepNo, counted },
-    await afterHoopingDone_(db, { orderId: args.orderId, itemId: args.itemId, pieceNo: started.pieceNo, stepCount: started.stepCount }));
+    await afterHoopingDone_(db, { orderId: args.orderId, itemId: args.itemId, pieceNo: started.pieceNo, stepCount: started.stepCount }, args.at || null));
 }
 
 // ---- Issues noted when a timed run is finished (migrations/0046) --------------------------------
@@ -6660,7 +6662,7 @@ export async function writeOffTransfers(db, { transferId, qty, note, occurredAt 
 // Consume one application per garment of each given transfer for one line (customer-chosen options +
 // the reorder QR), at the current average cost, adding to the line's COGS (blank + transfers).
 // Called when a transfer application is marked made. Returns total cents added.
-async function consumeTransfersForItem_(db, item, transferIds) {
+async function consumeTransfersForItem_(db, item, transferIds, at = null) {
   const qty = Math.max(1, Number(item.qty) || 1);
   let added = 0;
   for (const tid of (transferIds || [])) {
@@ -6670,7 +6672,7 @@ async function consumeTransfersForItem_(db, item, transferIds) {
     const cost = Number(t.purchasePriceCents) || 0;
     await db.batch([
       transferMovementStmt_(db, { transferId: Number(tid), transferName: t.name || "", qtyDelta: -qty, unitCostCents: cost, kind: "consume",
-        orderId: item.orderId, itemId: item.id, note: "Used for order " + item.orderId, occurredAt: new Date().toISOString() }),
+        orderId: item.orderId, itemId: item.id, note: "Used for order " + item.orderId, occurredAt: at || new Date().toISOString() }),
       db.prepare("UPDATE transfers SET quantity = quantity - ?, updatedAt=? WHERE id=?").bind(qty, new Date().toISOString(), Number(tid)),
     ]);
     added += cost * qty;
@@ -6683,7 +6685,7 @@ async function consumeTransfersForItem_(db, item, transferIds) {
 // exactly once — whichever screen completed it (embroidery Run Order hoopings OR Run Transfer
 // Sheets). Idempotent (a prior consume movement for this line = already done) and a no-op on a
 // pre-0036 schema. Called when a line reaches its full manufacturedQty.
-async function consumeLineTransfersOnce_(db, orderId, itemId) {
+async function consumeLineTransfersOnce_(db, orderId, itemId, at = null) {
   try {
     const item = await db.prepare("SELECT * FROM order_items WHERE id=?").bind(Number(itemId)).first();
     const cfg = item && !Number(item.fromStock) && tryParse_(item.configJson, null);   // a stock line used no transfers (0060)
@@ -6692,7 +6694,7 @@ async function consumeLineTransfersOnce_(db, orderId, itemId) {
     if (!transferIds.length) return;
     const already = await db.prepare("SELECT COUNT(*) n FROM transfer_movements WHERE itemId=? AND kind='consume'").bind(Number(itemId)).first();
     if (already && Number(already.n) > 0) return;
-    await consumeTransfersForItem_(db, { id: item.id, orderId: item.orderId, qty: Math.max(1, Number(item.qty) || 1) }, transferIds);
+    await consumeTransfersForItem_(db, { id: item.id, orderId: item.orderId, qty: Math.max(1, Number(item.qty) || 1) }, transferIds, at);
   } catch (e) { if (!/no such (table|column)/i.test(String(e && e.message))) throw e; }
 }
 
@@ -7123,19 +7125,19 @@ async function linesWithEmbroidery_(db, itemIds) {
   return out;
 }
 
-export async function setTransferReceived(db, itemId, on) {
+export async function setTransferReceived(db, itemId, on, at = null) {
   await db.prepare("UPDATE order_items SET transferReceivedAt=? WHERE id=?")
-    .bind(on ? new Date().toISOString() : null, Number(itemId)).run();
+    .bind(on ? (at || new Date().toISOString()) : null, Number(itemId)).run();
 }
 
 // A line that is also embroidered: record that its transfers were pressed (it then leaves Run
 // Transfer Sheets). Doesn't make the piece — finishing the embroidery on Run Order does that, and
 // that's also when the transfers' stock is used (consumeLineTransfersOnce_). `on` false undoes it.
-export async function setTransfersApplied(db, orderId, itemId, on = true) {
+export async function setTransfersApplied(db, orderId, itemId, on = true, at = null) {
   const item = await db.prepare("SELECT id, cancelDate FROM order_items WHERE id=? AND orderId=?").bind(Number(itemId), orderId).first();
   if (!item) throw new Error("Line item not found");
   if (item.cancelDate) throw new Error("That line item is cancelled");
-  await db.prepare("UPDATE order_items SET transfersAppliedAt=? WHERE id=?").bind(on ? new Date().toISOString() : null, Number(itemId)).run();
+  await db.prepare("UPDATE order_items SET transfersAppliedAt=? WHERE id=?").bind(on ? (at || new Date().toISOString()) : null, Number(itemId)).run();
 }
 export async function lineHasEmbroidery(db, itemId) {
   return (await linesWithEmbroidery_(db, [Number(itemId)])).has(Number(itemId));
@@ -7167,7 +7169,7 @@ export async function getGangSheet(db) {
 // blank per piece AND the line's transfer applications once (consumeLineTransfersOnce_ fires from
 // markItemPieceManufactured when the last piece lands, so embroidery Run Order and Run Transfer
 // Sheets both consume transfers exactly once). Idempotent once the line is fully made.
-export async function makeTransferLine(db, orderId, itemId) {
+export async function makeTransferLine(db, orderId, itemId, at = null) {
   const item = await db.prepare(
     "SELECT id, orderId, orgId, productId, size, qty, COALESCE(manufacturedQty,0) AS manufacturedQty, configJson, cancelDate FROM order_items WHERE id=? AND orderId=?"
   ).bind(Number(itemId), orderId).first();
@@ -7176,7 +7178,7 @@ export async function makeTransferLine(db, orderId, itemId) {
   const qty = Math.max(1, Number(item.qty) || 1);
   if (Number(item.manufacturedQty) >= qty) return { alreadyDone: true, orderComplete: false };
   let res = { orderComplete: false };
-  for (let made = Number(item.manufacturedQty); made < qty; made++) res = await markItemPieceManufactured(db, orderId, Number(itemId));
+  for (let made = Number(item.manufacturedQty); made < qty; made++) res = await markItemPieceManufactured(db, orderId, Number(itemId), at);
   return { orderComplete: !!res.orderComplete };
 }
 
@@ -7586,7 +7588,7 @@ export async function getBlankStockCoverage(db, orderIds) {
 // stops offering them to other orders — and are used up from stock when the order is made, exactly
 // as blanks bought for it would be. Nothing is written when something is short or not linked to a
 // blank (a userFacing error says what). Returns {lines}.
-export async function useBlanksFromStock(db, orderId) {
+export async function useBlanksFromStock(db, orderId, at = null) {
   const cov = (await getBlankStockCoverage(db, [orderId]))[orderId];
   if (!cov) throw pricingError_("Nothing on this order is waiting for its blanks.");
   if (cov.unlinked) throw pricingError_(`${cov.unlinked} item${cov.unlinked === 1 ? " isn't" : "s aren't"} linked to a blank — link ${cov.unlinked === 1 ? "it" : "them"} on the product, or mark the blanks ordered.`);
@@ -7596,7 +7598,7 @@ export async function useBlanksFromStock(db, orderId) {
     const short = Object.entries(need).filter(([, v]) => v.n > v.free).map(([k, v]) => `${k}: need ${v.n}, ${v.free} free in stock`);
     throw pricingError_("Not enough in stock — " + short.join("; ") + ". Order the rest instead.");
   }
-  const now = new Date().toISOString();
+  const now = at || new Date().toISOString();
   await db.batch(cov.lines.map(l => db.prepare(
     `UPDATE order_items SET blankOrderedAt=COALESCE(blankOrderedAt, ?), blankReceivedAt=COALESCE(blankReceivedAt, ?), blankVendor='In stock', blankCondition='Good'
      WHERE id=? AND orderId=? AND cancelDate IS NULL AND blankReceivedAt IS NULL`).bind(now, now, l.itemId, orderId)));
@@ -8404,6 +8406,97 @@ function manufacturedPrereq_(o) {
   return [o.needsBlanks === false || !!o.blankReceivedAt, "the blank hasn't been received yet"];
 }
 
+// ---- When things happened (2026-10) -------------------------------------------------------------------------
+// The admin records most steps after the fact, so each takes a chosen date and time (default now). The time must
+// fit the order's other dates: a step can't be before the steps it follows, nor after a step that follows it —
+// refused, saying which. A date-only stamp (stored as noon UTC — an order date set by hand, a Sheets-era date)
+// counts as the whole of that day.
+const DATE_ONLY_NOON_ = /T12:00:00(\.000)?Z$/;
+export function timeFloor_(iso) { const s = String(iso || ""); return DATE_ONLY_NOON_.test(s) ? new Date(s.slice(0, 10) + "T00:00:00Z") : new Date(s); }
+function timeCeil_(iso) { const s = String(iso || ""); return DATE_ONLY_NOON_.test(s) ? new Date(Date.parse(s.slice(0, 10) + "T00:00:00Z") + 36 * 3600000 - 1) : new Date(s); }
+export function shopTime_(iso, tz = "America/New_York") {
+  const s = String(iso || ""), d = new Date(s);
+  if (isNaN(d)) return s;
+  return DATE_ONLY_NOON_.test(s) ? d.toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" })
+    : d.toLocaleString("en-US", { timeZone: tz, month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
+const STAGE_TIME_COL_ = { placed: "placedAt", blankOrdered: "blankOrderedAt", blankShipped: "blankShippedAt", blankReceived: "blankReceivedAt",
+  digitizingComplete: "digitizingCompleteAt", designApproved: "designApprovedAt", manufactured: "manufacturedAt", qaPacked: "qaPackedAt",
+  shipped: "shippedAt", delivered: "deliveredAt", completed: "completedAt" };
+const STAGE_TIME_LABEL_ = { placedAt: "the order date", blankOrderedAt: "the blanks were ordered", blankShippedAt: "the blanks shipped", blankReceivedAt: "the blanks were received",
+  digitizingCompleteAt: "digitizing was complete", designApprovedAt: "the design was approved", manufacturedAt: "it was manufactured", qaPackedAt: "it was QA'd and packed",
+  shippedAt: "it shipped", deliveredAt: "it was delivered", completedAt: "it was completed" };
+const STAGE_TIME_NAME_ = { blankOrdered: "Blank ordered", blankShipped: "Blank shipped", blankReceived: "Blank received", digitizingComplete: "Digitizing complete",
+  designApproved: "Design approved", manufactured: "Manufactured", qaPacked: "QA and packed", shipped: "Shipped", delivered: "Delivered", completed: "Completed", placed: "The order date",
+  cancelled: "A cancellation", refunded: "A refund", paid: "A payment", transferReceived: "Transfer received", transfersApplied: "Transfers applied" };
+// What each step has to come after.
+const STAGE_AFTER_ = {
+  blankOrdered: ["placedAt"], blankShipped: ["placedAt", "blankOrderedAt"], blankReceived: ["placedAt", "blankOrderedAt"],
+  digitizingComplete: ["placedAt"], designApproved: ["placedAt", "digitizingCompleteAt"],
+  manufactured: ["placedAt", "blankReceivedAt", "digitizingCompleteAt", "designApprovedAt"],
+  qaPacked: ["placedAt", "manufacturedAt"], shipped: ["placedAt", "manufacturedAt", "qaPackedAt"], delivered: ["placedAt", "qaPackedAt", "shippedAt"],
+  completed: ["placedAt", "deliveredAt"], cancelled: ["placedAt"], refunded: ["placedAt"], paid: ["placedAt"],
+  transferReceived: ["placedAt"], transfersApplied: ["placedAt"],
+};
+// Why `atIso` doesn't fit order `o`'s other dates for `stage` ("" = it does). With `{asEdit: true}` the stage's own
+// current stamp is ignored (it's being replaced) and the later steps already recorded are checked too.
+export function stageTimeError(o, stage, atIso, opts = {}) {
+  if (!o || !atIso) return "";
+  const at = new Date(atIso);
+  if (isNaN(at)) return "that date and time isn't valid";
+  if (at.getTime() > Date.now() + 5 * 60000) return "that's in the future — pick when it happened";
+  if (at < new Date("2020-01-01T00:00:00Z")) return "that date is too far back";
+  const name = STAGE_TIME_NAME_[stage] || "That";
+  for (const col of STAGE_AFTER_[stage] || []) {
+    if (o[col] && at < timeFloor_(o[col])) return `${name} can't be before ${STAGE_TIME_LABEL_[col]} (${shopTime_(o[col])})`;
+  }
+  const own = STAGE_TIME_COL_[stage];
+  for (const [later, after] of Object.entries(STAGE_AFTER_)) {
+    const col = STAGE_TIME_COL_[later];
+    if (!own || !col || col === own || !after.includes(own) || !o[col]) continue;
+    if (at > timeCeil_(o[col])) return `${name} can't be after ${STAGE_TIME_LABEL_[col]} (${shopTime_(o[col])})`;
+  }
+  return "";
+}
+
+// ---- An order's dates, all at once (the order's Dates… window, 2026-10) ----------------------------------------
+export const ORDER_DATE_FIELDS = ["placedAt", "blankOrderedAt", "blankReceivedAt", "digitizingCompleteAt", "designApprovedAt", "manufacturedAt",
+  "qaPackedAt", "shippedAt", "deliveredAt", "completedAt"];
+// Whether a whole set of an order's dates is in order ("" = yes): every step on or after each step it follows.
+export function orderDatesError(d) {
+  for (const [stage, after] of Object.entries(STAGE_AFTER_)) {
+    const col = STAGE_TIME_COL_[stage];
+    if (!col || !d[col]) continue;
+    for (const prev of after) {
+      if (prev === col || !d[prev]) continue;
+      if (timeCeil_(d[col]) < timeFloor_(d[prev])) return `${STAGE_TIME_NAME_[stage]} (${shopTime_(d[col])}) can't be before ${STAGE_TIME_LABEL_[prev]} (${shopTime_(d[prev])})`;
+    }
+  }
+  return "";
+}
+// Writes the changed dates (`changes` = {field: ISO | null}); blank ordered / received apply to every active line
+// that uses a blank (they're per line since migrations/0039) and roll up again. A new manufactured date moves the
+// order's blank / transfer / finished-stock use with it, so cost of goods stays in the month it was made. Checked by
+// the caller (setOrderDates in orders.js) first.
+export async function setOrderDates(db, orderId, changes) {
+  const nb = await noBlankLine_(db);
+  for (const [col, v] of Object.entries(changes)) {
+    if (!ORDER_DATE_FIELDS.includes(col)) continue;
+    if (col === "blankOrderedAt" || col === "blankReceivedAt") {
+      await db.prepare(`UPDATE order_items SET ${col}=? WHERE orderId=? AND cancelDate IS NULL AND NOT ${nb("order_items")}`).bind(v, orderId).run();
+      if (col === "blankOrderedAt" && v === null) await db.prepare(`UPDATE order_items SET blankReceivedAt=NULL WHERE orderId=? AND cancelDate IS NULL AND NOT ${nb("order_items")}`).bind(orderId).run();
+      continue;
+    }
+    await db.prepare(`UPDATE orders SET ${col}=? WHERE orderId=?`).bind(v, orderId).run();
+    if (col === "manufacturedAt" && v) {
+      await db.prepare("UPDATE inventory_movements SET occurredAt=? WHERE orderId=? AND kind='consume' AND voidedAt IS NULL").bind(v, orderId).run();
+      await db.prepare("UPDATE finished_goods_movements SET occurredAt=? WHERE orderId=? AND kind='sell' AND voidedAt IS NULL").bind(v, orderId).run().catch(() => {});
+      await db.prepare("UPDATE transfer_movements SET occurredAt=? WHERE orderId=? AND kind='consume' AND voidedAt IS NULL").bind(v, orderId).run().catch(() => {});
+    }
+  }
+  if ("blankOrderedAt" in changes || "blankReceivedAt" in changes) await recomputeOrderBlankStatus_(db, orderId);
+}
+
 export function stagePrereqError(o, stage) {
   if (!o) return "order not found";
   // The typed-in name has to be digitized and uploaded (Edit items → Files → Order design) before
@@ -8483,7 +8576,8 @@ export async function setFulfillmentStage(db, orderId, stage, extras = {}) {
   const col = STAGE_COL[stage];
   if (!col) throw new Error("Invalid fulfillment stage: " + stage);
 
-  const now = new Date().toISOString();
+  // When it happened: the admin's chosen time (extras.at, ISO — checked by stageTimeError), else now.
+  const now = extras.at || new Date().toISOString();
   if (stage === "blankOrdered") {
     // Stamp the chosen line items (default all active) with the vendor order, then roll up to orders.
     const ids = await blankTargetItemIds_(db, orderId, extras);
@@ -8519,13 +8613,13 @@ export async function setFulfillmentStage(db, orderId, stage, extras = {}) {
       ? await db.prepare(`UPDATE orders SET shippedAt = COALESCE(shippedAt, ?), trackingNumber=? WHERE orderId=?`)
           .bind(now, extras.trackingNumber, orderId).run()
       : await db.prepare(`UPDATE orders SET shippedAt = COALESCE(shippedAt, ?) WHERE orderId=?`).bind(now, orderId).run();
-    return { changed: !!before && !before.shippedAt && Number(r && r.meta && r.meta.changes) > 0 };
+    return { changed: !!before && !before.shippedAt && Number(r && r.meta && r.meta.changes) > 0, at: now };
   } else {
     await db.prepare(`UPDATE orders SET ${col}=? WHERE orderId=?`).bind(now, orderId).run();
   }
   // Making the order uses up its blanks: record them as COGS.
-  if (stage === "manufactured") await consumeBlanksForOrder(db, orderId);
-  return { changed: true };
+  if (stage === "manufactured") await consumeBlanksForOrder(db, orderId, extras.at || null);
+  return { changed: true, at: now };
 }
 
 // ---- Completed orders (migrations/0016) --------------------------------------
@@ -8544,9 +8638,9 @@ export function whyNotCompletable_(o) {
 
 // completed=true closes each order that qualifies; completed=false reopens.
 // Returns {updated, skipped:[{orderId, reason}]} — never throws for one bad order.
-export async function setOrdersCompleted(db, orderIds, completed) {
+export async function setOrdersCompleted(db, orderIds, completed, at = null) {
   const out = { updated: [], skipped: [] };
-  const now = new Date().toISOString();
+  const now = at || new Date().toISOString();
   for (const orderId of orderIds) {
     const o = await db.prepare(
       `SELECT o.orderId, o.orgId, o.voidedAt, o.completedAt, o.deliveredAt, o.paid,
@@ -8554,7 +8648,7 @@ export async function setOrdersCompleted(db, orderIds, completed) {
          FROM orders o WHERE o.orderId = ?`).bind(orderId).first();
     if (!o) { out.skipped.push({ orderId, reason: "order not found" }); continue; }
     if (completed) {
-      const why = whyNotCompletable_(o);
+      const why = whyNotCompletable_(o) || (at && o.deliveredAt && new Date(at) < timeFloor_(o.deliveredAt) ? `completed can't be before it was delivered (${shopTime_(o.deliveredAt)})` : "");
       if (why) { out.skipped.push({ orderId, reason: why }); continue; }
       await db.prepare("UPDATE orders SET completedAt = ? WHERE orderId = ? AND completedAt IS NULL").bind(now, orderId).run();
     } else {
@@ -8647,22 +8741,22 @@ export async function cancelLineItem(db, itemId) {
   return { lateCancel };
 }
 
-export async function cancelLineItemWithReason(db, itemId, reason) {
-  const now = new Date().toISOString();
+export async function cancelLineItemWithReason(db, itemId, reason, at = null) {
+  const now = at || new Date().toISOString();
   const item = await db.prepare("SELECT orderId FROM order_items WHERE id=?").bind(itemId).first();
   if (!item) return { lateCancel: false };
   const order = await db.prepare("SELECT blankOrderedAt FROM orders WHERE orderId=?").bind(item.orderId).first();
   const lateCancel = !!(order && order.blankOrderedAt);
   await db.prepare("UPDATE order_items SET cancelDate=?, cancelReason=?, lateCancel=? WHERE id=?")
     .bind(now, reason || "", lateCancel ? 1 : 0, itemId).run();
-  await returnFinishedStock_(db, item.orderId, itemId);   // a piece already pulled from stock goes back (0060)
+  await returnFinishedStock_(db, item.orderId, itemId, at);   // a piece already pulled from stock goes back (0060)
   await refreshPaidStatus(db, item.orderId);
   return { lateCancel };
 }
 
-export async function setLineItemRefund(db, itemId, refundAmount) {
+export async function setLineItemRefund(db, itemId, refundAmount, at = null) {
   await db.prepare("UPDATE order_items SET refundDate=?, refundCents=? WHERE id=?")
-    .bind(new Date().toISOString(), Math.max(0, toCents(refundAmount)), itemId).run();
+    .bind(at || new Date().toISOString(), Math.max(0, toCents(refundAmount)), itemId).run();
 }
 
 export async function getOrderItemById(db, itemId) {
@@ -11038,7 +11132,7 @@ export async function makeForStock(db, { orgId, productId, size, qty, occurredAt
 // Stock window → Correct count: sets the on-hand count to what was counted, as an `adjust` movement for
 // the difference (an increase at the current average cost, or the linked blank's when there's none yet).
 // Refused below what's set aside for orders, and if the count changed since it was read.
-export async function setFinishedCount(db, { orgId, productId, size, quantity, note }) {
+export async function setFinishedCount(db, { orgId, productId, size, quantity, note, at = null }) {
   const want = Math.floor(Number(quantity));
   if (!Number.isFinite(want) || want < 0) throw pricingError_("Enter a count of 0 or more.");
   const p = await stockProduct_(db, orgId, productId);
@@ -11053,12 +11147,12 @@ export async function setFinishedCount(db, { orgId, productId, size, quantity, n
   let unit = avg;
   if (!unit && delta > 0) { const l = await stockLink_(db, orgId, productId, p.pricingMode, sz); unit = l ? Number(l.avg) || 0 : 0; }
   const newAvg = delta > 0 ? Math.round((Math.max(0, onHand) * avg + delta * unit) / (Math.max(0, onHand) + delta)) : avg;
-  const now = new Date().toISOString();
+  const now = new Date().toISOString(), when = at || now;   // when it was counted
   const G = "COALESCE((SELECT quantity FROM ready_to_ship WHERE orgId = ? AND productId = ? AND size = ?), 0) = ?", gb = [orgId, productId, sz, onHand];
   const res = await db.batch([
     db.prepare(`INSERT INTO finished_goods_movements (orgId, productId, productName, color, size, qtyDelta, unitCostCents, kind, note, occurredAt, createdAt)
       SELECT ?, ?, ?, '', ?, ?, ?, 'adjust', ?, ?, ? WHERE ${G}`)
-      .bind(orgId, productId, p.name || productId, sz, delta, unit, String(note || "Count corrected").slice(0, 300), now, now, ...gb),
+      .bind(orgId, productId, p.name || productId, sz, delta, unit, String(note || "Count corrected").slice(0, 300), when, now, ...gb),
     db.prepare(`INSERT INTO ready_to_ship (orgId, productId, size, quantity, updatedAt, avgCostCents) SELECT ?, ?, ?, ?, ?, ? WHERE ${G}
       ON CONFLICT(orgId, productId, size) DO UPDATE SET quantity = excluded.quantity, avgCostCents = excluded.avgCostCents, updatedAt = excluded.updatedAt`)
       .bind(orgId, productId, sz, want, now, newAvg, ...gb),
@@ -11149,7 +11243,7 @@ export async function getFinishedGoodsValuation(db, asOf) {
 // A pulled from-stock line taken back (its line cancelled, or its order voided, before it shipped):
 // its pieces return to finished stock at the cost they left with, and the line's cost is cleared.
 // Guarded: the line's cost is the claim (cleared last), so it happens once. itemId null = every line.
-async function returnFinishedStock_(db, orderId, itemId) {
+async function returnFinishedStock_(db, orderId, itemId, at = null) {
   if (!(await hasFromStockColumn_(db))) return 0;
   const o = await db.prepare("SELECT shippedAt, deliveredAt FROM orders WHERE orderId=?").bind(orderId).first();
   if (!o || o.shippedAt || o.deliveredAt) return 0;
@@ -11161,12 +11255,12 @@ async function returnFinishedStock_(db, orderId, itemId) {
   let n = 0;
   for (const l of lines) {
     const pieces = Number(l.manufacturedQty), cents = Number(l.cogsCents), unit = Math.round(cents / pieces);
-    const sz = stockSize_(l.pricingMode, l.size), now = new Date().toISOString();
+    const sz = stockSize_(l.pricingMode, l.size), now = new Date().toISOString(), when = at || now;
     const G = "(SELECT COALESCE(cogsCents, 0) FROM order_items WHERE id = ?) = ?", gb = [Number(l.id), cents];
     const res = await db.batch([
       db.prepare(`INSERT INTO finished_goods_movements (orgId, productId, productName, color, size, qtyDelta, unitCostCents, kind, orderId, itemId, note, occurredAt, createdAt)
         SELECT ?, ?, ?, '', ?, ?, ?, 'return', ?, ?, ?, ?, ? WHERE ${G}`)
-        .bind(l.orgId, l.productId, l.name || l.productId, sz, pieces, unit, orderId, Number(l.id), ("Put back from order " + orderId).slice(0, 300), now, now, ...gb),
+        .bind(l.orgId, l.productId, l.name || l.productId, sz, pieces, unit, orderId, Number(l.id), ("Put back from order " + orderId).slice(0, 300), when, now, ...gb),
       db.prepare(`INSERT INTO ready_to_ship (orgId, productId, size, quantity, updatedAt, avgCostCents) SELECT ?, ?, ?, ?, ?, ? WHERE ${G}
         ON CONFLICT(orgId, productId, size) DO UPDATE SET
           avgCostCents = CAST(ROUND((MAX(ready_to_ship.quantity, 0) * ready_to_ship.avgCostCents + excluded.quantity * excluded.avgCostCents) * 1.0
