@@ -4,6 +4,9 @@ inventory and cost of goods, and the books, with everything kept on your own com
 
 **This is an early release.** Make backups (File → Back up…).
 
+**New in 0.1.1:** the OpenDecoDesk icon, as on the website and the Facebook group (the hoop with
+the D), on the program, its window, the dock and taskbar, and the admin's browser tab.
+
 ## Downloads
 
 - **Windows:** `OpenDecoDesk-Windows.zip`. Unzip it to a folder of its own (say
