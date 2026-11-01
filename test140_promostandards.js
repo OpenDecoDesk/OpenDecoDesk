@@ -12,9 +12,9 @@ const { createD1 } = require("./testlib/d1-shim.js");
 const read = (p) => fs.readFileSync(__dirname + "/" + p, "utf8");
 const strip = (src) => src.replace(/import\s*\{[\s\S]*?\}\s*from\s*["'][^"']+["'];?\n?/g, "").replace(/export (async function|function|const)/g, "$1");
 const dbSrc = strip(read("functions/_lib/db.js"));
-const psSrc = strip(read("functions/_lib/promostandards.js")), credSrc = strip(read("functions/_lib/vendorCredentials.js"));
+const psSrc = strip(read("functions/_lib/promostandards.js")), credSrc = strip(read("functions/_lib/vendorCredentials.js")) + "\n" + strip(read("functions/_lib/vendorLog.js"));
 const lib = new Function(dbSrc + `\nreturn { createBlank, getAllBlanks };`)();
-const ps = new Function(psSrc + `\nreturn { readXml_, xmlAll_, psXmlText_, soapCall_, searchPsCompanies, getPsEndpoints, fetchVendorProduct, psProductId_ };`)();
+const ps = new Function(psSrc + `\nreturn { readXml_, xmlAll_, psXmlText_, soapCall_, searchPsCompanies, getPsEndpoints, fetchVendorProduct, psProductId_, psGetParts, psPartFor_, psIsImageUrl_ };`)();
 const vc = new Function(credSrc + `\nreturn { encryptVendorCredentials, decryptVendorCredentials, vendorCredentialsReady };`)();
 const api = new Function(strip(read("functions/_lib/hostConfig.js")) + "\n" + strip(read("functions/_lib/http.js")) + "\n" + strip(read("functions/_lib/catalogValidation.js")) + "\n" + psSrc + "\n" + credSrc + "\n" +
   "const requireAdmin = async (env, host, key, request, msg, role) => { const r = (request.headers.get('x-role') || 'admin'); const rank = { staff: 1, manager: 2, admin: 3 }; return rank[r] >= rank[role === 'staff' || role === 'manager' ? role : 'admin'] ? null : new Response(JSON.stringify({ status: 'error', code: 'forbidden' }), { status: 403 }); };\n" +
@@ -97,6 +97,62 @@ const conn = { name: "SanMar", companyCode: "SanMar", endpoints: { product: "htt
   soapMode = "ok"; err = "";
   try { await ps.fetchVendorProduct(conn, "NOPE", { media: false }, vendorFetch); } catch (e) { err = e.message; }
   ok("…and so does a PromoStandards error message", /Product Id not found/.test(err));
+
+  console.log("\n=== A part's own color, not primaryColor; pictures only ===");
+  // Shaped like SanMar's getProduct answer: every part opens with the product's primaryColor (the same "go to
+  // market" color on each, which SanMar doesn't use), then its own ColorArray with a display name (standardColorName)
+  // and a backend name (colorName). Reading the first Color in a part gave every part primaryColor's name.
+  const pc = (id, std, name, size) => `<ns2:ProductPart><partId>${id}</partId><ns2:primaryColor><Color><standardColorName>Signal Red</standardColorName><colorName>SignalRed</colorName></Color></ns2:primaryColor>` +
+    `<ns2:ColorArray><Color><standardColorName>${std}</standardColorName><colorName>${name}</colorName></Color></ns2:ColorArray><ApparelSize><apparelStyle>Unisex</apparelStyle><labelSize>${size}</labelSize></ApparelSize></ns2:ProductPart>`;
+  const SM_PRODUCT = env(`<GetProductResponse ${P}><Product><ns2:productId>ST100</ns2:productId><ns2:productName>Sample Tee</ns2:productName><ns2:productBrand>Sample</ns2:productBrand>
+    <ns2:ProductPartArray>${pc("1", "Deep Black", "DeepBlack", "S")}${pc("2", "Deep Black", "DeepBlack", "M")}${pc("3", "True Navy", "TrueNavy", "S")}${pc("4", "True Navy", "TrueNavy", "M")}</ns2:ProductPartArray></Product></GetProductResponse>`);
+  const SM_PRICES = env(`<GetConfigurationAndPricingResponse ${C}><Configuration><PartArray>${price("1", [[1, "3.10"]])}${price("2", [[1, "3.20"]])}${price("3", [[1, "3.30"]])}${price("4", [[1, "3.40"]])}</PartArray></Configuration></GetConfigurationAndPricingResponse>`);
+  const smMedia = (pid, url) => `<MediaContent><ns2:productId>ST100</ns2:productId><ns2:partId>${pid}</ns2:partId><url>${url}</url><ns2:mediaType>Image</ns2:mediaType></MediaContent>`;
+  const SM_MEDIA = env(`<GetMediaContentResponse ${M}><MediaContentArray>${smMedia("1", "https://img.example/st100_black_front.jpg")}${smMedia("1", "https://img.example/st100_black.glb")}${smMedia("3", "https://img.example/st100_navy_front.JPG?v=2")}${smMedia("3", "https://img.example/st100_navy_spin.mp4")}</MediaContentArray></GetMediaContentResponse>`);
+  const smFetch = async (url, init = {}) => {
+    const body = String(init.body || "");
+    if (/GetProductRequest/.test(body)) return new Response(SM_PRODUCT, { status: 200 });
+    if (/GetFobPointsRequest/.test(body)) return new Response(env(`<GetFobPointsResponse ${C}><FobPointArray><FobPoint><fobId>1</fobId></FobPoint></FobPointArray></GetFobPointsResponse>`), { status: 200 });
+    if (/GetConfigurationAndPricingRequest/.test(body)) return new Response(SM_PRICES, { status: 200 });
+    if (/GetMediaContentRequest/.test(body)) return new Response(SM_MEDIA, { status: 200 });
+    return new Response("", { status: 404 });
+  };
+  const smConn = { ...conn, name: "SanMar", companyCode: "SanMar", overrides: {} };
+  const sm = await ps.fetchVendorProduct(smConn, "ST100", {}, smFetch);
+  ok("every color comes back — each part's own ColorArray, never the shared primaryColor", sm.colors.map(c => c.color).join() === "Deep Black,True Navy" && !JSON.stringify(sm).includes("Signal"));
+  ok("…SanMar shows its display name (standardColorName); prices land on the right color", sm.prices["Deep Black"].S === 3.1 && sm.prices["True Navy"].M === 3.4);
+  const other = await ps.fetchVendorProduct({ ...smConn, name: "Other", companyCode: "OTHER" }, "ST100", {}, smFetch);
+  ok("…another vendor shows colorName, as before", other.colors.map(c => c.color).join() === "DeepBlack,TrueNavy");
+  ok("pictures only: the 3D model (.glb) and the video (.mp4) are left out, a .JPG with a query string kept", sm.colors[0].images.map(i => i.fileName).join() === "st100_black_front.jpg" &&
+    sm.colors[1].images.map(i => i.fileName).join() === "st100_navy_front.JPG" && ps.psIsImageUrl_("https://x/y/noext") && !ps.psIsImageUrl_("https://x/a.usdz"));
+  // SanMar repeats style-level pictures on every part, labelled with that part's color: the catalog's "Primary" photo
+  // (one color's) and group shots. Kept, they put the same wrong front picture on every color.
+  const smM = (pid, url, id, name, color) => `<MediaContent><productId>ST100</productId><partId>${pid}</partId><url>${url}</url><mediaType>Image</mediaType><ClassTypeArray><ClassType><classTypeId>${id}</classTypeId><classTypeName>${name}</classTypeName></ClassType></ClassTypeArray><color>${color}</color><singlePart>true</singlePart></MediaContent>`;
+  const SHARED = env(`<GetMediaContentResponse ${M}><MediaContentArray>` +
+    smM("1", "https://img.example/st100_black_back.jpg", 1008, "Rear", "Deep Black") + smM("1", "https://img.example/st100_black_front.jpg", 1007, "Front", "Deep Black") +
+    smM("1", "https://img.example/catalog/ST100.jpg", 1006, "Primary", "Deep Black") + smM("1", "https://img.example/st100_black_sw.jpg", 1004, "Swatch", "Deep Black") +
+    smM("1", "https://img.example/st100_group_model.jpg", 500, "Custom", "Deep Black") + smM("2", "https://img.example/st100_black_hi.jpg", 2001, "High", "Deep Black") +
+    smM("3", "https://img.example/st100_navy_front.jpg", 1007, "Front", "True Navy") + smM("3", "https://img.example/catalog/ST100.jpg", 1006, "Primary", "True Navy") +
+    smM("3", "https://img.example/st100_group_model.jpg", 500, "Custom", "True Navy") + `</MediaContentArray></GetMediaContentResponse>`);
+  const sh = await ps.fetchVendorProduct(smConn, "ST100", {}, async (u, init = {}) => /GetMediaContentRequest/.test(String(init.body)) ? new Response(SHARED, { status: 200 }) : smFetch(u, init));
+  const shBlack = sh.colors.find(c => c.color === "Deep Black").images, shNavy = sh.colors.find(c => c.color === "True Navy").images;
+  ok("a picture the vendor puts on more than one color (SanMar's catalog Primary, group shots) isn't any color's picture", !JSON.stringify(sh.colors).includes("catalog/ST100.jpg") && !JSON.stringify(sh.colors).includes("group_model") &&
+    shNavy.map(i => i.fileName).join() === "st100_navy_front.jpg");
+  ok("…each color's own pictures stay, front first and the swatch last; SanMar's 2001 \"High\" isn't a swatch", shBlack[0].fileName === "st100_black_front.jpg" && shBlack[shBlack.length - 1].type === "swatch" &&
+    shBlack.find(i => i.fileName === "st100_black_hi.jpg").type !== "swatch" && shBlack.length === 4);
+  const one = await ps.fetchVendorProduct(smConn, "ST100", {}, async (u, init = {}) => {
+    const b = String(init.body || "");
+    if (/GetProductRequest/.test(b)) return new Response(env(`<GetProductResponse ${P}><Product><ns2:productId>ST100</ns2:productId><ns2:ProductPartArray>${pc("1", "Deep Black", "DeepBlack", "S")}</ns2:ProductPartArray></Product></GetProductResponse>`), { status: 200 });
+    if (/GetMediaContentRequest/.test(b)) return new Response(SHARED, { status: 200 });
+    return smFetch(u, init);
+  });
+  ok("…a style that comes in one color keeps every picture", JSON.stringify(one.colors).includes("catalog/ST100.jpg"));
+  const parts = await ps.psGetParts(smConn, "ST100", {}, smFetch);
+  ok("ordering: each color + size finds its own part — by the display name or SanMar's backend name", ps.psPartFor_(parts, "True Navy", "M") === "4" && ps.psPartFor_(parts, "Deep Black", "S") === "1" &&
+    ps.psPartFor_(parts, "TrueNavy", "S") === "3" && ps.psPartFor_(parts, "Signal Red", "S") === "");
+  const dupe = env(`<GetProductResponse ${P}><Product><ns2:productId>ST100</ns2:productId><ns2:ProductPartArray>${pc("1", "Deep Black", "DeepBlack", "S")}${pc("9", "Deep Black", "DeepBlack", "S")}${pc("3", "True Navy", "TrueNavy", "S")}</ns2:ProductPartArray></Product></GetProductResponse>`);
+  const dParts = await ps.psGetParts(smConn, "ST100", {}, async (u, init = {}) => /GetProductRequest/.test(String(init.body)) ? new Response(dupe, { status: 200 }) : new Response("", { status: 404 }));
+  ok("…two parts for the same color + size are never guessed between (refused), the others still match", ps.psPartFor_(dParts, "Deep Black", "S") === "" && dParts.ambiguous["deepblack|s"] && ps.psPartFor_(dParts, "True Navy", "S") === "3");
   ok("the vendor's product ID is the style # unless the connection says how to write it", ps.psProductId_(conn, "K540") === "K540" && ps.psProductId_({ overrides: { productIdFormat: "{brand} {style}" } }, "5100", "C2 Sport") === "C2 Sport 5100");
 
   console.log("\n=== The directory ===");

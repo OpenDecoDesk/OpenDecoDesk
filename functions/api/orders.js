@@ -19,6 +19,7 @@ import { copyVendorImage } from "../_lib/vendorImages.js";
 import { countStitches } from "../_lib/stitchCount.js";
 import { findOrphanImages, deleteOrphanImages } from "../_lib/orphanImages.js";
 import { searchPsCompanies, getPsEndpoints, fetchVendorProduct, PS_OVERRIDES, psSendPO } from "../_lib/promostandards.js";
+import { vendorLogFetch, listVendorApiLog, getVendorApiLogEntry } from "../_lib/vendorLog.js";
 import { supplierConnection, supplierShipMethods, supplierShipTo, planSupplierOrder, checkSupplierShipments, supplierOrderApprovalCheck } from "../_lib/supplierOrders.js";
 import { encryptVendorCredentials, decryptVendorCredentials, vendorCredentialsReady } from "../_lib/vendorCredentials.js";
 
@@ -47,7 +48,7 @@ import { rateLimited, rateLimitResponse } from "../_lib/rateLimit.js";
 import { readInvoiceWithAi } from "../_lib/invoiceAi.js";
 import { jsonResponse, featureOffResponse, signOrderToken } from "../_lib/http.js";
 import {
-  getAllOrgs, getOrgById, createOrg, updateOrg, cleanDeliveryOptions, setOrgDeliveryOptions, defaultDeliveryOptions, cleanShippingAddress, stagePrereqError, getSystemIssues,
+  getAllOrgs, getOrgById, createOrg, updateOrg, cleanDeliveryOptions, setOrgDeliveryOptions, defaultDeliveryOptions, cleanShippingAddress, stagePrereqError, stageTimeError, shopTime_, ORDER_DATE_FIELDS, orderDatesError, setOrderDates, whyNotCompletable_, getSystemIssues,
   getProductsByOrg, productShipWeightOz, createProduct, updateProduct, setProductVisible,
   getGlobalSettings, setGlobalSettings, getMachineSettings, setMachineSettings,
   getShipFromAddress, setShipFromAddress, shipFromMissing, getBusinessProfile, setBusinessProfile, getLocaleSettings, setLocaleSettings, FEATURES, getFeatures, setFeatures, resolveTimeZone, setOrdersCompleted, getShippedAwaitingDelivery,
@@ -161,7 +162,7 @@ const CATALOG_ADMIN_ACTIONS = new Set([
   "getBlanks", "createBlank", "updateBlank", "deleteBlank", "mergeBlanks", "markBlankPricesChecked", "getBlankVendorPriceHistory", "recomputeBlankAverageCosts", "confirmProductPrices",
   "previewVendorBlanks", "applyVendorBlanks", "copyVendorImage", "getPricingSettings", "updatePricingSettings", "analyzePricing", "removeBlankImages", "findOrphanImages", "deleteOrphanImages", "suggestColorGroups",
   "vendorDirectorySearch", "vendorDirectoryEndpoints", "listVendorConnections", "saveVendorConnection", "deleteVendorConnection", "testVendorConnection", "linkVendorConnectionBlanks", "fetchVendorProducts",
-  "previewSupplierOrder", "placeSupplierOrder", "listSupplierOrders", "checkSupplierOrderShipments", "cancelSupplierOrder",
+  "previewSupplierOrder", "placeSupplierOrder", "listSupplierOrders", "checkSupplierOrderShipments", "cancelSupplierOrder", "listVendorApiLog", "getVendorApiLogEntry",
   "getBrandRules", "updateBrandRules", "listBrandApprovals", "addBrandApproval", "revokeBrandApproval",
   "getPublishState", "getPreviewLink", "setOrgReady",
   "getShopWizard", "saveShopWizard", "listShopWizards", "deleteShopWizard", "buildProductFromBlank",
@@ -181,7 +182,7 @@ const CATALOG_ADMIN_ACTIONS = new Set([
   "listActiveRuns", "startRun", "completeRun", "getRunStats", "abortRun", "markHoopingDone", "getRunReportByDesign",
   "setMachineStitchCount", "listMaintenanceTasks", "saveMaintenanceTask", "deleteMaintenanceTask", "recordMaintenance", "getMaintenanceLog", "setDesignVersionStitches", "fillDesignStitchCounts",
   "receiveBlanks", "receiveBlankOrder", "addBlankSizes", "readInvoiceWithAi", "writeOffBlanks", "getBlankMovements", "voidInventoryMovement", "restoreInventoryMovement", "getInventoryReport", "previewBlankCatchUp", "applyBlankCatchUp",
-  "getBlankLinks", "setBlankLink", "deleteBlankLink",
+  "getBlankLinks", "setBlankLink", "saveBlankLinks", "deleteBlankLink",
   "getReadyToShip", "setReadyToShipQty", "makeForStock", "getFinishedGoodsMovements", "voidFinishedGoodsMovement",
   "listGraphics", "saveGraphic", "deleteGraphic", "setProductGraphicColorBlocked", "getTierPrices", "setTierPrices",
   "listTransfers", "saveTransfer", "deleteTransfer", "receiveTransferSheet", "writeOffTransfers",
@@ -233,7 +234,7 @@ const ADMIN_ONLY_ACTIONS = [
   "updateGlobalSettings", "updateFeatures", "updateBusinessProfile", "updateLocaleSettings", "updateSalesTaxSettings", "updateShipFromAddress",
   "updateMachineSettings", "backfillStripeFees", "getAuditLog", "sendTestEmail", "updatePricingSettings", "findOrphanImages", "deleteOrphanImages", "vendorDirectorySearch", "vendorDirectoryEndpoints", "saveVendorConnection", "deleteVendorConnection", "testVendorConnection", "linkVendorConnectionBlanks",
   // Ordering from a supplier spends the shop's money (the card / terms the supplier has on file): admin only.
-  "previewSupplierOrder", "placeSupplierOrder", "listSupplierOrders", "checkSupplierOrderShipments", "cancelSupplierOrder",
+  "previewSupplierOrder", "placeSupplierOrder", "listSupplierOrders", "checkSupplierOrderShipments", "cancelSupplierOrder", "listVendorApiLog", "getVendorApiLogEntry",
   "updateBrandRules",
   // The domain step (Global settings → Your domain): a Cloudflare key that can change the account's Workers and DNS.
   "getCloudflareSetup", "connectCloudflare",
@@ -267,7 +268,7 @@ const STAFF_ACTIONS = [
   "listAbortReasons", "saveAbortReason", "deleteAbortReason", "listActiveRuns", "startRun", "completeRun", "getRunStats", "abortRun",
   "setMachineStitchCount", "listMaintenanceTasks", "saveMaintenanceTask", "deleteMaintenanceTask", "recordMaintenance", "getMaintenanceLog", "setDesignVersionStitches", "fillDesignStitchCounts",
   "markHoopingDone", "getRunReportByDesign", "receiveBlanks", "receiveBlankOrder", "addBlankSizes", "readInvoiceWithAi", "markBlankPricesChecked", "confirmProductPrices", "getBlankVendorPriceHistory", "writeOffBlanks", "getBlankMovements", "voidInventoryMovement",
-  "restoreInventoryMovement", "getInventoryReport", "previewBlankCatchUp", "applyBlankCatchUp", "getBlankLinks", "setBlankLink", "deleteBlankLink",
+  "restoreInventoryMovement", "getInventoryReport", "previewBlankCatchUp", "applyBlankCatchUp", "getBlankLinks", "setBlankLink", "saveBlankLinks", "deleteBlankLink",
   "getReadyToShip", "setReadyToShipQty", "makeForStock", "getFinishedGoodsMovements", "voidFinishedGoodsMovement", "listGraphics", "saveGraphic", "deleteGraphic", "setProductGraphicColorBlocked", "getTierPrices",
   "setTierPrices", "listTransfers", "saveTransfer", "deleteTransfer", "receiveTransferSheet", "writeOffTransfers", "getTransferMovements",
   "voidTransferMovement", "restoreTransferMovement", "getTransferQueue", "setTransferReceived", "getGangSheet", "makeTransferLine",
@@ -278,7 +279,7 @@ const STAFF_ACTIONS = [
   "setDiscount", "deleteOrder", "voidOrder", "updateCustomerInfo", "createLocalSale", "setFulfillmentStage", "useBlanksFromStock", "addBlankShipment",
   "updateBlankShipment", "deleteBlankShipment", "getBlankShipments", "bulkSetFulfillmentStage", "cancelLineItem", "bulkCancelLineItems",
   "setLineItemRefund", "editOrder", "recordTracking", "bulkRecordTracking", "getOrderForShipping", "sendDesignVerification",
-  "listDesignVerifications", "setShippingInfo", "setShippingPaidAmount", "createShippingPaymentLink", "sendInvoice", "getInvoiceDocument", "updateOrderDate", "setOrderDueDate",
+  "listDesignVerifications", "setShippingInfo", "setShippingPaidAmount", "createShippingPaymentLink", "sendInvoice", "getInvoiceDocument", "updateOrderDate", "setOrderDates", "setOrderDueDate",
   "bulkSetDueDate", "listClosedPeriods",
 ];
 const ACTION_ROLE = Object.create(null);   // no prototype: "constructor" is not an action
@@ -387,6 +388,8 @@ export async function onRequestPost(context) {
   // Optional "date received" (YYYY-MM-DD) on a payment: noon UTC that day, or
   // now if it's today. Null = not given; {error} = invalid.
   const paymentDate = (b) => {
+    // A date and time (`at`, 2026-10) — or the older date-only `date` below.
+    if (b.at) { const t = actionTime(b); return t.error ? t : { receivedAt: t.at }; }
     const d = String(b.date || "").trim();
     if (!d) return null;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || isNaN(Date.parse(d + "T00:00:00Z"))) return { error: "Date must be YYYY-MM-DD" };
@@ -395,11 +398,30 @@ export async function onRequestPost(context) {
     if (d < "2020-01-01") return { error: "That date is too far back" };
     return { receivedAt: d === today ? new Date().toISOString() : d + "T12:00:00.000Z" };
   };
+  // When something happened, as the admin chose it (2026-10): `b.at` — an ISO date-time from the browser's
+  // date-and-time box (or a bare YYYY-MM-DD = that day). Not given → null (the action uses now); {error} = refused.
+  const actionTime = (b, field = "at") => {
+    const raw = b && b[field];
+    if (raw == null || raw === "") return null;
+    const v = String(raw).trim();
+    const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? v + "T12:00:00.000Z" : v);
+    if (isNaN(d)) return { error: "That date and time isn't valid." };
+    if (d.getTime() > Date.now() + 5 * 60000) return { error: "That's in the future — pick when it happened." };
+    if (d < new Date("2020-01-01T00:00:00Z")) return { error: "That date is too far back." };
+    return { at: d.toISOString() };
+  };
   const periodGuard = async (b) => {
     const months = [];
     const a = b.action;
     if (["addPayment", "recordRefund", "markPaidManual", "createLocalSale", "createTestTransaction"].includes(a)) months.push(nowMonth());
+    // A local sale dated into a closed month changes that month's sales (it was only checked against this month).
+    if (a === "createLocalSale" && /^\d{4}-\d{2}-\d{2}/.test(String(b.placedAt || ""))) months.push(String(b.placedAt).slice(0, 7));
+    // Making things after the fact dates their blank use (cost of goods) in the month chosen.
+    if (["setFulfillmentStage", "bulkSetFulfillmentStage"].includes(a) && b.stage === "manufactured" && b.at) { const t = actionTime(b); if (t && t.at) months.push(t.at.slice(0, 7)); }
+    if (["cancelLineItem", "bulkCancelLineItems", "markHoopingDone", "makeTransferLine"].includes(a) && b.at) { const t = actionTime(b); if (t && t.at) months.push(t.at.slice(0, 7)); }
     if (["addPayment", "recordRefund", "setPaymentDate"].includes(a) && /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || ""))) months.push(String(b.date).slice(0, 7));
+    // A payment / Mark as paid / count correction / transfer write-off dated with a date and time (2026-10).
+    if (["addPayment", "recordRefund", "setPaymentDate", "markPaidManual", "setReadyToShipQty"].includes(a) && b.at) { const t = actionTime(b); if (t && t.at) months.push(t.at.slice(0, 7)); }
     if (a === "setPaymentDate" && b.paymentId) months.push(await paymentMonth(env.DB, b.paymentId));
     if (a === "saveExpense" && b.expense && /^\d{4}-\d{2}-\d{2}$/.test(String(b.expense.date || ""))) months.push(String(b.expense.date).slice(0, 7));
     if (["saveExpense", "deleteExpense"].includes(a) && (b.expenseId || (b.expense && b.expense.id))) months.push(await expenseMonth(env.DB, b.expenseId || b.expense.id));
@@ -414,7 +436,7 @@ export async function onRequestPost(context) {
     if (a === "importExpenses" && Array.isArray(b.rows)) for (const r of b.rows.slice(0, 500)) if (/^\d{4}-\d{2}-\d{2}$/.test(String(r && r.date || ""))) months.push(String(r.date).slice(0, 7));
     if (["receiveBlanks", "receiveBlankOrder"].includes(a) && /^\d{4}-\d{2}-\d{2}$/.test(String(b.receivedAt || ""))) months.push(String(b.receivedAt).slice(0, 7));
     if (a === "writeOffBlanks" && /^\d{4}-\d{2}-\d{2}$/.test(String(b.occurredAt || ""))) months.push(String(b.occurredAt).slice(0, 7));
-    if (["receiveTransferSheet", "writeOffTransfers"].includes(a) && /^\d{4}-\d{2}-\d{2}$/.test(String(b.receivedAt || b.occurredAt || ""))) months.push(String(b.receivedAt || b.occurredAt).slice(0, 7));
+    if (["receiveTransferSheet", "writeOffTransfers"].includes(a) && /^\d{4}-\d{2}-\d{2}/.test(String(b.receivedAt || b.occurredAt || ""))) months.push(String(b.receivedAt || b.occurredAt).slice(0, 7));
     if (a === "createFromStatementLine" && b.lineId) { const l = await getStatementLine(env.DB, b.lineId); if (l) months.push(String(l.lineDate).slice(0, 7)); }
     if (["setDiscount", "editOrder", "setShippingInfo", "setShippingPaidAmount", "voidOrder", "deleteOrder", "updateOrderDate"].includes(a) && b.orderId) months.push(await orderMonth(env.DB, String(b.orderId)));
     if (a === "updateOrderDate" && /^\d{4}-\d{2}-\d{2}$/.test(String(b.date || ""))) months.push(String(b.date).slice(0, 7));
@@ -424,7 +446,7 @@ export async function onRequestPost(context) {
     if ((a === "voidInventoryMovement" || a === "restoreInventoryMovement") && b.movementId) months.push(await movementMonth(env.DB, b.movementId));
     if ((a === "voidTransferMovement" || a === "restoreTransferMovement") && b.movementId) months.push(await transferMovementMonth(env.DB, b.movementId));
     // Finished stock (migrations/0060): Make for stock by its date; a void by the entry's month.
-    if (a === "makeForStock" && /^\d{4}-\d{2}-\d{2}$/.test(String(b.occurredAt || ""))) months.push(String(b.occurredAt).slice(0, 7));
+    if (a === "makeForStock" && b.occurredAt) { const t = actionTime(b, "occurredAt"); if (t && t.at) months.push(t.at.slice(0, 7)); }
     if (a === "voidFinishedGoodsMovement" && b.movementId) {
       const r = await env.DB.prepare("SELECT occurredAt FROM finished_goods_movements WHERE id=?").bind(Number(b.movementId)).first().catch(() => null);
       if (r) months.push(String(r.occurredAt).slice(0, 7));
@@ -1434,7 +1456,9 @@ export async function onRequestPost(context) {
     if (ids.length > 500) return jsonResponse({ status: "error", message: "Too many orders (max 500)" }, 400);
     if (!ids.every((id) => typeof id === "string" && ORDER_ID_RE.test(id))) return jsonResponse({ status: "error", message: "Invalid order ID in list" }, 400);
     const completed = body.completed !== false;
-    const r = await setOrdersCompleted(env.DB, ids, completed);
+    const when = completed ? actionTime(body) : null;
+    if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+    const r = await setOrdersCompleted(env.DB, ids, completed, when ? when.at : null);
     for (const u of r.updated) audit({ orgId: u.orgId, orderId: u.orderId, action: completed ? "order.completed" : "order.reopened", detail: null });
     return jsonResponse({ status: "ok", updated: r.updated.length, skipped: r.skipped });
   }
@@ -1494,8 +1518,12 @@ export async function onRequestPost(context) {
     // source of truth for "paid"), rather than flipping a flag nothing backs up.
     const before = await getOrderById(env.DB, body.orderId);
     if (!before) return jsonResponse({ status: "error", message: "Order not found" }, 404);
+    // When the money came in (date and time, default now): the payment's date and the order's paid date.
+    const when = actionTime(body);
+    if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+    if (when) { const bad = stageTimeError(before, "paid", when.at); if (bad) return jsonResponse({ status: "error", message: bad + "." }, 409); }
     const recorded = await settleOrderBalance(env.DB, body.orderId,
-      "Marked paid manually" + (before.paymentMethod ? " (" + before.paymentMethod + ")" : ""));
+      "Marked paid manually" + (before.paymentMethod ? " (" + before.paymentMethod + ")" : ""), when ? when.at : null);
 
     const order = await getOrderById(env.DB, body.orderId);
     const paidAt = (order && order.paidAt) || new Date().toISOString();
@@ -1939,11 +1967,11 @@ export async function onRequestPost(context) {
     const randHex = crypto.randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase();
     const orderId = orgPrefix + "-" + Date.now().toString(36).toUpperCase() + "-" + randHex;
 
-    const now = new Date().toISOString();
-    const providedDate = body.placedAt ? String(body.placedAt).trim() : null;
-    const placedAt = (providedDate && /^\d{4}-\d{2}-\d{2}$/.test(providedDate))
-      ? new Date(providedDate + "T12:00:00Z").toISOString()
-      : now;
+    // When the sale happened (a date and time, or a bare date = that day; default now): the order date, and —
+    // ticked — when it was paid and handed over, and its stock lines pulled.
+    const saleTime = actionTime(body, "placedAt");
+    if (saleTime && saleTime.error) return jsonResponse({ status: "error", message: saleTime.error }, 400);
+    const placedAt = saleTime ? saleTime.at : new Date().toISOString();
     const order = {
       orderId,
       orgId: org,
@@ -1978,11 +2006,11 @@ export async function onRequestPost(context) {
     // Lines for stocked products come out of the shop's finished stock (migrations/0060) — handed over
     // now, so they're pulled at once.
     await insertOrder(env.DB, order, pricedItems, { fillFromStock: true });
-    await pullStockLines(env.DB, orderId);
+    await pullStockLines(env.DB, orderId, placedAt);
 
     if (body.paid)      await settleOrderBalance(env.DB, orderId,
-                          "Local sale" + (order.paymentMethod ? " (" + order.paymentMethod + ")" : ""));
-    if (body.delivered) await setFulfillmentStage(env.DB, orderId, "delivered");
+                          "Local sale" + (order.paymentMethod ? " (" + order.paymentMethod + ")" : ""), placedAt);
+    if (body.delivered) await setFulfillmentStage(env.DB, orderId, "delivered", { at: placedAt });
 
     audit({ orgId: org, orderId, action: "order.created_local_sale",
       detail: { customerName: order.customerName, total: subtotal, paid: !!body.paid, items: pricedItems.length } });
@@ -2070,10 +2098,20 @@ export async function onRequestPost(context) {
     }
     if (body.stage === "designApproved" && !featureOn("designVerification")) return featureOffResponse("designVerification", featureLabel_("designVerification"));
     // Stage order is enforced here, not just in the browser (stagePrereqError mirrors FULFILLMENT_STAGES).
-    const why = stagePrereqError(await getOrderById(env.DB, String(body.orderId)), body.stage);
+    const stageOrder = await getOrderById(env.DB, String(body.orderId));
+    const why = stagePrereqError(stageOrder, body.stage);
     if (why) return jsonResponse({ status: "error", message: `Can't mark ${body.stage}: ${why}.` }, 409);
-    // Which line items a per-item blank stage applies to (migrations/0039); absent = all active lines.
-    const itemIds = Array.isArray(body.itemIds) ? body.itemIds.map(Number).filter(Boolean) : undefined;
+    // When it happened (the admin's date and time, default now) — it must fit the order's other dates.
+    const when = actionTime(body);
+    if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+    if (when) { const bad = stageTimeError(stageOrder, body.stage, when.at); if (bad) return jsonResponse({ status: "error", message: bad + "." }, 409); }
+    { const locked = await periodGuard(body); if (locked) return locked; }
+    // Which line items a per-item blank stage applies to (migrations/0039); absent = all active lines. The receive
+    // window sends `items` [{orderId, itemId}] (as the bulk bar does) — it used to be ignored here, so receiving some
+    // lines from one order's stage menu received all of them.
+    const itemIds = Array.isArray(body.itemIds) ? body.itemIds.map(Number).filter(Boolean)
+      : Array.isArray(body.items) ? body.items.filter(it => String(it && it.orderId || body.orderId) === String(body.orderId)).map(it => Number(it.itemId)).filter(Boolean)
+      : undefined;
     const extras =
       body.stage === "blankOrdered"
         ? { vendor: body.vendor || "", vendorOrderId: body.vendorOrderId || "", estimatedDelivery: body.estimatedDelivery || "", itemIds }
@@ -2084,13 +2122,14 @@ export async function onRequestPost(context) {
       : body.stage === "shipped"
         ? { trackingNumber: body.trackingNumber || "" }
         : {};
-    const now = new Date().toISOString();
+    if (when) extras.at = when.at;
     const res = await setFulfillmentStage(env.DB, body.orderId, body.stage, extras);
+    const at = (res && res.at) || (when && when.at) || new Date().toISOString();
     if (body.stage === "shipped" && res && res.changed) sendShippedEmailLater_(body.orderId);
-    if (body.stage === "designApproved" && isDesktopEdition(env)) await approvePendingDesignVerifications(env.DB, body.orderId, now);
+    if (body.stage === "designApproved" && isDesktopEdition(env)) await approvePendingDesignVerifications(env.DB, body.orderId, at);
     audit({ orgId: body.org, orderId: body.orderId, action: "order.fulfillment_stage",
       detail: { stage: body.stage, ...extras } });
-    return jsonResponse({ status: "ok", timestamp: now });
+    return jsonResponse({ status: "ok", timestamp: at });
   }
 
   // Orders → stage "Use blanks from stock" / Run Order → "Use from stock": the order's waiting lines take
@@ -2103,8 +2142,11 @@ export async function onRequestPost(context) {
     if (!order || (body.org && order.orgId !== body.org)) return jsonResponse({ status: "error", message: "Order not found" }, 404);
     const why = stagePrereqError(order, "blankOrdered");
     if (why) return jsonResponse({ status: "error", message: `Can't use blanks from stock: ${why}.` }, 409);
+    const when = actionTime(body);
+    if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+    if (when) { const bad = stageTimeError(order, "blankReceived", when.at); if (bad) return jsonResponse({ status: "error", message: bad + "." }, 409); }
     let res;
-    try { res = await useBlanksFromStock(env.DB, order.orderId); }
+    try { res = await useBlanksFromStock(env.DB, order.orderId, when ? when.at : null); }
     catch (e) { if (e.userFacing) return jsonResponse({ status: "error", message: e.message }, 409); throw e; }
     audit({ orgId: order.orgId, orderId: order.orderId, action: "order.blanks_from_stock",
       detail: { lines: res.lines.map(l => ({ itemId: l.itemId, qty: l.qty, blank: l.blank, color: l.color, size: l.size })) } });
@@ -2197,11 +2239,17 @@ export async function onRequestPost(context) {
       ? { trackingNumber: String(body.trackingNumber).slice(0, 100) }
       : {};
     const extras = { ...blankOrderedExtras, ...blankShippedExtras, ...blankReceivedExtras, ...shippedExtras };
+    // One date and time for every order picked (default now); an order it doesn't fit is skipped, saying why.
+    const when = actionTime(body);
+    if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+    { const locked = await periodGuard(body); if (locked) return locked; }
+    if (when) extras.at = when.at;
     let updated = 0, skipped = 0;
     const errors = [];
     for (const orderId of body.orderIds) {
       try {
-        const why = stagePrereqError(await getOrderById(env.DB, orderId), body.stage);
+        const ord = await getOrderById(env.DB, orderId);
+        const why = stagePrereqError(ord, body.stage) || (when ? stageTimeError(ord, body.stage, when.at) : "");
         if (why) { errors.push(`${orderId}: can't mark ${body.stage} — ${why}`); skipped++; continue; }
         const perOrderExtras = itemsByOrder[orderId] ? { ...extras, itemIds: itemsByOrder[orderId] } : extras;
         const res = await setFulfillmentStage(env.DB, orderId, body.stage, perOrderExtras);
@@ -2226,7 +2274,14 @@ export async function onRequestPost(context) {
     if (denied) return denied;
     { const locked = await periodGuard(body); if (locked) return locked; }
     if (!body.org || !body.sheetRow) return jsonResponse({ status: "error", message: "Missing org or sheetRow" }, 400);
-    const { lateCancel } = await cancelLineItemWithReason(env.DB, body.sheetRow, body.reason || "");
+    const when = actionTime(body);
+    if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+    if (when) {
+      const it0 = await getOrderItemById(env.DB, body.sheetRow);
+      const bad = it0 ? stageTimeError(await getOrderById(env.DB, it0.orderId), "cancelled", when.at) : "";
+      if (bad) return jsonResponse({ status: "error", message: bad + "." }, 409);
+    }
+    const { lateCancel } = await cancelLineItemWithReason(env.DB, body.sheetRow, body.reason || "", when ? when.at : null);
 
     const item = await getOrderItemById(env.DB, body.sheetRow);
     let emailSent = false;
@@ -2247,10 +2302,17 @@ export async function onRequestPost(context) {
     if (denied) return denied;
     { const locked = await periodGuard(body); if (locked) return locked; }
     if (!Array.isArray(body.sheetRows)) return jsonResponse({ status: "error", message: "Missing sheetRows" }, 400);
+    const when = actionTime(body);
+    if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+    if (when) for (const itemId of body.sheetRows) {
+      const it0 = await getOrderItemById(env.DB, itemId);
+      const bad = it0 ? stageTimeError(await getOrderById(env.DB, it0.orderId), "cancelled", when.at) : "";
+      if (bad) return jsonResponse({ status: "error", message: `${it0.orderId}: ${bad}.` }, 409);
+    }
     const results = [];
     const cancelledByOrder = byId_();
     for (const itemId of body.sheetRows) {
-      const { lateCancel } = await cancelLineItemWithReason(env.DB, itemId, body.reason || "");
+      const { lateCancel } = await cancelLineItemWithReason(env.DB, itemId, body.reason || "", when ? when.at : null);
       const item = await getOrderItemById(env.DB, itemId);
       if (item) {
         if (!cancelledByOrder[item.orderId]) cancelledByOrder[item.orderId] = [];
@@ -2278,7 +2340,14 @@ export async function onRequestPost(context) {
     if (denied) return denied;
     { const locked = await periodGuard(body); if (locked) return locked; }
     if (!body.org || !body.sheetRow) return jsonResponse({ status: "error", message: "Missing org or sheetRow" }, 400);
-    await setLineItemRefund(env.DB, body.sheetRow, Number(body.refundAmount) || 0);
+    const when = actionTime(body);
+    if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+    if (when) {
+      const it0 = await getOrderItemById(env.DB, body.sheetRow);
+      const bad = it0 ? stageTimeError(await getOrderById(env.DB, it0.orderId), "refunded", when.at) : "";
+      if (bad) return jsonResponse({ status: "error", message: bad + "." }, 409);
+    }
+    await setLineItemRefund(env.DB, body.sheetRow, Number(body.refundAmount) || 0, when ? when.at : null);
     const refundItem = await getOrderItemById(env.DB, body.sheetRow);
     audit({ orgId: body.org, orderId: refundItem ? refundItem.orderId : null, action: "item.refund_set",
       detail: { itemId: body.sheetRow, name: refundItem ? refundItem.name : null, refundAmount: Number(body.refundAmount) || 0 } });
@@ -3520,6 +3589,16 @@ export async function onRequestPost(context) {
       audit({ orgId: null, orderId: null, action: "vendor.blanks_linked", detail: { id: row.id, count: n } });
       return jsonResponse({ status: "ok", linked: n, connections: await listVendorConnections(env.DB) });
     }
+    // A connection's log of vendor calls (vendorLog.js): newest first, then one call's full request + response.
+    if (body.action === "listVendorApiLog") {
+      if (!body.connectionId) return jsonResponse({ status: "error", message: "Which connection?" }, 400);
+      return jsonResponse({ status: "ok", ...(await listVendorApiLog(env.DB, { connectionId: body.connectionId, beforeId: body.beforeId, errorsOnly: !!body.errorsOnly, action: String(body.logAction || ""), limit: body.limit })) });
+    }
+    if (body.action === "getVendorApiLogEntry") {
+      const entry = await getVendorApiLogEntry(env, body.id);
+      if (!entry) return jsonResponse({ status: "error", message: "That log entry is gone (logs are kept 30 days)." }, 404);
+      return jsonResponse({ status: "ok", entry });
+    }
     // Test connection / fetch products: the stored login is decrypted here, used for the calls, and dropped.
     if (body.action === "testVendorConnection" || body.action === "fetchVendorProducts") {
       const rl = await rateLimited(env, "vendor_api", request, 30);
@@ -3530,7 +3609,8 @@ export async function onRequestPost(context) {
       try { credentials = await decryptVendorCredentials(env, row.credentialsEnc); }
       catch (e) { return jsonResponse({ status: "error", message: e.message }, 400); }
       if (!credentials) return jsonResponse({ status: "error", message: "This connection has no login yet — add it under Vendor integrations." }, 400);
-      const conn = { id: row.id, name: row.name, companyCode: row.companyCode, endpoints: JSON.parse(row.endpointsJson || "{}"), overrides: JSON.parse(row.overridesJson || "{}"), credentials };
+      const conn = { id: row.id, name: row.name, companyCode: row.companyCode, endpoints: JSON.parse(row.endpointsJson || "{}"), overrides: JSON.parse(row.overridesJson || "{}"), credentials,
+        fetch: vendorLogFetch(env, Number(row.id), { context: body.action, actor: adminActor(request), defer: (p) => context.waitUntil(p) }) };
       if (body.action === "testVendorConnection") {
         const style = String(body.style || "").trim().slice(0, 60);
         if (!style) return jsonResponse({ status: "error", message: "Which style should the test look up?" }, 400);
@@ -3731,7 +3811,7 @@ export async function onRequestPost(context) {
       if (rl.blocked) return rateLimitResponse(rl.retryAfter);
       const retry = body.action === "placeSupplierOrder" && body.retryId ? await getSupplierOrder(env.DB, body.retryId) : null;
       if (body.retryId && body.action === "placeSupplierOrder" && !retry) return jsonResponse({ status: "error", message: "That supplier order wasn't found" }, 404);
-      const c = await supplierConnection(env, retry ? retry.connectionId : (body.connectionId || body.id));
+      const c = await supplierConnection(env, retry ? retry.connectionId : (body.connectionId || body.id), { context: body.action, actor: adminActor(request), defer: (p) => context.waitUntil(p) });
       if (c.error) return jsonResponse({ status: "error", message: c.error }, c.code);
       const conn = c.conn;
       if (!conn.endpoints.po) return jsonResponse({ status: "error", message: `${conn.name} has no Purchase Order service set up — add it under Tools → Vendor integrations (the supplier has to turn ordering on for your account first).` }, 400);
@@ -3828,7 +3908,7 @@ export async function onRequestPost(context) {
       if (rl.blocked) return rateLimitResponse(rl.retryAfter);
       let one = null;
       if (body.id) { one = await getSupplierOrder(env.DB, body.id); if (!one) return jsonResponse({ status: "error", message: "That supplier order wasn't found" }, 404); }
-      const r = await checkSupplierShipments(env, one ? { order: one } : { limit: 10 });
+      const r = await checkSupplierShipments(env, one ? { order: one, context: body.action, actor: adminActor(request) } : { limit: 10, context: body.action, actor: adminActor(request) });
       return jsonResponse({ status: "ok", ...r, orders: await listSupplierOrders(env.DB, { limit: 30 }) });
     }
 
@@ -4165,7 +4245,10 @@ export async function onRequestPost(context) {
     }
     if (body.action === "writeOffTransfers") {
       const locked = await periodGuard(body); if (locked) return locked;
-      await writeOffTransfers(env.DB, { transferId: Number(body.transferId), qty: Number(body.qty), note: body.note, occurredAt: body.occurredAt });
+      if (!(Number(body.qty) > 0)) return jsonResponse({ status: "error", message: "Enter how many to write off" }, 400);
+      const when = actionTime(body, "occurredAt");   // a date and time, or a bare date (it used to be stored unchecked)
+      if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+      await writeOffTransfers(env.DB, { transferId: Number(body.transferId), qty: Number(body.qty), note: body.note, occurredAt: when ? when.at : undefined });
       audit({ orgId: null, orderId: null, action: "transfer.writeoff", detail: { transferId: Number(body.transferId), qty: Number(body.qty), note: body.note || "" } });
       return jsonResponse({ status: "ok", transfers: await listTransfers(env.DB, body.org || null) });
     }
@@ -4222,14 +4305,20 @@ export async function onRequestPost(context) {
     }
     if (body.action === "setTransferReceived") {
       if (!body.itemId) return jsonResponse({ status: "error", message: "itemId required" }, 400);
-      await setTransferReceived(env.DB, Number(body.itemId), body.received !== false);
+      const when = body.received !== false ? actionTime(body) : null;
+      if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+      if (when) { const it0 = await getOrderItemById(env.DB, Number(body.itemId)); const bad = it0 ? stageTimeError(await getOrderById(env.DB, it0.orderId), "transferReceived", when.at) : ""; if (bad) return jsonResponse({ status: "error", message: bad + "." }, 409); }
+      await setTransferReceived(env.DB, Number(body.itemId), body.received !== false, when ? when.at : null);
       audit({ orgId: body.org || null, orderId: body.orderId || null, action: body.received !== false ? "order.transfer_received" : "order.transfer_unreceived", detail: { itemId: Number(body.itemId) } });
       return jsonResponse({ status: "ok" });
     }
     // Run Transfer Sheets → "Mark transfers applied" on a line that is also embroidered (and its undo).
     if (body.action === "setTransfersApplied") {
       if (!body.orderId || !body.itemId) return jsonResponse({ status: "error", message: "orderId and itemId required" }, 400);
-      try { await setTransfersApplied(env.DB, body.orderId, Number(body.itemId), body.applied !== false); }
+      const when = body.applied !== false ? actionTime(body) : null;
+      if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+      if (when) { const bad = stageTimeError(await getOrderById(env.DB, String(body.orderId)), "transfersApplied", when.at); if (bad) return jsonResponse({ status: "error", message: bad + "." }, 409); }
+      try { await setTransfersApplied(env.DB, body.orderId, Number(body.itemId), body.applied !== false, when ? when.at : null); }
       catch (e) { return jsonResponse({ status: "error", message: e.message || "Could not update the line" }, 400); }
       audit({ orgId: body.org || null, orderId: body.orderId, action: body.applied !== false ? "order.transfers_applied" : "order.transfers_unapplied", detail: { itemId: Number(body.itemId) } });
       return jsonResponse({ status: "ok", applied: body.applied !== false });
@@ -4246,16 +4335,20 @@ export async function onRequestPost(context) {
     }
     if (body.action === "makeTransferLine") {
       if (!body.orderId || !body.itemId) return jsonResponse({ status: "error", message: "orderId and itemId required" }, 400);
+      const when = actionTime(body);
+      if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+      if (when) { const bad = stageTimeError(await getOrderById(env.DB, String(body.orderId)), "manufactured", when.at); if (bad) return jsonResponse({ status: "error", message: bad + "." }, 409); }
+      { const locked = await periodGuard(body); if (locked) return locked; }
       let res;
       // A line that's also embroidered isn't MADE from here — Run Order makes it when its embroidery is
       // finished. From here only its transfers are marked applied (migrations/0048).
       if (await lineHasEmbroidery(env.DB, Number(body.itemId))) {
-        try { await setTransfersApplied(env.DB, body.orderId, Number(body.itemId), true); }
+        try { await setTransfersApplied(env.DB, body.orderId, Number(body.itemId), true, when ? when.at : null); }
         catch (e) { return jsonResponse({ status: "error", message: e.message || "Could not mark the transfers applied" }, 400); }
         audit({ orgId: body.org || null, orderId: body.orderId, action: "order.transfers_applied", detail: { itemId: Number(body.itemId) } });
         return jsonResponse({ status: "ok", applied: true, orderComplete: false });
       }
-      try { res = await makeTransferLine(env.DB, body.orderId, Number(body.itemId)); }
+      try { res = await makeTransferLine(env.DB, body.orderId, Number(body.itemId), when ? when.at : null); }
       catch (e) { return jsonResponse({ status: "error", message: e.message || "Could not mark made" }, 400); }
       audit({ orgId: body.org || null, orderId: body.orderId, action: "order.transfer_made", detail: { itemId: Number(body.itemId), orderComplete: !!res.orderComplete } });
       return jsonResponse({ status: "ok", orderComplete: !!res.orderComplete });
@@ -4533,9 +4626,14 @@ export async function onRequestPost(context) {
     // "Mark done (no timing)" for one hooping of one piece (pieceNo omitted = a new piece).
     if (body.action === "markHoopingDone") {
       if (!body.org || !body.orderId || !body.itemId) return jsonResponse({ status: "error", message: "Missing org, orderId or itemId" }, 400);
+      // When it was done (untimed — default now): it has to fit the order's dates, and may finish the order.
+      const when = actionTime(body);
+      if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+      if (when) { const bad = stageTimeError(await getOrderById(env.DB, String(body.orderId)), "manufactured", when.at); if (bad) return jsonResponse({ status: "error", message: bad + "." }, 409); }
+      { const locked = await periodGuard(body); if (locked) return locked; }
       let res;
       try { res = await markHoopingDone(env.DB, { orgId: body.org, orderId: body.orderId, itemId: Number(body.itemId), machineId: body.machineId,
-        pieceNo: body.pieceNo, stepNo: body.stepNo, hoopId: body.hoopId, readStitches: stitchReader_(env), actor: adminActor(request) }); }
+        pieceNo: body.pieceNo, stepNo: body.stepNo, hoopId: body.hoopId, readStitches: stitchReader_(env), actor: adminActor(request), at: when ? when.at : null }); }
       catch (e) { return jsonResponse({ status: "error", message: e.message || "Could not mark it done" }, 400); }
       audit({ orgId: body.org, orderId: body.orderId, action: "run.hooping_marked_done", detail: { itemId: Number(body.itemId),
         pieceNo: res.pieceNo, stepNo: res.stepNo, pieceComplete: !!res.pieceComplete, orderComplete: !!res.orderComplete, machineId: body.machineId ?? null,
@@ -4870,6 +4968,40 @@ export async function onRequestPost(context) {
       return jsonResponse({ status: "ok" });
     }
 
+    // All of one product's link changes at once (the product form's Save): `set` [{productColor, productSize, blankId,
+    // blankColor, blankSize}] and `remove` [{productColor, productSize}], written in one batch with ONE MAP check
+    // before and after (setBlankLink above runs it per link). A change that would newly put a price below MAP puts
+    // the product's links back exactly as they were and is refused.
+    if (body.action === "saveBlankLinks") {
+      const org = String(body.org || ""), productId = String(body.productId || "");
+      if (!org || !productId) return jsonResponse({ status: "error", message: "org, productId required" }, 400);
+      const set = Array.isArray(body.set) ? body.set : [], remove = Array.isArray(body.remove) ? body.remove : [];
+      if (set.length + remove.length > 5000) return jsonResponse({ status: "error", message: "Too many links in one save." }, 400);
+      const clean = (l) => ({ productColor: String((l && l.productColor) || "").slice(0, 80), productSize: String((l && l.productSize) || "").slice(0, 20),
+        blankId: Number(l && l.blankId) || 0, blankColor: String((l && l.blankColor) || "").slice(0, 80), blankSize: String((l && l.blankSize) || "").slice(0, 20) });
+      const sets = set.map(clean), removes = remove.map(clean);
+      if (sets.some(l => !l.blankId)) return jsonResponse({ status: "error", message: "Every link needs a blank." }, 400);
+      if (!sets.length && !removes.length) return jsonResponse({ status: "ok", saved: 0, removed: 0 });
+      const mapCheck = async () => {
+        const x = (await analyzePricing(env.DB, { orgId: org, productId }).catch(() => ({ products: [] }))).products[0] || { rows: [], mapProblems: [] };
+        return { keys: new Set(x.rows.filter(r => r.flags.includes("map")).map(r => r.group + "|" + r.size)), problems: x.mapProblems || [] };
+      };
+      const before = await mapCheck();
+      const { results: prev } = await env.DB.prepare("SELECT productColor, productSize, blankId, blankColor, blankSize FROM product_blank_links WHERE orgId=? AND productId=?").bind(org, productId).all();
+      const upsert = (l) => env.DB.prepare(`INSERT INTO product_blank_links (orgId, productId, productColor, productSize, blankId, blankColor, blankSize) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (orgId, productId, productColor, productSize) DO UPDATE SET blankId=excluded.blankId, blankColor=excluded.blankColor, blankSize=excluded.blankSize`)
+        .bind(org, productId, l.productColor, l.productSize, Number(l.blankId), String(l.blankColor || ""), String(l.blankSize || ""));
+      const del = (l) => env.DB.prepare("DELETE FROM product_blank_links WHERE orgId=? AND productId=? AND productColor=? AND productSize=?").bind(org, productId, l.productColor, l.productSize);
+      await env.DB.batch([...removes.map(del), ...sets.map(upsert)]);
+      const after = await mapCheck();
+      if ([...after.keys].some(k => !before.keys.has(k))) {
+        await env.DB.batch([env.DB.prepare("DELETE FROM product_blank_links WHERE orgId=? AND productId=?").bind(org, productId), ...prev.map(upsert)]);
+        const why = after.problems.filter(t => !before.problems.includes(t)).join("; ") || "a price would be below a blank's MAP";
+        return jsonResponse({ status: "error", code: "belowMap", message: `Not saved — ${why}. Raise the price first.` }, 409);
+      }
+      return jsonResponse({ status: "ok", saved: sets.length, removed: removes.length });
+    }
+
     if (body.action === "deleteBlankLink") {
       const { org, productId, productColor, productSize } = body;
       if (!org || !productId) return jsonResponse({ status: "error", message: "org, productId required" }, 400);
@@ -4902,8 +5034,11 @@ export async function onRequestPost(context) {
       const { org, productId, size, quantity } = body;
       if (!org || !productId) return jsonResponse({ status: "error", message: "org, productId required" }, 400);
       if (quantity == null || !Number.isInteger(Number(quantity)) || Number(quantity) < 0) return jsonResponse({ status: "error", message: "Enter a whole count of 0 or more" }, 400);
+      const when = actionTime(body);
+      if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+      { const locked = await periodGuard(body); if (locked) return locked; }
       let r;
-      try { r = await setFinishedCount(env.DB, { orgId: org, productId: String(productId), size: size ?? "", quantity: Number(quantity), note: body.note }); }
+      try { r = await setFinishedCount(env.DB, { orgId: org, productId: String(productId), size: size ?? "", quantity: Number(quantity), note: body.note, at: when ? when.at : null }); }
       catch (e) { if (e.userFacing) return jsonResponse({ status: "error", message: e.message }, 409); throw e; }
       if (r.delta) audit({ orgId: org, orderId: null, action: "inventory.finished_counted", detail: { productId, size: size ?? "", quantity: Number(quantity), delta: r.delta } });
       return jsonResponse({ status: "ok", delta: r.delta });
@@ -4915,12 +5050,10 @@ export async function onRequestPost(context) {
       const { org, productId, size } = body, qty = Number(body.qty);
       if (!org || !productId) return jsonResponse({ status: "error", message: "org, productId required" }, 400);
       if (!Number.isInteger(qty) || qty <= 0 || qty > 10000) return jsonResponse({ status: "error", message: "Enter how many were made" }, 400);
-      let occurredAt;
-      if (body.occurredAt) {
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(body.occurredAt)) return jsonResponse({ status: "error", message: "Date must be YYYY-MM-DD" }, 400);
-        if (body.occurredAt > new Date().toISOString().slice(0, 10)) return jsonResponse({ status: "error", message: "The date can't be in the future" }, 400);
-        occurredAt = body.occurredAt + "T12:00:00.000Z";
-      }
+      // When they were made: a date and time (or a bare date = that day), default now.
+      const when = actionTime(body, "occurredAt");
+      if (when && when.error) return jsonResponse({ status: "error", message: when.error }, 400);
+      const occurredAt = when ? when.at : undefined;
       let r;
       try { r = await makeForStock(env.DB, { orgId: org, productId: String(productId), size: size ?? "", qty, occurredAt }); }
       catch (e) { if (e.userFacing) return jsonResponse({ status: "error", message: e.message }, 409); throw e; }
@@ -5339,6 +5472,69 @@ export async function onRequestPost(context) {
   }
 
   // ---- updateOrderDate — admin edits the placedAt date on an order -------------
+  // ---- setOrderDates — the order's Dates… window: change or clear any of its dates at once (2026-10) ------------
+  // body.dates = {placedAt, blankOrderedAt, …, completedAt} (only the ones changed; ISO date-time, or null / "" to
+  // clear), body.dueDate (YYYY-MM-DD or "" — optional). Every date must fit the others (out of order is refused,
+  // saying which), none in the future; the order date and Manufactured can be changed but not cleared; a date that
+  // moves money or cost of goods (order date, manufactured) can't move into or out of a closed month. Audited first.
+  if (body.action === "setOrderDates") {
+    const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
+    if (denied) return denied;
+    const orderId = String(body.orderId || "").trim();
+    if (!ORDER_ID_RE.test(orderId)) return jsonResponse({ status: "error", message: "Invalid order ID" }, 400);
+    const order = await getOrderById(env.DB, orderId);
+    if (!order) return jsonResponse({ status: "error", message: "Order not found" }, 404);
+    const NAMES = { placedAt: "The order date", blankOrderedAt: "Blank ordered", blankReceivedAt: "Blank received", digitizingCompleteAt: "Digitizing complete",
+      designApprovedAt: "Design approved", manufacturedAt: "Manufactured", qaPackedAt: "QA and packed", shippedAt: "Shipped", deliveredAt: "Delivered", completedAt: "Completed" };
+    const changes = {};
+    const given = body.dates && typeof body.dates === "object" ? body.dates : {};
+    for (const col of ORDER_DATE_FIELDS) {
+      if (!(col in given)) continue;
+      const raw = given[col];
+      if (raw == null || raw === "") {
+        if (col === "placedAt" || col === "manufacturedAt") return jsonResponse({ status: "error", message: `${NAMES[col]} can't be cleared — only changed.` }, 400);
+        if (order[col]) changes[col] = null;
+        continue;
+      }
+      const t = actionTime({ at: raw });
+      if (t.error) return jsonResponse({ status: "error", message: `${NAMES[col]}: ${t.error}` }, 400);
+      if (t.at !== order[col]) changes[col] = t.at;
+    }
+    let dueChange;
+    if ("dueDate" in body) {
+      const d = String(body.dueDate || "").trim();
+      if (d && !/^\d{4}-\d{2}-\d{2}$/.test(d)) return jsonResponse({ status: "error", message: "Due date must be YYYY-MM-DD" }, 400);
+      if ((d || null) !== (order.dueDate || null)) dueChange = d || null;
+    }
+    if (!Object.keys(changes).length && dueChange === undefined) return jsonResponse({ status: "ok", order, changed: 0 });
+    if (changes.manufacturedAt && !order.manufacturedAt) return jsonResponse({ status: "error", message: "Manufactured is set by marking the order made (stage menu or Run Order), not here." }, 400);
+    const merged = { ...order, ...changes };
+    const bad = orderDatesError(merged);
+    if (bad) return jsonResponse({ status: "error", message: bad + "." }, 409);
+    if (changes.completedAt && !order.completedAt) {
+      const why = whyNotCompletable_({ ...order, deliveredAt: merged.deliveredAt, completedAt: null, activeItems: (order.items || []).filter(i => !i.cancelDate).length });
+      if (why) return jsonResponse({ status: "error", message: `It can't be completed: ${why}.` }, 409);
+    }
+    // Closed months: the order date and Manufactured move money / cost of goods between months.
+    for (const col of ["placedAt", "manufacturedAt"]) {
+      if (!(col in changes)) continue;
+      for (const m of [order[col], changes[col]].filter(Boolean).map(v => String(v).slice(0, 7))) {
+        if (await isMonthClosed(env.DB, m)) {
+          const label = new Date(m + "-15T12:00:00Z").toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+          return jsonResponse({ status: "error", message: `${label} is closed (already filed) — ${NAMES[col].toLowerCase()} can't move into or out of it. Reopen it under Periods & Export first.` }, 409);
+        }
+      }
+    }
+    const from = Object.fromEntries(Object.keys(changes).map(k => [k, order[k] || null]));
+    if (dueChange !== undefined) from.dueDate = order.dueDate || null;
+    const to = { ...changes, ...(dueChange !== undefined ? { dueDate: dueChange } : {}) };
+    const auditErr = await auditStrict({ orgId: order.orgId, orderId, action: "order.dates_changed", detail: { from, to } });
+    if (auditErr) return auditErr;
+    await setOrderDates(env.DB, orderId, changes);
+    if (dueChange !== undefined) await setOrderDueDate(env.DB, orderId, dueChange);
+    return jsonResponse({ status: "ok", order: await getOrderById(env.DB, orderId), changed: Object.keys(to).length });
+  }
+
   if (body.action === "updateOrderDate") {
     const denied = await requireAdmin(env, host, body.key, request, "Admin access is only available from the admin subdomain.", ACTION_ROLE[body.action]);
     if (denied) return denied;

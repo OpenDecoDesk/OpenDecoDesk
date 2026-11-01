@@ -34,7 +34,9 @@ export const PS_OVERRIDES = {
   SanMar: { idLabel: "SanMar.com user name", passwordLabel: "SanMar.com password", help: "SanMar's web services must be turned on for your account first — ask your SanMar rep or sanmarintegrations@sanmar.com.",
     // Placing orders (Purchase Order) is turned on separately by SanMar. Its ship-method codes aren't listed here: the
     // order window offers UPS Ground, which every supplier takes.
-  },
+    // A part's color name to show: SanMar's standardColorName is the display name ("Deep Black", the SDL file's
+    // COLOR_NAME); its colorName is the backend name ("DeepBlack"). Other vendors' colorName is the display name.
+    colorName: "standard" },
   OTTO: { idLabel: "OTTO account / user ID", passwordLabel: "OTTO password or key", help: "Ask OTTO Cap's customer service for PromoStandards access." },
 };
 
@@ -150,10 +152,24 @@ export async function getPsEndpoints(code, fetchImpl = fetch) {
 }
 
 // ---- The services -----------------------------------------------------------------------------------------
+// Each call uses `conn.fetch` when the connection carries one — vendorLogFetch (vendorLog.js), which logs the full
+// request and response — else the plain fetch.
 const psLoc_ = [["localizationCountry", "US"], ["localizationLanguage", "en"]];
 const psCred_ = (c) => [["id", c.id], ["password", c.password]];
 
-export async function psGetProduct(conn, productId, fetchImpl = fetch) {
+// A part's own color: the first Color in its ColorArray, else a Color directly in the part — never the one inside
+// primaryColor, which comes first in the part and is the product's "go to market" color, the same on every part
+// (SanMar: "not used"; its sample's Deep Black part has a primaryColor of Insignia Blue). Reading the first Color
+// anywhere gave every part one color. primaryColor's is used only when a part has nothing else.
+function psPartColor_(part) {
+  const arr = part.children.find(c => c.name === "ColorArray");
+  if (arr) { const c = xmlFirst_(arr, "Color"); if (c) return c; }
+  const direct = part.children.find(c => c.name === "Color");
+  if (direct) return direct;
+  const primary = part.children.find(c => c.name === "primaryColor");
+  return primary ? xmlFirst_(primary, "Color") : null;
+}
+export async function psGetProduct(conn, productId, fetchImpl = (conn && conn.fetch) || fetch) {
   const body = await soapCall_(conn.endpoints.product, "product", "GetProductRequest", "getProduct",
     [["wsVersion", "2.0.0"], ...psCred_(conn.credentials), ...psLoc_, ["productId", productId]], fetchImpl);
   const product = xmlFirst_(body, "Product");
@@ -161,11 +177,14 @@ export async function psGetProduct(conn, productId, fetchImpl = fetch) {
   const descriptions = product.children.filter(c => c.name === "description").map(c => c.text.trim()).filter(Boolean);
   const points = xmlAll_(product, "ProductMarketingPoint").map(p => psXmlText_(p, "pointCopy")).filter(Boolean);
   const categories = xmlAll_(product, "ProductCategory").map(c => [psXmlText_(c, "category"), psXmlText_(c, "subCategory")].filter(Boolean).join(" / ")).filter(Boolean);
+  const standardFirst = !!(conn && PS_OVERRIDES[conn.companyCode] && PS_OVERRIDES[conn.companyCode].colorName === "standard");
   const parts = xmlAll_(product, "ProductPart").map(p => {
-    const color = xmlFirst_(p, "Color");
+    const color = psPartColor_(p);
     const size = xmlFirst_(p, "ApparelSize");
     const dim = xmlFirst_(p, "Dimension");
-    return { partId: psXmlText_(p, "partId"), color: color ? (psXmlText_(color, "colorName") || psXmlText_(color, "standardColorName")) : "", hex: color ? psXmlText_(color, "hex") : "",
+    const name = color ? psXmlText_(color, "colorName") : "", standard = color ? psXmlText_(color, "standardColorName") : "";
+    const [shown, other] = standardFirst ? [standard || name, name] : [name || standard, standard];
+    return { partId: psXmlText_(p, "partId"), color: shown, colorAlt: other && psNorm_(other) !== psNorm_(shown) ? other : "", hex: color ? psXmlText_(color, "hex") : "",
       size: size ? (psXmlText_(size, "customSize") || psXmlText_(size, "labelSize")) : "",
       weightOz: dim ? psWeightOz_(psXmlText_(dim, "weight"), psXmlText_(dim, "weightUom")) : null };
   }).filter(p => p.partId);
@@ -184,7 +203,7 @@ export function psWeightOz_(weight, uom) {
   return oz > 0 && oz < 1000 ? oz : null;
 }
 
-export async function psGetPrices(conn, productId, fetchImpl = fetch) {
+export async function psGetPrices(conn, productId, fetchImpl = (conn && conn.fetch) || fetch) {
   let fobId = conn.overrides && conn.overrides.fobId;
   if (!fobId) {
     const fob = await soapCall_(conn.endpoints.ppc, "ppc", "GetFobPointsRequest", "getFobPoints", [["wsVersion", "1.0.0"], ...psCred_(conn.credentials), ["productId", productId], ...psLoc_], fetchImpl);
@@ -211,24 +230,32 @@ function psViewOf_(item) {
   const names = item.classTypes.map(c => String(c.name || "").toLowerCase()).join(" ");
   const ids = item.classTypes.map(c => Number(c.id));
   const file = String(item.url || "").toLowerCase().split(/[?#]/)[0].split("/").pop();
-  if (/swatch/.test(names) || ids.includes(2001) || /swatch/.test(file)) return "swatch";
+  // Swatch: by name, SanMar's 1004, or 2001 only when unnamed (SanMar's 2001 is "High" — a high-resolution photo).
+  if (/swatch/.test(names) || ids.includes(1004) || (ids.includes(2001) && !names.trim()) || /swatch/.test(file)) return "swatch";
   if (/rear|back/.test(names) || ids.includes(1008) || /(^|[^a-z])(back|rear|b|bk)([^a-z]|$)/.test(file.replace(/\.[a-z]+$/, ""))) return "back";
   if (/side|left|right/.test(names) || ids.includes(1009) || ids.includes(1010)) return "side";
   return "front";
 }
-export async function psGetMedia(conn, productId, fetchImpl = fetch) {
+// Only pictures a browser can show: a file extension, when there is one, must be an image's. SanMar's "Image" media
+// also carries its 3D designer's models (.glb) and videos (.mp4).
+export const psIsImageUrl_ = (url) => {
+  const file = String(url || "").split(/[?#]/)[0].split("/").pop();
+  const ext = /\.([a-z0-9]{2,5})$/i.test(file) ? file.replace(/^.*\./, "").toLowerCase() : "";
+  return !ext || ["jpg", "jpeg", "png", "gif", "webp"].includes(ext);
+};
+export async function psGetMedia(conn, productId, fetchImpl = (conn && conn.fetch) || fetch) {
   const body = await soapCall_(conn.endpoints.media, "media", "GetMediaContentRequest", "getMediaContent",
     [["wsVersion", "1.1.0"], ...psCred_(conn.credentials), ["mediaType", "Image"], ["productId", productId]], fetchImpl);
   return xmlAll_(body, "MediaContent").map(mc => {
     const item = { partId: psXmlText_(mc, "partId"), url: psXmlText_(mc, "url"), color: psXmlText_(mc, "color"),
       classTypes: xmlAll_(mc, "ClassType").map(c => ({ id: psXmlText_(c, "classTypeId"), name: psXmlText_(c, "classTypeName") })) };
     return { ...item, type: psViewOf_(item) };
-  }).filter(m => /^https?:\/\//i.test(m.url));
+  }).filter(m => /^https?:\/\//i.test(m.url) && psIsImageUrl_(m.url));
 }
 
 // The vendor product (db.js cleanVendorProduct_ shape) for one style: Product Data + prices (+ images).
 // conn = {name, companyCode, endpoints: {product, ppc, media}, credentials: {id, password}, overrides}.
-export async function fetchVendorProduct(conn, style, opts = {}, fetchImpl = fetch) {
+export async function fetchVendorProduct(conn, style, opts = {}, fetchImpl = (conn && conn.fetch) || fetch) {
   const productId = psProductId_(conn, style, opts.brand);
   const [pd, prices, media] = await Promise.all([
     psGetProduct(conn, productId, fetchImpl),
@@ -236,22 +263,34 @@ export async function fetchVendorProduct(conn, style, opts = {}, fetchImpl = fet
     opts.media !== false && conn.endpoints.media ? psGetMedia(conn, productId, fetchImpl).catch(() => []) : Promise.resolve([]),
   ]);
   const colors = new Map(), sizes = [], out = {}, weights = {};
-  const partColor = {};
+  const partColor = {}, nameOf = {};   // nameOf: either of a color's names (normalised) → the name shown
   for (const p of pd.parts) {
     const color = p.color || "";
     partColor[p.partId] = color;
+    if (color) { nameOf[psNorm_(color)] = color; if (p.colorAlt) nameOf[psNorm_(p.colorAlt)] = color; }
     if (color && !colors.has(color.toLowerCase())) colors.set(color.toLowerCase(), { color, hex: /^#?[0-9a-f]{6}$/i.test(p.hex) ? (p.hex[0] === "#" ? p.hex : "#" + p.hex) : "", images: [] });
     const size = String(p.size || "OSFA").toUpperCase();
     if (!sizes.includes(size)) sizes.push(size);
     if (prices[p.partId] != null) (out[color || "*"] = out[color || "*"] || {})[size] = prices[p.partId];
     if (p.weightOz != null) (weights[color || "*"] = weights[color || "*"] || {})[size] = p.weightOz;
   }
+  // A picture the vendor attaches to more than one color is a style-level picture, not that color's: SanMar repeats
+  // its catalog "Primary" image (one color's photo) and group shots on every part, each labelled with the part's own
+  // color — so every color got the same, wrong, front picture. Only pictures of one color are kept (a style that
+  // comes in one color keeps everything).
+  const colorOfMedia = (m) => (m.partId && partColor[m.partId]) || nameOf[psNorm_(m.color)] || m.color || "";
+  const colorsOfUrl = new Map();
+  for (const m of media) { const k = colorOfMedia(m).toLowerCase(); if (k) (colorsOfUrl.get(m.url) || colorsOfUrl.set(m.url, new Set()).get(m.url)).add(k); }
+  const VIEW_RANK = { front: 0, back: 1, side: 2, swatch: 4 };
   for (const m of media) {
-    const color = (m.partId && partColor[m.partId]) || m.color || "";
+    const color = colorOfMedia(m);
     const c = colors.get(color.toLowerCase());
-    if (!c || c.images.some(im => im.url === m.url) || c.images.length >= 8) continue;
+    if (!c || (colors.size > 1 && (colorsOfUrl.get(m.url) || new Set()).size > 1)) continue;
+    if (c.images.some(im => im.url === m.url)) continue;
     c.images.push({ url: m.url, type: m.type, fileName: m.url.split(/[?#]/)[0].split("/").pop() });
   }
+  // Front first, then back, side, the rest, swatches last; at most 8 a color.
+  for (const c of colors.values()) c.images = c.images.map((im, i) => ({ im, i })).sort((a, b) => ((VIEW_RANK[a.im.type] ?? 3) - (VIEW_RANK[b.im.type] ?? 3)) || a.i - b.i).map(x => x.im).slice(0, 8);
   return { vendor: conn.name, style, name: pd.name, brand: pd.brand || opts.brand || "", description: pd.description, features: pd.features,
     category: pd.categories[0] || "", colors: [...colors.values()], sizes, prices: out, productId,
     ...(Object.keys(weights).length ? { weights } : {}) };
@@ -271,16 +310,22 @@ export const psSizeKey_ = (v) => { const k = psNorm_(v); return PS_SIZE_SAME_[k]
 
 // The vendor's part for each of our {color, size}: {key "color|size" (normalised) → partId}. One getProduct
 // per style, live at order time — part ids aren't stored, so they can't go stale.
-export async function psGetParts(conn, style, opts = {}, fetchImpl = fetch) {
+export async function psGetParts(conn, style, opts = {}, fetchImpl = (conn && conn.fetch) || fetch) {
   const productId = psProductId_(conn, style, opts.brand);
   const pd = await psGetProduct(conn, productId, fetchImpl);
-  const parts = {};
-  for (const p of pd.parts) parts[psNorm_(p.color) + "|" + psSizeKey_(p.size)] = p.partId;
-  return { productId: pd.productId || productId, parts, colors: [...new Set(pd.parts.map(p => p.color).filter(Boolean))] };
+  // Each part under both of its color names. A key two different parts answer to is ambiguous: never guessed
+  // (psPartFor_ refuses it), so a wrong part can't be ordered.
+  const parts = {}, ambiguous = {};
+  for (const p of pd.parts) for (const name of [p.color, p.colorAlt].filter((v, i) => i === 0 || v)) {
+    const key = psNorm_(name) + "|" + psSizeKey_(p.size);
+    if (parts[key] && parts[key] !== p.partId) ambiguous[key] = true; else parts[key] = p.partId;
+  }
+  return { productId: pd.productId || productId, parts, ambiguous, colors: [...new Set(pd.parts.map(p => p.color).filter(Boolean))] };
 }
 export function psPartFor_(info, color, size) {
   if (!info) return "";
   const c = psNorm_(color), sz = psSizeKey_(size);
+  if (info.ambiguous && info.ambiguous[c + "|" + sz]) return "";
   if (info.parts[c + "|" + sz]) return info.parts[c + "|" + sz];
   // A blank stored with one unnamed color matches a style that comes in one color.
   if (!c && info.colors.length === 1) return info.parts[psNorm_(info.colors[0]) + "|" + sz] || "";
@@ -288,7 +333,7 @@ export function psPartFor_(info, color, size) {
 }
 
 // Quantity available per part, summed over the vendor's warehouses: {partId: n}.
-export async function psGetInventory(conn, productId, partIds, fetchImpl = fetch) {
+export async function psGetInventory(conn, productId, partIds, fetchImpl = (conn && conn.fetch) || fetch) {
   const ids = [...new Set((partIds || []).filter(Boolean))];
   const filter = ids.length ? psEl_("shar", "Filter", [psEl_("shar", "partIdArray", ids.map(id => psEl_("shar", "partId", id)))]) : "";
   const inner = psEl_("shar", "wsVersion", "2.0.0") + psEl_("shar", "id", conn.credentials.id) + psEl_("shar", "password", conn.credentials.password)
@@ -365,7 +410,7 @@ export function psBuildPO_(po) {
   ]);
 }
 // Places the order. Returns {transactionId}. Any refusal throws with the supplier's message (soapCall_).
-export async function psSendPO(conn, po, fetchImpl = fetch) {
+export async function psSendPO(conn, po, fetchImpl = (conn && conn.fetch) || fetch) {
   const inner = psEl_("shar", "wsVersion", "1.0.0") + psEl_("shar", "id", conn.credentials.id) + psEl_("shar", "password", conn.credentials.password) + psBuildPO_(po);
   const body = await soapCall_(conn.endpoints.po, "po", "SendPORequest", "sendPO", inner, fetchImpl);
   const transactionId = psXmlText_(body, "transactionId");
@@ -374,7 +419,7 @@ export async function psSendPO(conn, po, fetchImpl = fetch) {
 }
 
 // Shipments of one purchase order (query type 1 = by PO number): [{trackingNumber, carrier, method, shipDate}].
-export async function psGetShipments(conn, poNumber, fetchImpl = fetch) {
+export async function psGetShipments(conn, poNumber, fetchImpl = (conn && conn.fetch) || fetch) {
   const inner = psEl_("shar", "wsVersion", "1.0.0") + psEl_("shar", "id", conn.credentials.id) + psEl_("shar", "password", conn.credentials.password)
     + psEl_("ns", "queryType", "1") + psEl_("ns", "referenceNumber", poNumber);
   let body;

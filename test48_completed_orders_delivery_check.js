@@ -313,6 +313,7 @@ const setState = (d1, orderId, s) => {
     d1.q("SELECT completedAt c, deliveredAt d FROM orders WHERE orderId='PAID1'")[0].c !== null && !ids().includes("PAID1") && ids().join(",") === "OPEN1,UNP1" &&
     /^2 orders · \$92\.00 active total · \$92\.00 balance due/.test(summary()));
   confirms.length = 0; toasts.length = 0;
+  d1._raw.run("UPDATE orders SET qaPackedAt=? WHERE orderId='OPEN1'", [daysAgo(1)]);   // packed, so it can be delivered
   await paint(); check("OPEN1");
   await w.bulkSetFulfillmentStage("prime", "delivered");
   console.log("delivering an UNPAID order asks nothing more — it just says a balance is due:",

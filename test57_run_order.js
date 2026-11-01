@@ -234,7 +234,7 @@ const api = new Function(strip(read("functions/_lib/hostConfig.js")) + "\n" + st
     q.filter(j => j.dueDate).every((j, i, arr) => i === 0 || arr[i - 1].dueDate <= j.dueDate));
   console.log("the queue exposes dueDate on each job:", q.find(j => j.orderId === "DUEB").dueDate === "2026-07-12");
   console.log("admin surfaces the due date (Orders column + editor + run-queue badge):",
-    /<th>Due<\/th>/.test(adminJs) && /function editOrderDueDate/.test(adminJs) && /action: "setOrderDueDate"/.test(adminJs) &&
+    /<th>Due<\/th>/.test(adminJs) && /function editOrderDueDate/.test(adminJs) && /action: "setOrderDates"/.test(adminJs) &&
     /function dueBadge_/.test(adminJs) && /dueBadge_\(job\.dueDate\)/.test(adminJs) && /dueBadge_\(c\.dueDate\)/.test(adminJs));
 
   console.log("\n=== Both run pages list all paid-but-not-run orders, due first ===");

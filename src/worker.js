@@ -21,6 +21,7 @@ import * as agent from "../functions/api/agent.js";
 import * as catalog from "../functions/api/catalog.js";
 import * as checkout from "../functions/api/checkout.js";
 import * as customerDesign from "../functions/api/customer-design.js";
+import { cleanUpVendorApiLog } from "../functions/_lib/vendorLog.js";
 import * as dailyDigest from "../functions/api/daily-digest.js";
 import * as design from "../functions/api/design.js";
 import * as imageProxy from "../functions/api/image-proxy.js";
@@ -172,6 +173,10 @@ export async function handleScheduled(event, env) {
     if (suppliers) {
       try { out.supplierShipments = await checkSupplierShipments(env, { limit: 10 }); }
       catch (e) { console.error("Supplier shipment check failed:", e); out.supplierShipments = { error: String(e && e.message) }; }
+      // The vendor web-service log (vendorLog.js) is only written with supplier connections on; entries older than
+      // 30 days go here, as in the daily run below (this is the desktop program's only scheduled run).
+      try { out.vendorLog = await cleanUpVendorApiLog(env); }
+      catch (e) { console.error("Cleaning up the vendor API log failed:", e); out.vendorLog = { error: String(e && e.message) }; }
     }
     return out;
   }
@@ -182,6 +187,11 @@ export async function handleScheduled(event, env) {
     const f = await fillMissingCardFees(env);
     if (f.filled) console.log("Filled Stripe fees on", f.filled, "of", f.checked, "card payments");
   } catch (e) { console.error("Filling missing Stripe fees failed (continuing with the roll-up):", e); }
+  // Vendor web-service logs (vendorLog.js) older than 30 days: their payloads and rows go.
+  try {
+    const v = await cleanUpVendorApiLog(env);
+    if (v.deleted) console.log("Deleted", v.deleted, "vendor API log entr" + (v.deleted === 1 ? "y" : "ies"), "older than 30 days");
+  } catch (e) { console.error("Cleaning up the vendor API log failed (continuing with the roll-up):", e); }
   // Customers' design uploads that never made it onto an order are deleted after 48 hours.
   try {
     const c = await customerDesign.cleanUpCustomerDesigns(env);

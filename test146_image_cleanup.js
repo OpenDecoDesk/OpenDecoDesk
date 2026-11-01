@@ -122,6 +122,16 @@ function bucket(objects){
   const tagged = w.duplicatesInColor_([{ i: 0, url: "f", sha: "1", look: pic, loc: 1 }, { i: 1, url: "b", sha: "2", look: near, loc: 2 }, { i: 2, url: "g", sha: "3", look: near, loc: 1 }, { i: 3, url: "h", sha: "1", look: other, loc: 2 }]);
   ok("…a photo tagged Back is never the 'same look' as one tagged Front — but the same file under either tag still is", tagged[1].of === -1 && tagged[2].of === 0 && tagged[2].why === "looks the same" && tagged[3].of === 0 && tagged[3].why === "same file");
   ok("duplicates: the same address, the same file, a near-identical look; a different photo stays", g[1].of === 0 && g[1].why === "same address" && g[2].of === 0 && g[2].why === "same file" && g[3].of === 0 && g[3].why === "looks the same" && g[4].of === -1 && g[0].of === -1);
+  // The same photo on several colors of one blank: a vendor's picture of the whole style (SanMar repeats its catalog
+  // "Primary" photo on every color) — offered for removal on each color. Only an identical file counts.
+  const B = { id: 1 }, B2 = { id: 2 };
+  const cw = w.markCrossColorDuplicates_([
+    { blank: B, color: "Black", photos: w.duplicatesInColor_([{ i: 0, url: "k1", sha: "own-black", look: pic }, { i: 1, url: "k2", sha: "style", look: other }]) },
+    { blank: B, color: "Navy", photos: w.duplicatesInColor_([{ i: 0, url: "n1", sha: "own-navy", look: pic }, { i: 1, url: "n2", sha: "style", look: other }]) },
+    { blank: B, color: "Red", photos: w.duplicatesInColor_([{ i: 0, url: "r1", sha: "own-red", look: near }]) },
+    { blank: B2, color: "Grey", photos: w.duplicatesInColor_([{ i: 0, url: "g1", sha: "style", look: other }]) }]);
+  ok("the same file on two colors of a blank is flagged on both (with the colors); photos that only look alike, and other blanks, aren't",
+    cw[0].photos[1].cross.join() === "Black,Navy" && cw[1].photos[1].cross.join() === "Black,Navy" && !cw[0].photos[0].cross && !cw[2].photos[0].cross && !cw[3].photos[0].cross);
   // Blanks → Find duplicate photos, end to end.
   w._blanksAll = [{ id: blankId, name: "Gildan Tee", vendor: "SanMar", sku: "G1", colors: [{ color: "Black", images: [{ url: u("a") }, { url: u("a") }, { url: u("q") }] }, { color: "Navy", images: [{ url: u("n") }] }] }];
   d1._raw.run("UPDATE blank_colors SET imagesJson=? WHERE blankId=? AND color='Black'", [JSON.stringify([{ url: u("a") }, { url: u("a") }, { url: u("q") }]), blankId]);

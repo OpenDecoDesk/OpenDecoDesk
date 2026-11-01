@@ -12,7 +12,7 @@ const { createD1 } = require("./testlib/d1-shim.js");
 const read = (p) => fs.readFileSync(__dirname + "/" + p, "utf8");
 const strip = (src) => src.replace(/import\s*\{[\s\S]*?\}\s*from\s*["'][^"']+["'];?\n?/g, "").replace(/export (async function|function|const)/g, "$1");
 const dbSrc = strip(read("functions/_lib/db.js"));
-const psSrc = strip(read("functions/_lib/promostandards.js")), credSrc = strip(read("functions/_lib/vendorCredentials.js")), soSrc = strip(read("functions/_lib/supplierOrders.js"));
+const psSrc = strip(read("functions/_lib/promostandards.js")), credSrc = strip(read("functions/_lib/vendorCredentials.js")) + "\n" + strip(read("functions/_lib/vendorLog.js")), soSrc = strip(read("functions/_lib/supplierOrders.js"));
 const lib = new Function(dbSrc + `\nreturn { createBlank, createProduct, setBlankLink, insertOrder, getBlanksToOrder };`)();
 const ps = new Function(psSrc + `\nreturn { psBuildPO_, psSendPO, psGetInventory, psGetParts, psPartFor_, psGetShipments, psEl_, PS_OVERRIDES };`)();
 const so = new Function(psSrc + "\n" + soSrc + `\nreturn { supplierShipMethods };`)();

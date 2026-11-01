@@ -76,7 +76,7 @@ const buildHandler = () => new Function("sendTestEmail",
   strip(read("functions/_lib/cloudflareSetup.js")) + "\n" +
   // Vendor blanks / connections: the image-fallback copy, the PromoStandards adapter, encrypted logins.
   strip(read("functions/_lib/fileUpload.js")) + "\n" + strip(read("functions/_lib/vendorImages.js")) + "\n" + strip(read("functions/_lib/orphanImages.js")) + "\n" +
-  strip(read("functions/_lib/promostandards.js")) + "\n" + strip(read("functions/_lib/vendorCredentials.js")) + "\n" + strip(read("functions/_lib/supplierOrders.js")) + "\n" +
+  strip(read("functions/_lib/promostandards.js")) + "\n" + strip(read("functions/_lib/vendorCredentials.js")) + "\n" + strip(read("functions/_lib/vendorLog.js")) + "\n" + strip(read("functions/_lib/supplierOrders.js")) + "\n" +
   strip(read("functions/_lib/setupStatus.js")) + "\n" +
   strip(read("functions/_lib/db.js")) + "\n" + strip(read("functions/api/orders.js")) + "\nreturn onRequestPost;")(buildTestEmail());
 // The shop page's catalog (functions/api/catalog.js) on the published catalog, as demo.example.com sees it.

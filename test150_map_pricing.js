@@ -103,6 +103,20 @@ const wait = async (cond, n = 300) => { for (let i = 0; i < n && !cond(); i++) a
   r = await call({ action: "setBlankLink", org: "acme", productId: "tee", productColor: "", productSize: "M", blankId, blankColor: "White", blankSize: "M" });
   ok("linking a blank whose MAP is above the price is refused…", r.status === 409 && r.body.code === "belowMap" && /M \$9\.00 is below the MAP of \$9\.50/.test(r.body.message));
   ok("…and the link isn't left behind", !d1.q("SELECT 1 FROM product_blank_links WHERE productId='tee' AND productSize='M'").length);
+  // OpenDecoDesk: a worker edits products and their blank links, so saving them in one request is a staff action too.
+  { const src = read("functions/api/orders.js"), staff = src.slice(src.indexOf("const STAFF_ACTIONS = ["), src.indexOf("];", src.indexOf("const STAFF_ACTIONS = [")));
+    ok("saveBlankLinks is a worker's, like setBlankLink", staff.includes('"saveBlankLinks"') && staff.includes('"setBlankLink"')); }
+  // The product form's Save sends every changed link in ONE request (saveBlankLinks), with one MAP check.
+  const links = () => d1.q("SELECT productSize, blankSize FROM product_blank_links WHERE productId='tee' ORDER BY productSize").map(l => l.productSize + ">" + l.blankSize).join();
+  r = await call({ action: "saveBlankLinks", org: "acme", productId: "tee", set: [{ productColor: "", productSize: "M", blankId, blankColor: "White", blankSize: "M" }], remove: [] });
+  ok("one batch: a link that newly puts a price below MAP is refused, and the product's links are put back exactly", r.status === 409 && r.body.code === "belowMap" && /M \$9\.00 is below the MAP of \$9\.50/.test(r.body.message) && links() === "S>S");
+  d1._raw.run("UPDATE blank_sizes SET mapPriceCents=NULL WHERE blankId=? AND color='White' AND size='M'", [blankId]);
+  r = await call({ action: "saveBlankLinks", org: "acme", productId: "tee", set: [{ productColor: "", productSize: "M", blankId, blankColor: "White", blankSize: "M" }, { productColor: "", productSize: "S", blankId, blankColor: "White", blankSize: "S" }], remove: [] });
+  ok("…otherwise every link is written in one go", r.status === 200 && r.body.saved === 2 && links() === "M>M,S>S");
+  r = await call({ action: "saveBlankLinks", org: "acme", productId: "tee", set: [], remove: [{ productColor: "", productSize: "M" }] });
+  ok("…and removals too", r.status === 200 && r.body.removed === 1 && links() === "S>S");
+  ok("…a link with no blank is refused", (await call({ action: "saveBlankLinks", org: "acme", productId: "tee", set: [{ productColor: "", productSize: "M" }] })).status === 400);
+  d1._raw.run("UPDATE blank_sizes SET mapPriceCents=950 WHERE blankId=? AND color='White' AND size='M'", [blankId]);
 
   console.log("\n=== A MAP that rises later ===");
   d1._raw.run("UPDATE blank_sizes SET mapPriceCents=1000 WHERE blankId=? AND color='White' AND size='S'", [blankId]);

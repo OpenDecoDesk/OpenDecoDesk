@@ -24,7 +24,7 @@ daylight-saving changes.
 4. Collects what is new since the last roll-up: orders (not test or voided ones), payments, refunds
    and disputes, customers' answers to design proofs, deliveries and pickups, failed admin sign-ins,
    and problems (an email that couldn't be sent, a Stripe webhook that failed, a roll-up that
-   failed). With the Production feature on, it also lists machine maintenance that's due (never a
+   failed). Vendor web-service logs older than 30 days are deleted. With the Production feature on, it also lists machine maintenance that's due (never a
    reason to send on its own).
 5. Sends one email. If there is **nothing new**, the scheduled run sends a short "nothing new"
    email instead, so a quiet morning can't be mistaken for "it didn't run".
@@ -244,6 +244,15 @@ own settings, so reset it key by key, not as a whole table.
 - **Tools → Global settings → Setup status** — anything not configured.
 - **The Worker's logs in the Cloudflare dashboard** — errors the code logged (`wrangler.toml` turns
   on `[observability]`).
+
+## When things happened (order dates)
+
+Every step recorded on an order — paid, manufactured, shipped, delivered, completed, a cancelled line, a
+payment or refund, a local sale, a stock count correction or a transfer write-off — asks when it happened,
+with the date and time defaulting to now, so a step entered later still carries its real date. A date in
+the future, or one out of order (shipped before it was made), is refused. An order's **Dates…** window
+changes or clears any of its dates at once. A date in a closed period (Periods & Export) is refused, both
+into and out of it, so a filed month never changes.
 
 ## Machine maintenance
 
