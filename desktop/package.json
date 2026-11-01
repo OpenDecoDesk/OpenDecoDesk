@@ -1,7 +1,7 @@
 {
   "name": "opendecodesk-desktop",
   "productName": "OpenDecoDesk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenDecoDesk's back office as a program on one computer: orders, inventory, expenses and production, with no web shop and no email.",
   "private": true,
   "main": "main.js",
