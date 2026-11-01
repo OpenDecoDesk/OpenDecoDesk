@@ -7,7 +7,7 @@
 // connection has the Inventory service) checks the supplier's stock.
 import { getVendorConnectionRow, listVendorConnections, getBlanksForSupplierOrder, supplierOrdersAwaitingShipment, recordSupplierShipments, getShipFromAddress,
   brandContext_, brandRuleFor_, brandApprovalCovers_, itemColorOf_ } from "./db.js";
-import { psGetParts, psPartFor_, psGetInventory, psGetShipments, PS_OVERRIDES } from "./promostandards.js";
+import { psGetParts, psPartFor_, psNorm_, psSizeKey_, psGetInventory, psGetShipments, PS_OVERRIDES } from "./promostandards.js";
 import { decryptVendorCredentials } from "./vendorCredentials.js";
 
 export const SUPPLIER_ORDER_MAX_LINES = 100;
@@ -103,7 +103,9 @@ export async function planSupplierOrder(env, conn, rawLines) {
     if (c.error) { l.problem = c.error; l.problemKind = /not found|no product/i.test(c.error) ? "part" : "lookup"; continue; }
     l.productId = c.parts.productId;
     l.partId = psPartFor_(c.parts, l.color, l.size);
-    if (!l.partId) { l.problem = `${conn.name} has no ${[l.color, l.size].filter(Boolean).join(" / ") || "such part"} in style ${l.style}.`; l.problemKind = "part"; }
+    const ambiguous = c.parts.ambiguous && c.parts.ambiguous[psNorm_(l.color) + "|" + psSizeKey_(l.size)];
+    if (!l.partId) { l.problem = ambiguous ? `${conn.name} lists more than one part for ${[l.color, l.size].filter(Boolean).join(" / ")} in style ${l.style} — order it by hand.`
+      : `${conn.name} has no ${[l.color, l.size].filter(Boolean).join(" / ") || "such part"} in style ${l.style}.`; l.problemKind = "part"; }
   }
   // Stock: one call per style, for its parts only.
   let stockChecked = false;

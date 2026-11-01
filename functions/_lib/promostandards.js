@@ -34,7 +34,9 @@ export const PS_OVERRIDES = {
   SanMar: { idLabel: "SanMar.com user name", passwordLabel: "SanMar.com password", help: "SanMar's web services must be turned on for your account first — ask your SanMar rep or sanmarintegrations@sanmar.com.",
     // Placing orders (Purchase Order) is turned on separately by SanMar. Its ship-method codes aren't listed here: the
     // order window offers UPS Ground, which every supplier takes.
-  },
+    // A part's color name to show: SanMar's standardColorName is the display name ("Deep Black", the SDL file's
+    // COLOR_NAME); its colorName is the backend name ("DeepBlack"). Other vendors' colorName is the display name.
+    colorName: "standard" },
   OTTO: { idLabel: "OTTO account / user ID", passwordLabel: "OTTO password or key", help: "Ask OTTO Cap's customer service for PromoStandards access." },
 };
 
@@ -153,6 +155,18 @@ export async function getPsEndpoints(code, fetchImpl = fetch) {
 const psLoc_ = [["localizationCountry", "US"], ["localizationLanguage", "en"]];
 const psCred_ = (c) => [["id", c.id], ["password", c.password]];
 
+// A part's own color: the first Color in its ColorArray, else a Color directly in the part — never the one inside
+// primaryColor, which comes first in the part and is the product's "go to market" color, the same on every part
+// (SanMar: "not used"; its sample's Deep Black part has a primaryColor of Insignia Blue). Reading the first Color
+// anywhere gave every part one color. primaryColor's is used only when a part has nothing else.
+function psPartColor_(part) {
+  const arr = part.children.find(c => c.name === "ColorArray");
+  if (arr) { const c = xmlFirst_(arr, "Color"); if (c) return c; }
+  const direct = part.children.find(c => c.name === "Color");
+  if (direct) return direct;
+  const primary = part.children.find(c => c.name === "primaryColor");
+  return primary ? xmlFirst_(primary, "Color") : null;
+}
 export async function psGetProduct(conn, productId, fetchImpl = fetch) {
   const body = await soapCall_(conn.endpoints.product, "product", "GetProductRequest", "getProduct",
     [["wsVersion", "2.0.0"], ...psCred_(conn.credentials), ...psLoc_, ["productId", productId]], fetchImpl);
@@ -161,11 +175,14 @@ export async function psGetProduct(conn, productId, fetchImpl = fetch) {
   const descriptions = product.children.filter(c => c.name === "description").map(c => c.text.trim()).filter(Boolean);
   const points = xmlAll_(product, "ProductMarketingPoint").map(p => psXmlText_(p, "pointCopy")).filter(Boolean);
   const categories = xmlAll_(product, "ProductCategory").map(c => [psXmlText_(c, "category"), psXmlText_(c, "subCategory")].filter(Boolean).join(" / ")).filter(Boolean);
+  const standardFirst = !!(conn && PS_OVERRIDES[conn.companyCode] && PS_OVERRIDES[conn.companyCode].colorName === "standard");
   const parts = xmlAll_(product, "ProductPart").map(p => {
-    const color = xmlFirst_(p, "Color");
+    const color = psPartColor_(p);
     const size = xmlFirst_(p, "ApparelSize");
     const dim = xmlFirst_(p, "Dimension");
-    return { partId: psXmlText_(p, "partId"), color: color ? (psXmlText_(color, "colorName") || psXmlText_(color, "standardColorName")) : "", hex: color ? psXmlText_(color, "hex") : "",
+    const name = color ? psXmlText_(color, "colorName") : "", standard = color ? psXmlText_(color, "standardColorName") : "";
+    const [shown, other] = standardFirst ? [standard || name, name] : [name || standard, standard];
+    return { partId: psXmlText_(p, "partId"), color: shown, colorAlt: other && psNorm_(other) !== psNorm_(shown) ? other : "", hex: color ? psXmlText_(color, "hex") : "",
       size: size ? (psXmlText_(size, "customSize") || psXmlText_(size, "labelSize")) : "",
       weightOz: dim ? psWeightOz_(psXmlText_(dim, "weight"), psXmlText_(dim, "weightUom")) : null };
   }).filter(p => p.partId);
@@ -216,6 +233,13 @@ function psViewOf_(item) {
   if (/side|left|right/.test(names) || ids.includes(1009) || ids.includes(1010)) return "side";
   return "front";
 }
+// Only pictures a browser can show: a file extension, when there is one, must be an image's. SanMar's "Image" media
+// also carries its 3D designer's models (.glb) and videos (.mp4).
+export const psIsImageUrl_ = (url) => {
+  const file = String(url || "").split(/[?#]/)[0].split("/").pop();
+  const ext = /\.([a-z0-9]{2,5})$/i.test(file) ? file.replace(/^.*\./, "").toLowerCase() : "";
+  return !ext || ["jpg", "jpeg", "png", "gif", "webp"].includes(ext);
+};
 export async function psGetMedia(conn, productId, fetchImpl = fetch) {
   const body = await soapCall_(conn.endpoints.media, "media", "GetMediaContentRequest", "getMediaContent",
     [["wsVersion", "1.1.0"], ...psCred_(conn.credentials), ["mediaType", "Image"], ["productId", productId]], fetchImpl);
@@ -223,7 +247,7 @@ export async function psGetMedia(conn, productId, fetchImpl = fetch) {
     const item = { partId: psXmlText_(mc, "partId"), url: psXmlText_(mc, "url"), color: psXmlText_(mc, "color"),
       classTypes: xmlAll_(mc, "ClassType").map(c => ({ id: psXmlText_(c, "classTypeId"), name: psXmlText_(c, "classTypeName") })) };
     return { ...item, type: psViewOf_(item) };
-  }).filter(m => /^https?:\/\//i.test(m.url));
+  }).filter(m => /^https?:\/\//i.test(m.url) && psIsImageUrl_(m.url));
 }
 
 // The vendor product (db.js cleanVendorProduct_ shape) for one style: Product Data + prices (+ images).
@@ -236,10 +260,11 @@ export async function fetchVendorProduct(conn, style, opts = {}, fetchImpl = fet
     opts.media !== false && conn.endpoints.media ? psGetMedia(conn, productId, fetchImpl).catch(() => []) : Promise.resolve([]),
   ]);
   const colors = new Map(), sizes = [], out = {}, weights = {};
-  const partColor = {};
+  const partColor = {}, nameOf = {};   // nameOf: either of a color's names (normalised) → the name shown
   for (const p of pd.parts) {
     const color = p.color || "";
     partColor[p.partId] = color;
+    if (color) { nameOf[psNorm_(color)] = color; if (p.colorAlt) nameOf[psNorm_(p.colorAlt)] = color; }
     if (color && !colors.has(color.toLowerCase())) colors.set(color.toLowerCase(), { color, hex: /^#?[0-9a-f]{6}$/i.test(p.hex) ? (p.hex[0] === "#" ? p.hex : "#" + p.hex) : "", images: [] });
     const size = String(p.size || "OSFA").toUpperCase();
     if (!sizes.includes(size)) sizes.push(size);
@@ -247,7 +272,7 @@ export async function fetchVendorProduct(conn, style, opts = {}, fetchImpl = fet
     if (p.weightOz != null) (weights[color || "*"] = weights[color || "*"] || {})[size] = p.weightOz;
   }
   for (const m of media) {
-    const color = (m.partId && partColor[m.partId]) || m.color || "";
+    const color = (m.partId && partColor[m.partId]) || nameOf[psNorm_(m.color)] || m.color || "";
     const c = colors.get(color.toLowerCase());
     if (!c || c.images.some(im => im.url === m.url) || c.images.length >= 8) continue;
     c.images.push({ url: m.url, type: m.type, fileName: m.url.split(/[?#]/)[0].split("/").pop() });
@@ -274,13 +299,19 @@ export const psSizeKey_ = (v) => { const k = psNorm_(v); return PS_SIZE_SAME_[k]
 export async function psGetParts(conn, style, opts = {}, fetchImpl = fetch) {
   const productId = psProductId_(conn, style, opts.brand);
   const pd = await psGetProduct(conn, productId, fetchImpl);
-  const parts = {};
-  for (const p of pd.parts) parts[psNorm_(p.color) + "|" + psSizeKey_(p.size)] = p.partId;
-  return { productId: pd.productId || productId, parts, colors: [...new Set(pd.parts.map(p => p.color).filter(Boolean))] };
+  // Each part under both of its color names. A key two different parts answer to is ambiguous: never guessed
+  // (psPartFor_ refuses it), so a wrong part can't be ordered.
+  const parts = {}, ambiguous = {};
+  for (const p of pd.parts) for (const name of [p.color, p.colorAlt].filter((v, i) => i === 0 || v)) {
+    const key = psNorm_(name) + "|" + psSizeKey_(p.size);
+    if (parts[key] && parts[key] !== p.partId) ambiguous[key] = true; else parts[key] = p.partId;
+  }
+  return { productId: pd.productId || productId, parts, ambiguous, colors: [...new Set(pd.parts.map(p => p.color).filter(Boolean))] };
 }
 export function psPartFor_(info, color, size) {
   if (!info) return "";
   const c = psNorm_(color), sz = psSizeKey_(size);
+  if (info.ambiguous && info.ambiguous[c + "|" + sz]) return "";
   if (info.parts[c + "|" + sz]) return info.parts[c + "|" + sz];
   // A blank stored with one unnamed color matches a style that comes in one color.
   if (!c && info.colors.length === 1) return info.parts[psNorm_(info.colors[0]) + "|" + sz] || "";
