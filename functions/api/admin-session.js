@@ -35,7 +35,7 @@ import { rateLimited, rateLimitResponse, rateLimitCheckGlobal, rateLimitHitGloba
 import { jsonResponse }       from "../_lib/http.js";
 import {
   timingSafeEqual, issueSession, revokeSession, readCookie, isSameOrigin,
-  sessionCookieHeader, clearSessionCookieHeader, SESSION_COOKIE, SESSION_TTL_SEC,
+  sessionCookieHeader, clearSessionCookieHeader, SESSION_COOKIE, SESSION_TTL_SEC, readSessionCookie,
   bootstrapState, rememberSecret, verifyUserPassword, pendingFor, revokeAllSessions, weakSetupPassword,
   looksLikeRecoveryCode, spendRecoveryCode, revokeUserSessionsFor,
   ADMIN_AUTH_GLOBAL_BUCKET, ADMIN_AUTH_GLOBAL_WINDOW, adminAuthGlobalLimit,
@@ -237,10 +237,10 @@ export async function onRequestDelete(context){
   const everywhere = new URL(request.url).searchParams.get("all") === "1";
   try{
     if(everywhere){
-      const userId = await revokeUserSessionsFor(env, readCookie(request, SESSION_COOKIE));
+      const userId = await revokeUserSessionsFor(env, readSessionCookie(request, env));
       if(userId != null) await insertAuditLog(env.DB, { orgId: null, orderId: null, action: "security.signed_out_everywhere", detail: {},
         actor: "user:" + userId, ip: request.headers.get("CF-Connecting-IP") || null, actorUserId: userId, targetUserId: userId }).catch(() => {});
-    } else await revokeSession(env, readCookie(request, SESSION_COOKIE));
+    } else await revokeSession(env, readSessionCookie(request, env));
   }
   catch(e){ console.error("admin-session DELETE: session delete error:", e); }
 

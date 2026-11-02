@@ -42,6 +42,24 @@ function siteRootDomain_(){ return String((typeof siteInfo_ !== "undefined" && s
 const NO_DOMAIN_YET_ = "This shop can't open for orders until your site has its own domain: each shop's address is <name>.<your domain>. Until then you can build it and preview it.";
 const ADMIN_SESSION_STORAGE_KEY = "oddAdminSession";
 
+// An install that ran under another name before it was OpenDecoDesk kept these browser settings under that name
+// ("<name>AdminSession", "<name>AdminEmail", "<name>ExpPaidFrom", "<name>_label_fonts_<shop>"). Copied once to the
+// odd names this page reads, where those aren't set yet, so moving the install over doesn't ask everyone to sign in
+// again or forget their label fonts. Same site, so only this site's own settings are ever seen. test177.
+function adoptLegacyStorage_(){
+  try{
+    const keys = [];
+    for(let i = 0; i < localStorage.length; i++) keys.push(localStorage.key(i));
+    for(const k of keys){
+      const m = /^([a-z][a-z0-9]{0,19})(AdminSession|AdminEmail|ExpPaidFrom|_label_fonts_.+)$/.exec(k || "");
+      if(!m || m[1] === "odd") continue;
+      const to = "odd" + m[2];
+      if(localStorage.getItem(to) == null) localStorage.setItem(to, localStorage.getItem(k));
+    }
+  }catch(e){}
+}
+adoptLegacyStorage_();
+
 function loadStoredSession(){
   try{
     const s = JSON.parse(localStorage.getItem(ADMIN_SESSION_STORAGE_KEY) || "null");

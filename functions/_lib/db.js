@@ -429,12 +429,22 @@ export async function discardShopChanges(db, orgId) {
 // The admin's link to preview a shop's unpublished draft: HMAC over the shop id and an expiry (1 hour), with the
 // install's signing secret under its own label. Only the admin mints one (getPreviewLink); catalog.js checks it.
 // (Plain functions returning promises, like the rest of this file's exports.)
+// An install that started under another name (a copy of this code made before it was OpenDecoDesk) signed its
+// passwords, sessions and links with labels starting with that name instead of "odd". LEGACY_LABEL_PREFIX (a plain
+// variable, e.g. "myshop") makes the checks accept those too, so moving such an install over doesn't void everyone's
+// password or the links already sent. New marks, tokens and cookies always use the odd- labels. Kept identical in
+// adminAuth.js, quoteToken.js, http.js and db.js (test177 checks): the tests paste these files together.
+function legacyLabels_(env, label) {
+  const p = String((env && env.LEGACY_LABEL_PREFIX) || "").trim().toLowerCase();
+  return /^[a-z][a-z0-9]{0,19}$/.test(p) && p !== "odd" && label.includes("odd") ? [label, label.replace("odd", p)] : [label];
+}
+
 const PREVIEW_TOKEN_TTL_SECONDS_ = 60 * 60;
-function previewMac_(env, data) {
+function previewMac_(env, data, label = "odd-catalog-preview-v1:") {
   const secret = (env && (env.SIGNING_SECRET || env.LINK_SIGNING_SECRET || env.QUOTE_SIGNING_SECRET || env.STRIPE_SECRET_KEY)) || "";
   if (!secret) return Promise.resolve(null);
   const enc = new TextEncoder();
-  return crypto.subtle.importKey("raw", enc.encode("odd-catalog-preview-v1:" + secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
+  return crypto.subtle.importKey("raw", enc.encode(label + secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"])
     .then(key => crypto.subtle.sign("HMAC", key, enc.encode(data)))
     .then(sig => Array.from(new Uint8Array(sig), b => b.toString(16).padStart(2, "0")).join(""));
 }
@@ -446,12 +456,13 @@ export function signPreviewToken(env, orgId) {
 export function verifyPreviewToken(env, orgId, token) {
   const m = /^(\d{9,12})\.([0-9a-f]{64})$/.exec(typeof token === "string" ? token : "");
   if (!orgId || !m || Number(m[1]) < Math.floor(Date.now() / 1000)) return Promise.resolve(false);
-  return previewMac_(env, String(orgId) + "|" + m[1]).then(expected => {
-    if (!expected) return false;
-    let diff = 0;
-    for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ m[2].charCodeAt(i);
-    return diff === 0;
-  });
+  return Promise.all(legacyLabels_(env, "odd-catalog-preview-v1:").map(label => previewMac_(env, String(orgId) + "|" + m[1], label)))
+    .then(macs => macs.some(expected => {
+      if (!expected) return false;
+      let diff = 0;
+      for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ m[2].charCodeAt(i);
+      return diff === 0;
+    }));
 }
 // The shop as shoppers see it (published orgs row), for order submission's checks (open, deadline, delivery fees).
 export async function getPublishedOrg(db, orgId) {

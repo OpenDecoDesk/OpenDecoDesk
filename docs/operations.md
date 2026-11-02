@@ -153,6 +153,34 @@ npx wrangler d1 execute DB --remote --file record.sql
 
 Then return to the current version and run `npm run db:migrate`. Take a backup first.
 
+### A database from an earlier copy
+
+A database made by an earlier copy of this code — an install from before OpenDecoDesk, or a private fork —
+has had the same migrations under **other numbers** (`0056_users_and_roles.sql` where this repository has
+`0053_users_and_roles.sql`), and `wrangler` decides what to run by file name, so `npm run db:migrate` would
+try to run them again. `scripts/adopt-db.mjs` matches them by their description (the part after the number)
+and records this repository's names for the ones already applied; the old rows stay, so the old code still
+works against the same database. It only prints SQL — read it before running it:
+
+```bash
+npm run db:backup:now
+npx wrangler d1 execute DB --remote --json --command "SELECT name FROM d1_migrations ORDER BY id" > applied.json
+node scripts/adopt-db.mjs applied.json                 # what it matched, what's still to run, what it doesn't know
+node scripts/adopt-db.mjs applied.json --sql > adopt.sql
+npx wrangler d1 execute DB --remote --file adopt.sql
+npm run db:pending                                     # only this repository's own additions should be listed
+npm run db:migrate
+```
+
+`--undo-sql` writes the SQL that removes the names it recorded. Migrations the database has that this
+repository doesn't (a data fix only that install needed) are listed and left alone — check each one.
+
+That copy also signed passwords, sessions and links under its own name: set `LEGACY_LABEL_PREFIX`
+([configuration.md](configuration.md)) before the first deploy, or every password stops working. Its
+business details (name, payment instructions, inboxes) were part of its code; fill them in under
+Global settings → Business profile before opening the shops. Pictures it kept under `public/images/`
+aren't here: copy them to your pictures bucket and point the products at them.
+
 ## Upgrading to a newer version
 
 1. **Back up** (above).

@@ -31,9 +31,19 @@ function b64urlDecode(str){
   return decodeURIComponent(escape(atob(s + "===".slice((s.length + 3) % 4))));
 }
 
-async function hmacHex(secret, data){
+// An install that started under another name (a copy of this code made before it was OpenDecoDesk) signed its
+// passwords, sessions and links with labels starting with that name instead of "odd". LEGACY_LABEL_PREFIX (a plain
+// variable, e.g. "myshop") makes the checks accept those too, so moving such an install over doesn't void everyone's
+// password or the links already sent. New marks, tokens and cookies always use the odd- labels. Kept identical in
+// adminAuth.js, quoteToken.js, http.js and db.js (test177 checks): the tests paste these files together.
+function legacyLabels_(env, label) {
+  const p = String((env && env.LEGACY_LABEL_PREFIX) || "").trim().toLowerCase();
+  return /^[a-z][a-z0-9]{0,19}$/.test(p) && p !== "odd" && label.includes("odd") ? [label, label.replace("odd", p)] : [label];
+}
+
+async function hmacHex(secret, data, label = LABEL){
   const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey("raw", enc.encode(LABEL + secret),
+  const key = await crypto.subtle.importKey("raw", enc.encode(label + secret),
     { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign("HMAC", key, enc.encode(data));
   return Array.from(new Uint8Array(sig), b => b.toString(16).padStart(2, "0")).join("");
@@ -91,8 +101,9 @@ export async function verifyQuote(env, token){
     return { ok: false, reason: "Missing shipping quote." };
   }
   const [body, sig] = token.split(".");
-  const expected = await hmacHex(secret, body);
-  if(!constantTimeEqual(expected, sig || "")) return { ok: false, reason: "Invalid shipping quote." };
+  let signed = false;
+  for(const label of legacyLabels_(env, LABEL)) if(constantTimeEqual(await hmacHex(secret, body, label), sig || "")) signed = true;
+  if(!signed) return { ok: false, reason: "Invalid shipping quote." };
   let p;
   try{ p = JSON.parse(b64urlDecode(body)); }
   catch{ return { ok: false, reason: "Invalid shipping quote." }; }

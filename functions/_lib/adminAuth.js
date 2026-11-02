@@ -102,6 +102,14 @@ export function readCookie(request, name){
 export function sessionCookieHeader(token, maxAgeSec){
   return SESSION_COOKIE + "=" + token + "; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=" + maxAgeSec;
 }
+// The session cookie this request carries: ours, else (an adopted install, LEGACY_LABEL_PREFIX) the one the install
+// set under its old name, so its signed-in admins aren't signed out by the move. New sessions always get ours.
+export function readSessionCookie(request, env){
+  const own = readCookie(request, SESSION_COOKIE);
+  if(own) return own;
+  const legacy = legacyLabels_(env, "odd")[1];
+  return legacy ? readCookie(request, "__Host-" + legacy + "_admin") : null;
+}
 export function clearSessionCookieHeader(){
   return SESSION_COOKIE + "=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0";
 }
@@ -178,6 +186,16 @@ const PASSWORD_ITERATIONS = 10000;
 export const MIN_PASSWORD_LENGTH = 12;
 export const MAX_PASSWORD_LENGTH = 200;
 
+// An install that started under another name (a copy of this code made before it was OpenDecoDesk) signed its
+// passwords, sessions and links with labels starting with that name instead of "odd". LEGACY_LABEL_PREFIX (a plain
+// variable, e.g. "myshop") makes the checks accept those too, so moving such an install over doesn't void everyone's
+// password or the links already sent. New marks, tokens and cookies always use the odd- labels. Kept identical in
+// adminAuth.js, quoteToken.js, http.js and db.js (test177 checks): the tests paste these files together.
+function legacyLabels_(env, label) {
+  const p = String((env && env.LEGACY_LABEL_PREFIX) || "").trim().toLowerCase();
+  return /^[a-z][a-z0-9]{0,19}$/.test(p) && p !== "odd" && label.includes("odd") ? [label, label.replace("odd", p)] : [label];
+}
+
 const hex_ = (buf) => Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, "0")).join("");
 async function hmacHex_(keyText, data){
   const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(keyText), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
@@ -188,7 +206,13 @@ async function passwordHash_(env, password, saltHex, iterations){
   const salt = Uint8Array.from(saltHex.match(/../g), h => parseInt(h, 16));
   return hmacHex_(env.PROXY_ADMIN_PASSPHRASE, await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, k, 256));
 }
-async function secretMark_(env){ return (await hmacHex_(env.PROXY_ADMIN_PASSPHRASE, "odd-admin-password-v1")).slice(0, 16); }
+async function secretMark_(env, label = "odd-admin-password-v1"){ return (await hmacHex_(env.PROXY_ADMIN_PASSPHRASE, label)).slice(0, 16); }
+// Is this a mark made under the secret in force now (under any accepted label — see legacyLabels_)?
+async function markIsCurrent_(env, mark){
+  if(!mark) return false;
+  for(const label of legacyLabels_(env, "odd-admin-password-v1")) if(mark === await secretMark_(env, label)) return true;
+  return false;
+}
 
 // A stored record as an object, or null if it isn't one (nothing stored, not JSON, or numbers
 // that would be a way to burn CPU).
@@ -203,7 +227,7 @@ function passwordRecord_(raw){
 // …and only if it was made under the secret in force now.
 async function usableRecord_(env, raw){
   const rec = passwordRecord_(raw);
-  return rec && env.PROXY_ADMIN_PASSPHRASE && rec.mark === await secretMark_(env) ? rec : null;
+  return rec && env.PROXY_ADMIN_PASSPHRASE && await markIsCurrent_(env, rec.mark) ? rec : null;
 }
 
 export async function userHasUsablePassword(env, user){
@@ -216,7 +240,15 @@ export async function verifyUserPassword(env, user, key){
   if(!env.PROXY_ADMIN_PASSPHRASE || typeof key !== "string" || key.length > MAX_PASSWORD_LENGTH) return false;
   const rec = user ? await usableRecord_(env, user.password) : null;
   const got = await passwordHash_(env, key, rec ? rec.salt : "00112233445566778899aabbccddeeff", rec ? rec.iterations : PASSWORD_ITERATIONS);
-  return !!rec && timingSafeEqual(got, rec.hash);
+  const ok = !!rec && timingSafeEqual(got, rec.hash);
+  // A record marked under a legacy label (an adopted install) is re-marked under the odd- label the first time its
+  // password is typed — the hash doesn't change — so LEGACY_LABEL_PREFIX can be removed once everyone has signed in.
+  const now = ok ? await secretMark_(env) : "";
+  if(ok && rec.mark !== now && user.id != null){
+    await updateUser(env.DB, user.id, { password: JSON.stringify(Object.assign({}, rec, { mark: now })) }).catch(() => {});
+    await setSettingRaw(env.DB, SECRET_MARK_SETTING, now).catch(() => {});
+  }
+  return ok;
 }
 
 async function passwordRecordFor_(env, password){
@@ -282,7 +314,7 @@ export async function bootstrapState(env){
   for(const a of active) if(await usableRecord_(env, a.password)) usable = true;
   const admin = active[0] || st.admins[0] || null;
   const mark = env.PROXY_ADMIN_PASSPHRASE ? await getSettingRaw(env.DB, SECRET_MARK_SETTING) : null;
-  return { open: !usable, admin, replaced: !!mark && mark !== await secretMark_(env), totp: !!(admin && admin.totpSecret) };
+  return { open: !usable, admin, replaced: !!mark && !(await markIsCurrent_(env, mark)), totp: !!(admin && admin.totpSecret) };
 }
 
 // The placeholder `.dev.vars.example` offers on the Deploy to Cloudflare page. Signing in with it — or
@@ -419,7 +451,7 @@ export async function requireAdmin(env, host, providedKey, request, notAdminMess
   // Someone already signed in is let through BEFORE any failure budget is looked at: junk requests
   // from the same address (another device on the network, a tab firing requests) mustn't lock a
   // signed-in user out. A session token is 192 random bits, so checking one is no guessing aid.
-  const hasCookie = !!readCookie(request, SESSION_COOKIE);
+  const hasCookie = !!readSessionCookie(request, env);
   let result = null;
   if(hasCookie){
     result = await checkCredential(env, providedKey, request, need, options || {});
@@ -459,7 +491,7 @@ async function checkCredential(env, providedKey, request, need, options){
   }
 
   // 2. Session cookie.
-  const cookieToken = readCookie(request, SESSION_COOKIE);
+  const cookieToken = readSessionCookie(request, env);
   if(cookieToken){
     if(!isSameOrigin(request)){
       return wrong("Cross-origin admin request refused.", 403);
