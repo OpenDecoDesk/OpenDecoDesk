@@ -4,14 +4,17 @@ inventory and cost of goods, and the books, with everything kept on your own com
 
 **This is an early release.** Make backups (File → Back up…).
 
-**New in this release:** the version is the date of the release and that day's build number (the
-release's title has it, such as 2026.11.01.01; earlier releases were 0.1.0 and 0.1.1). The window's
-title bar shows it, and so does a small line above your business's name at the top of the admin.
+**New in this release:** on Windows, run from a shared or network folder, the program closed with
+nothing on screen. It now says that it can't run from there and where to move it (see Downloads).
+The version is the date of the release and that day's build number, such as 2026.11.01.01; the
+window's title bar shows it, and so does a small line above your business's name.
 
 ## Downloads
 
-- **Windows:** `OpenDecoDesk-Windows.zip`. Unzip it to a folder of its own (say
-  `Documents\OpenDecoDesk`) and run `OpenDecoDesk.exe` from there. There's no installer. The first
+- **Windows:** `OpenDecoDesk-Windows.zip`. Unzip it to a folder of its own on the computer's own
+  disk (say `C:\Users\<you>\OpenDecoDesk`) and run `OpenDecoDesk.exe` from there. There's no
+  installer. Not a shared or network folder: the program can't open its window from one. In
+  Parallels, Windows' Desktop, Documents and Downloads are often the Mac's own folders. The first
   time, Windows warns about an unknown publisher: choose *More info → Run anyway*.
 - **Mac with Apple silicon (M1 or later):** `OpenDecoDesk-macOS-AppleSilicon.zip`.
 - **Mac with an Intel processor:** `OpenDecoDesk-macOS-Intel.zip`.

@@ -40,6 +40,7 @@
       "r2-files-binding.mjs",
       "log.js",
       "version.js",
+      "network-folder.js",
       "icons/icon.png",
       "package.json",
       "!node_modules/workerd/bin/**",
