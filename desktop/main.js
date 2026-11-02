@@ -14,6 +14,7 @@ const { startServer, copyState, restoreState, resetSignIn, setShippoKey, setSupp
 const { Mailer, cleanSmtpSettings, cleanPdf } = require("./mailer.js");
 const { createLog } = require("./log.js");
 const { displayVersion } = require("./version.js");
+const { networkFolder, networkFolderMessage } = require("./network-folder.js");
 
 const SOURCE_URL = "https://github.com/opendecodesk/opendecodesk";
 // The release's date and build number (version.js), or "dev" when run from the source.
@@ -37,9 +38,23 @@ process.on("uncaughtException", (e) => {
   try { dialog.showErrorBox("OpenDecoDesk", String((e && e.message) || e) + "\n\nThe log is in " + logFile.file); } catch (_) {}
 });
 process.on("unhandledRejection", (e) => logFile.write("Unhandled: " + ((e && e.stack) || e), "program"));
+// Run from a shared or network folder (in Parallels, often the Mac's own Downloads), Windows won't
+// start the program's helper processes and it would close with nothing on screen
+// (network-folder.js): it says so instead, before anything else starts.
+const misplaced = process.platform === "win32" && app.isPackaged ? networkFolder(path.dirname(process.execPath)) : null;
+if (misplaced) {
+  log("Can't run from a shared or network folder: " + misplaced);
+  dialog.showErrorBox("OpenDecoDesk can't run from this folder", networkFolderMessage(misplaced, app.getPath("home")));
+  app.exit(1);
+}
+// A helper process Windows wouldn't start for another reason (antivirus, say) still closes the
+// program; the log at least says which.
+app.on("child-process-gone", (e, d) => {
+  if (d.reason === "launch-failed") log("Windows wouldn't start the program's " + d.type + " process (error " + d.exitCode + "); it is in " + path.dirname(process.execPath));
+});
 // Two copies of the program on one database would each think they own it: the second one just
 // brings the first one's window forward (and writes nothing to the log).
-const primary = app.requestSingleInstanceLock();
+const primary = !misplaced && app.requestSingleInstanceLock();
 if (primary) log("OpenDecoDesk " + VERSION + " starting (Electron " + process.versions.electron + ", " + process.platform + " " + process.arch + "), data in " + dataDir);
 
 if (!primary) app.quit();
@@ -316,6 +331,7 @@ ipcMain.handle("odd:first-run-key", async (e) => {
 });
 
 app.whenReady().then(async () => {
+  if (misplaced) return;
   // Run from the source (npm start) on a Mac, the dock would show Electron's own icon.
   if (process.platform === "darwin" && !app.isPackaged) app.dock.setIcon(path.join(__dirname, "icons", "dock.png"));
   try { await start(); }

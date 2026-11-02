@@ -81,8 +81,11 @@ name at the top of the admin. A copy run from the source, or a build that wasn't
 `dev`. In the file names below it is in the form npm needs (see [A release](#a-release)).
 
 - **Windows**: `OpenDecoDesk-<version>-windows-x64.zip`. No installer: unzip it to a folder of its
-  own (say `Documents\OpenDecoDesk`, not inside the zip) and run `OpenDecoDesk.exe` from there; pin
-  it to Start or the taskbar if you like. Windows warns about an unknown publisher the first time.
+  own on the computer's own disk (say `C:\Users\<you>\OpenDecoDesk`, not inside the zip) and run
+  `OpenDecoDesk.exe` from there; pin it to Start or the taskbar if you like. Not a shared or network
+  folder: Windows won't let the program open its window from one, so it says so and closes. In
+  Parallels, Windows' Desktop, Documents and Downloads are often the Mac's own folders, shared that
+  way (`\\Mac\Home\…`, or a drive letter); the home folder itself isn't. Windows warns about an unknown publisher the first time.
   Choose *More info → Run anyway*. (Earlier builds were one self-unpacking `.exe`, which unpacked
   itself into a temporary folder on every start; antivirus can remove files from that folder, and
   then the program can't start.)
